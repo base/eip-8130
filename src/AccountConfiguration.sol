@@ -18,8 +18,11 @@ contract AccountConfiguration {
         Owner owner;
     }
 
+    uint32 public constant UNLOCK_DELAY = 60 minutes;
+
     mapping(bytes32 ownerId => mapping(address account => address verifier)) public verifiers;
     mapping(address account => uint256 sequence) public ownerChangeSequence;
+    mapping(address account => uint256 lockedUntil) public ownerChangeLocks;
 
     event AccountCreated(address indexed account, Owner[] owners, bytes32 bytecodeHash);
     event OwnerAdded(address indexed account, bytes32 ownerId, address verifier);
@@ -98,6 +101,20 @@ contract AccountConfiguration {
         }
     }
 
+    function lock() external {
+        ownerChangeLocks[msg.sender] = type(uint256).max;
+    }
+
+    function initiateUnlock() external {
+        require(ownerChangeLocks[msg.sender] == type(uint256).max);
+        ownerChangeLocks[msg.sender] = block.timestamp + UNLOCK_DELAY;
+    }
+
+    function finalizeUnlock() external {
+        require(block.timestamp > ownerChangeLocks[msg.sender]);
+        delete ownerChangeLocks[msg.sender];
+    }
+
     ////////
     // STATE VIEWS
     ////////
@@ -146,12 +163,14 @@ contract AccountConfiguration {
 
     function _addOwner(address account, Owner calldata owner) internal {
         require(owner.verifier != address(0) && owner.verifier.code.length > 0);
+        require(ownerChangeLocks[account] == 0);
         require(!isOwner(account, owner.id));
         verifiers[owner.id][account] = owner.verifier;
         emit OwnerAdded(account, owner.id, owner.verifier);
     }
 
     function _removeOwner(address account, bytes32 ownerId) internal {
+        require(ownerChangeLocks[account] == 0);
         require(isOwner(account, ownerId));
         delete verifiers[ownerId][account];
         emit OwnerRemoved(account, ownerId);
