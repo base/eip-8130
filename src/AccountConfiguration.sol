@@ -35,9 +35,6 @@ contract AccountConfiguration {
     // INITIALIZATION
     ////////
 
-    /// @notice Designed for 7702 accounts to initialize on first use
-    function initializeAccount() external {}
-
     function createAccount(
         Owner[] calldata initialOwners,
         uint256 nonce,
@@ -82,21 +79,25 @@ contract AccountConfiguration {
     }
 
     function removeOwner(bytes32 ownerId) external {
-        require(isOwner(msg.sender, ownerId));
-        delete verifiers[ownerId][msg.sender];
-        emit OwnerRemoved(msg.sender, ownerId);
+        _removeOwner(msg.sender, ownerId);
     }
 
-    /// @notice Apply signed, replayable owner changes
-    function applyOwnerChanges(address account, uint64 startSequence, OwnerChange[] calldata ownerChanges) external {
-        // // validate signature
-        // if (startSequence != ownerChangeSequence[account]) revert InvalidOwnerChangeSequence(startSequence, ownerChangeSequence[account]);
-        // for (uint256 i; i < ownerChanges.length; i++) {
-        //     if (ownerChangeSequence[account] != ownerChanges[i].sequence) revert InvalidOwnerChange(ownerChanges[i]);
-        //     ownerChangeSequence[account]++;
-        //     // update account owner configuration
-        // }
-        // emit (account, ownerChanges);
+    /// @notice Apply replayable owner changes
+    function applyOwnerChanges(
+        address account,
+        OwnerChange[] calldata ownerChanges,
+        bytes32 ownerId,
+        bytes calldata verifyData
+    ) external {
+        bytes32 digest = keccak256(abi.encode(account, ownerChanges, ownerChangeSequence[account]++));
+        require(IVerifier(verifiers[ownerId][account]).verify(account, ownerId, digest, verifyData));
+        for (uint256 i; i < ownerChanges.length; i++) {
+            if (ownerChanges[i].add) {
+                _addOwner(account, ownerChanges[i].owner);
+            } else {
+                _removeOwner(account, ownerChanges[i].owner.id);
+            }
+        }
     }
 
     ////////
@@ -147,7 +148,7 @@ contract AccountConfiguration {
     }
 
     ////////
-    // INTERNAL FUNCTIONS
+    // INTERNALS
     ////////
 
     function _addOwner(address account, Owner calldata owner) internal {
@@ -155,5 +156,11 @@ contract AccountConfiguration {
         require(!isOwner(account, owner.id));
         verifiers[owner.id][account] = owner.verifier;
         emit OwnerAdded(account, owner.id, owner.verifier);
+    }
+
+    function _removeOwner(address account, bytes32 ownerId) internal {
+        require(isOwner(account, ownerId));
+        delete verifiers[ownerId][account];
+        emit OwnerRemoved(account, ownerId);
     }
 }
