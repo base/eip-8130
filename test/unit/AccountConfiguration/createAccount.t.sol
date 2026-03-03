@@ -16,7 +16,7 @@ contract CreateAccountTest is AccountConfigurationTest {
         owners[0] = AccountConfiguration.Owner({id: ownerId, verifier: address(k1Verifier)});
 
         bytes memory bytecode =
-            abi.encodePacked(type(AccountProxy).creationCode, abi.encode(address(accountImplementation), new bytes(0)));
+            abi.encodePacked(type(AccountProxy).creationCode, abi.encode(defaultAccountImplementation, new bytes(0)));
         address account = accountConfiguration.createAccount(owners, 0, bytecode, new bytes(0));
         assert(account != address(0));
     }

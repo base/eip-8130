@@ -9,7 +9,7 @@ import {K1Verifier} from "../../src/verifiers/K1Verifier.sol";
 import {P256Verifier} from "../../src/verifiers/P256Verifier.sol";
 import {WebAuthnVerifier} from "../../src/verifiers/WebAuthnVerifier.sol";
 import {DelegatedVerifier} from "../../src/verifiers/DelegatedVerifier.sol";
-import {Account as AccountImplementation} from "../../src/accounts/Account.sol";
+import {DefaultAccount} from "../../src/accounts/DefaultAccount.sol";
 
 contract AccountConfigurationTest is Test {
     AccountConfiguration public accountConfiguration;
@@ -17,7 +17,7 @@ contract AccountConfigurationTest is Test {
     IVerifier public p256Verifier;
     IVerifier public webAuthnVerifier;
     IVerifier public delegatedVerifier;
-    AccountImplementation public accountImplementation;
+    address public defaultAccountImplementation;
 
     function setUp() public {
         accountConfiguration = new AccountConfiguration();
@@ -25,6 +25,6 @@ contract AccountConfigurationTest is Test {
         p256Verifier = IVerifier(new P256Verifier());
         webAuthnVerifier = IVerifier(new WebAuthnVerifier());
         delegatedVerifier = IVerifier(new DelegatedVerifier(address(accountConfiguration)));
-        accountImplementation = AccountImplementation(address(new AccountImplementation(address(accountConfiguration))));
+        defaultAccountImplementation = address(new DefaultAccount(address(accountConfiguration)));
     }
 }

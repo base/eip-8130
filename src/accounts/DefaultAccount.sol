@@ -6,7 +6,7 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeab
 import {AccountConfiguration} from "../AccountConfiguration.sol";
 import {IInitialized} from "./IInitialized.sol";
 
-contract Account is IInitialized, UUPSUpgradeable {
+contract DefaultAccount is IInitialized, UUPSUpgradeable {
     struct Call {
         address target;
         bytes data;
