@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.30;
 
 import {IVerifier} from "./verifiers/IVerifier.sol";
 
@@ -21,7 +21,7 @@ contract AccountConfiguration {
     struct OwnerChangeLock {
         bool locked;
         uint40 unlockDelay;
-        uint40 initiatedAt;
+        uint40 unlockInitiatedAt;
     }
 
     mapping(bytes32 ownerId => mapping(address account => address verifier)) public verifiers;
@@ -108,23 +108,23 @@ contract AccountConfiguration {
     function lockOwnerChanges(uint40 unlockDelay) external {
         require(unlockDelay > 0);
         require(!ownerChangeLocks[msg.sender].locked);
-        ownerChangeLocks[msg.sender] = OwnerChangeLock({locked: true, unlockDelay: unlockDelay, initiatedAt: 0});
+        ownerChangeLocks[msg.sender] = OwnerChangeLock({locked: true, unlockDelay: unlockDelay, unlockInitiatedAt: 0});
     }
 
     function initiateUnlockOwnerChanges() external {
         OwnerChangeLock storage lock = ownerChangeLocks[msg.sender];
-        require(lock.locked && lock.initiatedAt == 0);
-        lock.initiatedAt = uint40(block.timestamp) + lock.unlockDelay;
+        require(lock.locked && lock.unlockInitiatedAt == 0);
+        lock.unlockInitiatedAt = uint40(block.timestamp) + lock.unlockDelay;
     }
 
     function finalizeUnlockOwnerChanges() external {
         OwnerChangeLock memory lock = ownerChangeLocks[msg.sender];
-        require(lock.locked && block.timestamp > lock.initiatedAt + lock.unlockDelay);
+        require(lock.locked && block.timestamp > lock.unlockInitiatedAt + lock.unlockDelay);
         delete ownerChangeLocks[msg.sender];
     }
 
     ////////
-    // STATE VIEWS
+    // STORAGE VIEWS
     ////////
 
     function isValidSignature(address account, bytes32 ownerId, bytes32 hash, bytes calldata signature)
@@ -139,6 +139,24 @@ contract AccountConfiguration {
 
     function isOwner(address account, bytes32 ownerId) public view returns (bool) {
         return verifiers[ownerId][account] != address(0);
+    }
+
+    ////////
+    // TRANSIENT STORAGE VIEWS
+    ////////
+
+    function getCurrentPayer() external view returns (address payer) {
+        bytes32 slot = keccak256("context.payer");
+        assembly {
+            payer := tload(slot)
+        }
+    }
+
+    function getCurrentOwnerId() external view returns (bytes32 ownerId) {
+        bytes32 slot = keccak256("context.ownerId");
+        assembly {
+            ownerId := tload(slot)
+        }
     }
 
     ////////
