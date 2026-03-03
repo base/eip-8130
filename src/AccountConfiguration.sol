@@ -48,6 +48,10 @@ contract AccountConfiguration {
         account = computeAddress(initialOwners, nonce, bytecode, initializeCall);
         if (account.code.length > 0) return account;
 
+        // Must define at least one owner
+        uint256 ownerCount = initialOwners.length;
+        require(ownerCount > 0);
+
         // Configure intitial owners
         bytes32 previousOwnerId = bytes32(0);
         for (uint256 i; i < initialOwners.length; i++) {
