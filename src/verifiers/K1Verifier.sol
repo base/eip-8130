@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import {IVerifier} from "./IVerifier.sol";
 
-contract Secp256K1Verifier is IVerifier {
+contract K1Verifier is IVerifier {
     function verifyIntent(address account, bytes32 ownerId, bytes32 hash, bytes calldata data)
         external
         pure

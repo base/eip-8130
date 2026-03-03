@@ -1,11 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
+import {IInitialized} from "./accounts/IInitialized.sol";
 import {IVerifier} from "./verifiers/IVerifier.sol";
-
-interface IInitialized {
-    function initialized() external view returns (bool);
-}
 
 contract AccountConfiguration {
     struct Owner {
