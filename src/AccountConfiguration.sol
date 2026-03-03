@@ -44,7 +44,11 @@ contract AccountConfiguration {
         if (account.code.length > 0) return account;
 
         // Configure intitial owners
+        bytes32 previousOwnerId = bytes32(0);
         for (uint256 i; i < initialOwners.length; i++) {
+            // Require owners sorted by id to enforce same set of owners produce same address
+            require(initialOwners[i].id > previousOwnerId);
+            previousOwnerId = initialOwners[i].id;
             _addOwner(account, initialOwners[i]);
         }
 
