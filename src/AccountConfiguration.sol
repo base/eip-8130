@@ -5,9 +5,20 @@ import {IInitialized} from "./accounts/IInitialized.sol";
 import {IVerifier} from "./verifiers/IVerifier.sol";
 
 contract AccountConfiguration {
+    struct AccountConfig {
+        uint32 ownerChangeSequence;
+        bool locked;
+        uint40 unlockDelay;
+        uint40 unlockInitiatedAt;
+    }
+
+    struct OwnerConfig {
+        address verifier;
+    }
+
     struct Owner {
         bytes32 id;
-        address verifier;
+        OwnerConfig config;
     }
 
     struct OwnerChange {
@@ -15,15 +26,8 @@ contract AccountConfiguration {
         Owner owner;
     }
 
-    struct OwnerChangeLock {
-        bool locked;
-        uint40 unlockDelay;
-        uint40 unlockInitiatedAt;
-    }
-
-    mapping(bytes32 ownerId => mapping(address account => address verifier)) public verifiers;
-    mapping(address account => uint256 sequence) public ownerChangeSequence;
-    mapping(address account => OwnerChangeLock lock) public ownerChangeLocks;
+    mapping(address account => AccountConfig config) public accountConfigs;
+    mapping(bytes32 ownerId => mapping(address account => OwnerConfig config)) public ownerConfigs;
 
     event AccountCreated(address indexed account, bytes32 bytecodeHash);
     event OwnerAdded(address indexed account, bytes32 ownerId, address verifier);
@@ -90,7 +94,7 @@ contract AccountConfiguration {
         bytes32 ownerId,
         bytes calldata verifyData
     ) external {
-        bytes32 digest = keccak256(abi.encode(account, ownerChanges, ownerChangeSequence[account]++));
+        bytes32 digest = keccak256(abi.encode(account, ownerChanges, accountConfigs[account].ownerChangeSequence++));
         require(verifyIntent(account, ownerId, digest, verifyData));
         for (uint256 i; i < ownerChanges.length; i++) {
             ownerChanges[i].add
@@ -108,20 +112,26 @@ contract AccountConfiguration {
 
     function lockOwnerChanges(uint40 unlockDelay) external {
         require(unlockDelay > 0);
-        require(!ownerChangeLocks[msg.sender].locked);
-        ownerChangeLocks[msg.sender] = OwnerChangeLock({locked: true, unlockDelay: unlockDelay, unlockInitiatedAt: 0});
+        AccountConfig memory accountConfig = accountConfigs[msg.sender];
+        require(!accountConfig.locked);
+        accountConfig.locked = true;
+        accountConfig.unlockDelay = unlockDelay;
+        accountConfigs[msg.sender] = accountConfig;
     }
 
     function initiateUnlockOwnerChanges() external {
-        OwnerChangeLock storage lock = ownerChangeLocks[msg.sender];
-        require(lock.locked && lock.unlockInitiatedAt == 0);
-        lock.unlockInitiatedAt = uint40(block.timestamp) + lock.unlockDelay;
+        AccountConfig memory accountConfig = accountConfigs[msg.sender];
+        require(accountConfig.locked && accountConfig.unlockInitiatedAt == 0);
+        accountConfig.unlockInitiatedAt = uint40(block.timestamp) + accountConfig.unlockDelay;
+        accountConfigs[msg.sender] = accountConfig;
     }
 
     function finalizeUnlockOwnerChanges() external {
-        OwnerChangeLock memory lock = ownerChangeLocks[msg.sender];
-        require(lock.locked && block.timestamp > lock.unlockInitiatedAt + lock.unlockDelay);
-        delete ownerChangeLocks[msg.sender];
+        AccountConfig memory accountConfig = accountConfigs[msg.sender];
+        require(accountConfig.locked && block.timestamp > accountConfig.unlockInitiatedAt + accountConfig.unlockDelay);
+        accountConfig.locked = false;
+        accountConfig.unlockInitiatedAt = 0;
+        accountConfigs[msg.sender] = accountConfig;
     }
 
     ////////
@@ -147,7 +157,7 @@ contract AccountConfiguration {
     ////////
 
     function isOwner(address account, bytes32 ownerId) public view returns (bool) {
-        return verifiers[ownerId][account] != address(0);
+        return ownerConfigs[ownerId][account].verifier != address(0);
     }
 
     function verifyIntent(address account, bytes32 ownerId, bytes32 hash, bytes calldata data)
@@ -155,7 +165,7 @@ contract AccountConfiguration {
         view
         returns (bool)
     {
-        address verifier = verifiers[ownerId][account];
+        address verifier = ownerConfigs[ownerId][account].verifier;
         if (verifier == address(0)) return false;
         return IVerifier(verifier).verifyIntent(account, ownerId, hash, data);
     }
@@ -189,17 +199,18 @@ contract AccountConfiguration {
     ////////
 
     function _addOwner(address account, Owner calldata owner) internal {
-        require(owner.verifier != address(0) && owner.verifier.code.length > 0);
-        require(!ownerChangeLocks[account].locked);
+        address verifier = owner.config.verifier;
+        require(verifier != address(0) && verifier.code.length > 0);
+        require(!accountConfigs[account].locked);
         require(!isOwner(account, owner.id));
-        verifiers[owner.id][account] = owner.verifier;
-        emit OwnerAdded(account, owner.id, owner.verifier);
+        ownerConfigs[owner.id][account] = OwnerConfig({verifier: verifier});
+        emit OwnerAdded(account, owner.id, verifier);
     }
 
     function _removeOwner(address account, bytes32 ownerId) internal {
-        require(!ownerChangeLocks[account].locked);
+        require(!accountConfigs[account].locked);
         require(isOwner(account, ownerId));
-        delete verifiers[ownerId][account];
+        delete ownerConfigs[ownerId][account];
         emit OwnerRemoved(account, ownerId);
     }
 }

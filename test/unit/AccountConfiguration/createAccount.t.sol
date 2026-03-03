@@ -13,7 +13,9 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 ownerId = bytes32(bytes20(owner));
 
         AccountConfiguration.Owner[] memory owners = new AccountConfiguration.Owner[](1);
-        owners[0] = AccountConfiguration.Owner({id: ownerId, verifier: address(k1Verifier)});
+        owners[0] = AccountConfiguration.Owner({
+            id: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier)})
+        });
 
         bytes memory bytecode =
             abi.encodePacked(type(AccountProxy).creationCode, abi.encode(defaultAccountImplementation, new bytes(0)));
