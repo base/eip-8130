@@ -1,0 +1,275 @@
+{
+  "header": {
+    "valid": false,
+    "format": "none",
+    "version": 0,
+    "header_size": 0,
+    "bytecode_size": 2267,
+    "errors": [
+      "No PUSH1/JUMP preamble"
+    ]
+  },
+  "safety": {
+    "safe": false,
+    "forbidden_opcodes": [
+      {
+        "offset": 5,
+        "name": "CALLVALUE",
+        "category": "environment"
+      },
+      {
+        "offset": 80,
+        "name": "SLOAD",
+        "category": "storage"
+      },
+      {
+        "offset": 128,
+        "name": "EXTCODESIZE",
+        "category": "environment"
+      },
+      {
+        "offset": 275,
+        "name": "EXTCODESIZE",
+        "category": "environment"
+      },
+      {
+        "offset": 289,
+        "name": "CALL",
+        "category": "system"
+      },
+      {
+        "offset": 387,
+        "name": "EXTCODESIZE",
+        "category": "environment"
+      },
+      {
+        "offset": 401,
+        "name": "CALL",
+        "category": "system"
+      },
+      {
+        "offset": 636,
+        "name": "CODECOPY",
+        "category": "environment"
+      },
+      {
+        "offset": 678,
+        "name": "CREATE2",
+        "category": "system"
+      },
+      {
+        "offset": 863,
+        "name": "EXTCODESIZE",
+        "category": "environment"
+      },
+      {
+        "offset": 888,
+        "name": "EXTCODECOPY",
+        "category": "environment"
+      },
+      {
+        "offset": 2226,
+        "name": "UNKNOWN_0xE0",
+        "category": "unknown"
+      },
+      {
+        "offset": 2229,
+        "name": "UNKNOWN_0xD5",
+        "category": "unknown"
+      },
+      {
+        "offset": 2231,
+        "name": "UNKNOWN_0xC9",
+        "category": "unknown"
+      },
+      {
+        "offset": 2232,
+        "name": "UNKNOWN_0xCF",
+        "category": "unknown"
+      },
+      {
+        "offset": 2234,
+        "name": "CALLCODE",
+        "category": "system"
+      },
+      {
+        "offset": 2238,
+        "name": "UNKNOWN_0xEA",
+        "category": "unknown"
+      },
+      {
+        "offset": 2239,
+        "name": "UNKNOWN_0xC2",
+        "category": "unknown"
+      },
+      {
+        "offset": 2240,
+        "name": "UNKNOWN_0xC2",
+        "category": "unknown"
+      },
+      {
+        "offset": 2241,
+        "name": "UNKNOWN_0x4D",
+        "category": "unknown"
+      },
+      {
+        "offset": 2242,
+        "name": "LOG4",
+        "category": "logging"
+      },
+      {
+        "offset": 2266,
+        "name": "CALLER",
+        "category": "environment"
+      }
+    ],
+    "instruction_count": 1503,
+    "unique_opcodes": 88,
+    "opcode_counts": {
+      "PUSH1": 265,
+      "MSTORE": 65,
+      "CALLVALUE": 1,
+      "DUP1": 45,
+      "ISZERO": 20,
+      "PUSH2": 91,
+      "JUMPI": 30,
+      "PUSH0": 70,
+      "REVERT": 11,
+      "JUMPDEST": 66,
+      "POP": 104,
+      "CALLDATASIZE": 2,
+      "LT": 10,
+      "CALLDATALOAD": 5,
+      "SHR": 4,
+      "PUSH4": 10,
+      "EQ": 11,
+      "JUMP": 48,
+      "STOP": 2,
+      "SLOAD": 1,
+      "SWAP1": 49,
+      "PUSH3": 5,
+      "DIV": 1,
+      "AND": 37,
+      "DUP2": 59,
+      "MLOAD": 46,
+      "ADD": 87,
+      "SWAP2": 28,
+      "SUB": 37,
+      "RETURN": 1,
+      "DUP4": 29,
+      "SHL": 60,
+      "EXTCODESIZE": 4,
+      "GT": 1,
+      "DUP3": 32,
+      "PUSH32": 2,
+      "PUSH20": 3,
+      "DUP8": 6,
+      "GAS": 3,
+      "CALL": 2,
+      "RETURNDATASIZE": 4,
+      "RETURNDATACOPY": 2,
+      "DUP5": 19,
+      "PUSH16": 2,
+      "DUP6": 10,
+      "SWAP3": 16,
+      "PUSH22": 1,
+      "CODECOPY": 1,
+      "CREATE2": 1,
+      "SWAP4": 23,
+      "NOT": 21,
+      "OR": 2,
+      "EXTCODECOPY": 1,
+      "PUSH10": 1,
+      "PUSH12": 1,
+      "PUSH15": 2,
+      "DUP16": 2,
+      "PUSH11": 1,
+      "STATICCALL": 1,
+      "DUP7": 5,
+      "SLT": 1,
+      "SWAP6": 1,
+      "SWAP5": 3,
+      "MCOPY": 2,
+      "DUP15": 1,
+      "DUP13": 1,
+      "DUP12": 1,
+      "DUP11": 2,
+      "DUP10": 1,
+      "DUP9": 1,
+      "SWAP16": 1,
+      "SWAP15": 1,
+      "INVALID": 1,
+      "KECCAK256": 2,
+      "PUSH14": 1,
+      "PUSH7": 1,
+      "UNKNOWN_0xE0": 1,
+      "UNKNOWN_0xD5": 1,
+      "MOD": 1,
+      "UNKNOWN_0xC9": 1,
+      "UNKNOWN_0xCF": 1,
+      "CALLCODE": 1,
+      "UNKNOWN_0xEA": 1,
+      "UNKNOWN_0xC2": 2,
+      "UNKNOWN_0x4D": 1,
+      "LOG4": 1,
+      "MULMOD": 1,
+      "CALLER": 1
+    }
+  },
+  "staticcall_targets": [
+    {
+      "offset": 1705,
+      "target": "0x636f6e736f6c652e6c6f67",
+      "is_precompile": false,
+      "precompile_name": null,
+      "precompile_gas": null
+    }
+  ],
+  "control_flow": {
+    "basic_blocks": 99,
+    "edges": 97,
+    "back_edges": 0,
+    "has_loops": false,
+    "dynamic_jumps": [
+      1787,
+      95
+    ],
+    "reachable_blocks": 15,
+    "unreachable_blocks": 84,
+    "exit_points": {
+      "REVERT": 5
+    }
+  },
+  "gas": {
+    "min_path": 34,
+    "max_path": 2247,
+    "exact": true,
+    "reason": "Loop-free \u2014 exact path analysis (static gas only)",
+    "dynamic_sources": [
+      "KECCAK256",
+      "MCOPY",
+      "MLOAD",
+      "MSTORE",
+      "RETURNDATACOPY",
+      "STATICCALL"
+    ],
+    "precompile_costs": []
+  },
+  "termination": {
+    "provably_terminates": false,
+    "has_loops": false,
+    "loop_count": 0,
+    "back_edges": []
+  },
+  "stack": {
+    "max_depth": 12,
+    "underflow_count": 0,
+    "overflow": false
+  },
+  "wrapper": null,
+  "_meta": {
+    "artifact": "DeploySandboxVerifier.s.sol/DeploySandboxVerifier.json",
+    "contract": "DeploySandboxVerifier",
+    "bytecode_size": 2267
+  }
+}

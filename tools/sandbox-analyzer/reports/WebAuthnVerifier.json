@@ -1,0 +1,389 @@
+{
+  "header": {
+    "valid": false,
+    "format": "none",
+    "version": 0,
+    "header_size": 0,
+    "bytecode_size": 4811,
+    "errors": [
+      "No PUSH1/JUMP preamble"
+    ]
+  },
+  "safety": {
+    "safe": false,
+    "forbidden_opcodes": [
+      {
+        "offset": 5,
+        "name": "CALLVALUE",
+        "category": "environment"
+      },
+      {
+        "offset": 1372,
+        "name": "CODECOPY",
+        "category": "environment"
+      },
+      {
+        "offset": 1394,
+        "name": "CODECOPY",
+        "category": "environment"
+      },
+      {
+        "offset": 1414,
+        "name": "CODECOPY",
+        "category": "environment"
+      },
+      {
+        "offset": 1452,
+        "name": "CODECOPY",
+        "category": "environment"
+      },
+      {
+        "offset": 1933,
+        "name": "CODECOPY",
+        "category": "environment"
+      },
+      {
+        "offset": 4726,
+        "name": "SELFDESTRUCT",
+        "category": "system"
+      },
+      {
+        "offset": 4727,
+        "name": "SELFDESTRUCT",
+        "category": "system"
+      },
+      {
+        "offset": 4728,
+        "name": "SELFDESTRUCT",
+        "category": "system"
+      },
+      {
+        "offset": 4729,
+        "name": "SELFDESTRUCT",
+        "category": "system"
+      },
+      {
+        "offset": 4734,
+        "name": "SELFDESTRUCT",
+        "category": "system"
+      },
+      {
+        "offset": 4735,
+        "name": "SELFDESTRUCT",
+        "category": "system"
+      },
+      {
+        "offset": 4736,
+        "name": "SELFDESTRUCT",
+        "category": "system"
+      },
+      {
+        "offset": 4737,
+        "name": "SELFDESTRUCT",
+        "category": "system"
+      },
+      {
+        "offset": 4738,
+        "name": "SELFDESTRUCT",
+        "category": "system"
+      },
+      {
+        "offset": 4739,
+        "name": "SELFDESTRUCT",
+        "category": "system"
+      },
+      {
+        "offset": 4740,
+        "name": "SELFDESTRUCT",
+        "category": "system"
+      },
+      {
+        "offset": 4741,
+        "name": "SELFDESTRUCT",
+        "category": "system"
+      },
+      {
+        "offset": 4742,
+        "name": "UNKNOWN_0xBC",
+        "category": "unknown"
+      },
+      {
+        "offset": 4743,
+        "name": "UNKNOWN_0xE6",
+        "category": "unknown"
+      },
+      {
+        "offset": 4745,
+        "name": "UNKNOWN_0xAD",
+        "category": "unknown"
+      },
+      {
+        "offset": 4746,
+        "name": "UNKNOWN_0xA7",
+        "category": "unknown"
+      },
+      {
+        "offset": 4751,
+        "name": "UNKNOWN_0xB9",
+        "category": "unknown"
+      },
+      {
+        "offset": 4752,
+        "name": "UNKNOWN_0xCA",
+        "category": "unknown"
+      },
+      {
+        "offset": 4753,
+        "name": "UNKNOWN_0xC2",
+        "category": "unknown"
+      },
+      {
+        "offset": 4754,
+        "name": "UNKNOWN_0xFC",
+        "category": "unknown"
+      },
+      {
+        "offset": 4771,
+        "name": "CREATE2",
+        "category": "system"
+      },
+      {
+        "offset": 4773,
+        "name": "UNKNOWN_0xCD",
+        "category": "unknown"
+      },
+      {
+        "offset": 4775,
+        "name": "UNKNOWN_0xAE",
+        "category": "unknown"
+      },
+      {
+        "offset": 4776,
+        "name": "UNKNOWN_0x2F",
+        "category": "unknown"
+      },
+      {
+        "offset": 4777,
+        "name": "UNKNOWN_0xAA",
+        "category": "unknown"
+      },
+      {
+        "offset": 4778,
+        "name": "UNKNOWN_0x27",
+        "category": "unknown"
+      },
+      {
+        "offset": 4779,
+        "name": "PREVRANDAO",
+        "category": "block"
+      },
+      {
+        "offset": 4780,
+        "name": "UNKNOWN_0xB8",
+        "category": "unknown"
+      },
+      {
+        "offset": 4810,
+        "name": "CALLER",
+        "category": "environment"
+      }
+    ],
+    "instruction_count": 3362,
+    "unique_opcodes": 99,
+    "opcode_counts": {
+      "PUSH1": 355,
+      "MSTORE": 116,
+      "CALLVALUE": 1,
+      "DUP1": 78,
+      "ISZERO": 58,
+      "PUSH2": 299,
+      "JUMPI": 77,
+      "PUSH0": 173,
+      "REVERT": 24,
+      "JUMPDEST": 197,
+      "POP": 264,
+      "CALLDATASIZE": 3,
+      "LT": 24,
+      "CALLDATALOAD": 16,
+      "SHR": 6,
+      "PUSH4": 15,
+      "EQ": 15,
+      "JUMP": 148,
+      "MLOAD": 108,
+      "SWAP1": 102,
+      "DUP2": 139,
+      "ADD": 171,
+      "SWAP2": 54,
+      "SUB": 49,
+      "RETURN": 2,
+      "DUP6": 43,
+      "DUP8": 37,
+      "SWAP3": 25,
+      "DUP3": 104,
+      "DUP4": 74,
+      "KECCAK256": 3,
+      "DUP5": 62,
+      "SWAP4": 25,
+      "SWAP6": 15,
+      "SWAP5": 19,
+      "GT": 14,
+      "DUP7": 47,
+      "PUSH11": 1,
+      "NOT": 15,
+      "AND": 22,
+      "PUSH21": 2,
+      "SHL": 29,
+      "DUP9": 32,
+      "GAS": 4,
+      "STATICCALL": 5,
+      "RETURNDATASIZE": 6,
+      "RETURNDATACOPY": 2,
+      "SWAP7": 12,
+      "SWAP9": 2,
+      "SWAP8": 5,
+      "MUL": 18,
+      "XOR": 5,
+      "PUSH8": 9,
+      "CALLDATACOPY": 2,
+      "MCOPY": 2,
+      "PUSH32": 9,
+      "CODECOPY": 5,
+      "DUP11": 12,
+      "MULMOD": 59,
+      "DUP10": 17,
+      "SWAP12": 1,
+      "SWAP11": 3,
+      "MSTORE8": 7,
+      "MOD": 2,
+      "DUP12": 13,
+      "DUP13": 15,
+      "ADDMOD": 16,
+      "INVALID": 3,
+      "OR": 5,
+      "DUP14": 8,
+      "DUP16": 2,
+      "DUP15": 2,
+      "SWAP10": 1,
+      "SWAP15": 2,
+      "SWAP14": 1,
+      "SLT": 5,
+      "SGT": 1,
+      "PUSH13": 1,
+      "DIV": 2,
+      "SELFDESTRUCT": 12,
+      "STOP": 5,
+      "UNKNOWN_0xBC": 1,
+      "UNKNOWN_0xE6": 1,
+      "UNKNOWN_0xAD": 1,
+      "UNKNOWN_0xA7": 1,
+      "UNKNOWN_0xB9": 1,
+      "UNKNOWN_0xCA": 1,
+      "UNKNOWN_0xC2": 1,
+      "UNKNOWN_0xFC": 1,
+      "PUSH10": 1,
+      "CREATE2": 1,
+      "UNKNOWN_0xCD": 1,
+      "UNKNOWN_0xAE": 1,
+      "UNKNOWN_0x2F": 1,
+      "UNKNOWN_0xAA": 1,
+      "UNKNOWN_0x27": 1,
+      "PREVRANDAO": 1,
+      "UNKNOWN_0xB8": 1,
+      "CALLER": 1
+    }
+  },
+  "staticcall_targets": [
+    {
+      "offset": 555,
+      "target": null,
+      "is_precompile": false,
+      "precompile_name": null,
+      "precompile_gas": null
+    },
+    {
+      "offset": 660,
+      "target": null,
+      "is_precompile": false,
+      "precompile_name": null,
+      "precompile_gas": null
+    },
+    {
+      "offset": 2145,
+      "target": "0x100",
+      "is_precompile": true,
+      "precompile_name": "P256VERIFY",
+      "precompile_gas": 3450
+    },
+    {
+      "offset": 3764,
+      "target": "0x5",
+      "is_precompile": true,
+      "precompile_name": "modexp",
+      "precompile_gas": 200
+    },
+    {
+      "offset": 4744,
+      "target": null,
+      "is_precompile": false,
+      "precompile_name": null,
+      "precompile_gas": null
+    }
+  ],
+  "control_flow": {
+    "basic_blocks": 295,
+    "edges": 285,
+    "back_edges": 0,
+    "has_loops": false,
+    "dynamic_jumps": [
+      4021
+    ],
+    "reachable_blocks": 19,
+    "unreachable_blocks": 276,
+    "exit_points": {
+      "REVERT": 8
+    }
+  },
+  "gas": {
+    "min_path": 34,
+    "max_path": 428,
+    "exact": true,
+    "reason": "Loop-free \u2014 exact path analysis (static gas only)",
+    "dynamic_sources": [
+      "CALLDATACOPY",
+      "KECCAK256",
+      "MCOPY",
+      "MLOAD",
+      "MSTORE",
+      "MSTORE8",
+      "RETURNDATACOPY",
+      "STATICCALL"
+    ],
+    "precompile_costs": [
+      [
+        "P256VERIFY",
+        3450
+      ],
+      [
+        "modexp",
+        200
+      ]
+    ]
+  },
+  "termination": {
+    "provably_terminates": false,
+    "has_loops": false,
+    "loop_count": 0,
+    "back_edges": []
+  },
+  "stack": {
+    "max_depth": 16,
+    "underflow_count": 0,
+    "overflow": false
+  },
+  "wrapper": null,
+  "_meta": {
+    "artifact": "WebAuthnVerifier.sol/WebAuthnVerifier.json",
+    "contract": "WebAuthnVerifier",
+    "bytecode_size": 4811
+  }
+}

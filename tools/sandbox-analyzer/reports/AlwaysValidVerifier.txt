@@ -1,0 +1,76 @@
+
+════════════════════════════════════════════════════════════
+  EIP-8130 Sandbox Verifier Bytecode Analyzer
+════════════════════════════════════════════════════════════
+
+── Header ──────────────────────────────────────────────────
+  Format:      None (no valid 8130 header)
+  Total Size:  287 bytes
+  ✗ No PUSH1/JUMP preamble
+
+── Opcode Safety ───────────────────────────────────────────
+  Instructions:  213 total, 60 unique opcodes
+  Forbidden:     15 ✗ UNSAFE
+    ✗ CALLVALUE (environment) at 0x0005
+    ✗ LOG2 (logging) at 0x00EA
+    ✗ UNKNOWN_0x22 (unknown) at 0x00F1, 0x00F5
+    ✗ UNKNOWN_0x21 (unknown) at 0x0107, 0x011C
+    ✗ EXTCODEHASH (environment) at 0x0109
+    ✗ UNKNOWN_0xB9 (unknown) at 0x010A
+    ✗ UNKNOWN_0x28 (unknown) at 0x010B
+    ✗ TIMESTAMP (block) at 0x010C
+    ✗ UNKNOWN_0xE6 (unknown) at 0x010D
+    ✗ CALLER (environment) at 0x010F, 0x011E
+    ✗ UNKNOWN_0x2E (unknown) at 0x0110
+    ✗ UNKNOWN_0xBF (unknown) at 0x0113
+
+  Top opcodes:
+    PUSH1              31  ██░░░░░░░░░░░░░  14.6%
+    PUSH0              22  █░░░░░░░░░░░░░░  10.3%
+    POP                14  ░░░░░░░░░░░░░░░   6.6%
+    JUMPDEST           13  ░░░░░░░░░░░░░░░   6.1%
+    JUMPI               9  ░░░░░░░░░░░░░░░   4.2%
+    ADD                 9  ░░░░░░░░░░░░░░░   4.2%
+    REVERT              8  ░░░░░░░░░░░░░░░   3.8%
+    ISZERO              7  ░░░░░░░░░░░░░░░   3.3%
+    CALLDATALOAD        7  ░░░░░░░░░░░░░░░   3.3%
+    DUP2                6  ░░░░░░░░░░░░░░░   2.8%
+    DUP1                5  ░░░░░░░░░░░░░░░   2.3%
+    DUP7                5  ░░░░░░░░░░░░░░░   2.3%
+
+── Control Flow ────────────────────────────────────────────
+  Basic blocks:     26
+  Edges:            20
+  Back edges:       0 (no loops)
+  Reachable:        19 blocks
+  Unreachable:      7 blocks
+  Exit points:      8 (8× REVERT)
+  Dynamic jumps:    1 ⚠
+    @ 0x00E8
+
+── Gas Estimation ──────────────────────────────────────────
+  Min path cost:    34 gas (static opcodes)
+  Max path cost:    428 gas (static opcodes)
+
+  Dynamic gas sources: KECCAK256, MLOAD, MSTORE
+  (actual cost depends on runtime input sizes)
+
+── Termination Analysis ────────────────────────────────────
+  Provably terminates:  UNKNOWN
+  Reason:               1 unresolved dynamic jump(s)
+
+── Stack Analysis ──────────────────────────────────────────
+  Max observed depth:  16
+  Stack underflows:    None ✓
+  Stack overflow:      No ✓ (16 / 1024)
+
+════════════════════════════════════════════════════════════
+  VERDICT: ✗  UNSAFE
+════════════════════════════════════════════════════════════
+  ✓ No STATICCALL instructions (pure computation)
+  ✓ Static gas estimate: 34–428
+  ✓ Stack discipline OK
+  ✗ No valid 8130 header
+  ✗ 12 forbidden opcode type(s) found
+  ✗ Termination not provable
+════════════════════════════════════════════════════════════

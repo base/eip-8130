@@ -1,0 +1,217 @@
+{
+  "header": {
+    "valid": false,
+    "format": "none",
+    "version": 0,
+    "header_size": 0,
+    "bytecode_size": 1768,
+    "errors": [
+      "No PUSH1/JUMP preamble"
+    ]
+  },
+  "safety": {
+    "safe": false,
+    "forbidden_opcodes": [
+      {
+        "offset": 5,
+        "name": "CALLVALUE",
+        "category": "environment"
+      },
+      {
+        "offset": 1715,
+        "name": "LOG2",
+        "category": "logging"
+      },
+      {
+        "offset": 1722,
+        "name": "UNKNOWN_0x22",
+        "category": "unknown"
+      },
+      {
+        "offset": 1725,
+        "name": "UNKNOWN_0xB1",
+        "category": "unknown"
+      },
+      {
+        "offset": 1728,
+        "name": "LOG2",
+        "category": "logging"
+      },
+      {
+        "offset": 1729,
+        "name": "UNKNOWN_0xAD",
+        "category": "unknown"
+      },
+      {
+        "offset": 1730,
+        "name": "UNKNOWN_0xF6",
+        "category": "unknown"
+      },
+      {
+        "offset": 1735,
+        "name": "UNKNOWN_0xFC",
+        "category": "unknown"
+      },
+      {
+        "offset": 1751,
+        "name": "UNKNOWN_0xD3",
+        "category": "unknown"
+      },
+      {
+        "offset": 1765,
+        "name": "UNKNOWN_0x21",
+        "category": "unknown"
+      },
+      {
+        "offset": 1767,
+        "name": "CALLER",
+        "category": "environment"
+      }
+    ],
+    "instruction_count": 1249,
+    "unique_opcodes": 81,
+    "opcode_counts": {
+      "PUSH1": 125,
+      "MSTORE": 22,
+      "CALLVALUE": 1,
+      "DUP1": 25,
+      "ISZERO": 31,
+      "PUSH2": 142,
+      "JUMPI": 48,
+      "PUSH0": 87,
+      "REVERT": 25,
+      "JUMPDEST": 100,
+      "POP": 112,
+      "CALLDATASIZE": 2,
+      "LT": 11,
+      "CALLDATALOAD": 11,
+      "SHR": 5,
+      "PUSH4": 8,
+      "EQ": 4,
+      "JUMP": 66,
+      "MLOAD": 13,
+      "SWAP1": 47,
+      "DUP2": 41,
+      "ADD": 31,
+      "SWAP2": 32,
+      "SUB": 25,
+      "RETURN": 1,
+      "DUP3": 32,
+      "DUP4": 12,
+      "DUP5": 9,
+      "GT": 16,
+      "DUP6": 7,
+      "DUP8": 3,
+      "DUP9": 13,
+      "DUP10": 6,
+      "DUP12": 1,
+      "SWAP3": 18,
+      "KECCAK256": 2,
+      "SHL": 19,
+      "AND": 12,
+      "DUP14": 4,
+      "DUP7": 10,
+      "DUP15": 3,
+      "DUP16": 3,
+      "SWAP4": 6,
+      "SWAP8": 2,
+      "SWAP12": 1,
+      "SWAP11": 1,
+      "SWAP7": 2,
+      "SWAP6": 4,
+      "SWAP5": 9,
+      "PUSH32": 1,
+      "DUP11": 1,
+      "GAS": 1,
+      "STATICCALL": 1,
+      "RETURNDATASIZE": 3,
+      "RETURNDATACOPY": 1,
+      "NOT": 2,
+      "SLT": 2,
+      "PUSH8": 2,
+      "SGT": 1,
+      "SWAP9": 1,
+      "MUL": 1,
+      "DIV": 2,
+      "OR": 1,
+      "MOD": 1,
+      "CALLDATACOPY": 1,
+      "INVALID": 1,
+      "LOG2": 2,
+      "PUSH5": 1,
+      "UNKNOWN_0x22": 1,
+      "UNKNOWN_0xB1": 1,
+      "UNKNOWN_0xAD": 1,
+      "UNKNOWN_0xF6": 1,
+      "SWAP15": 1,
+      "UNKNOWN_0xFC": 1,
+      "PUSH14": 1,
+      "UNKNOWN_0xD3": 1,
+      "PUSH11": 1,
+      "ADDMOD": 1,
+      "UNKNOWN_0x21": 1,
+      "STOP": 1,
+      "CALLER": 1
+    }
+  },
+  "staticcall_targets": [
+    {
+      "offset": 997,
+      "target": "0x1",
+      "is_precompile": true,
+      "precompile_name": "ecrecover",
+      "precompile_gas": 3000
+    }
+  ],
+  "control_flow": {
+    "basic_blocks": 151,
+    "edges": 155,
+    "back_edges": 0,
+    "has_loops": false,
+    "dynamic_jumps": [
+      1421
+    ],
+    "reachable_blocks": 19,
+    "unreachable_blocks": 132,
+    "exit_points": {
+      "REVERT": 8
+    }
+  },
+  "gas": {
+    "min_path": 34,
+    "max_path": 428,
+    "exact": true,
+    "reason": "Loop-free \u2014 exact path analysis (static gas only)",
+    "dynamic_sources": [
+      "CALLDATACOPY",
+      "KECCAK256",
+      "MLOAD",
+      "MSTORE",
+      "RETURNDATACOPY",
+      "STATICCALL"
+    ],
+    "precompile_costs": [
+      [
+        "ecrecover",
+        3000
+      ]
+    ]
+  },
+  "termination": {
+    "provably_terminates": false,
+    "has_loops": false,
+    "loop_count": 0,
+    "back_edges": []
+  },
+  "stack": {
+    "max_depth": 16,
+    "underflow_count": 0,
+    "overflow": false
+  },
+  "wrapper": null,
+  "_meta": {
+    "artifact": "MultisigVerifier.sol/MultisigVerifier.json",
+    "contract": "MultisigVerifier",
+    "bytecode_size": 1768
+  }
+}

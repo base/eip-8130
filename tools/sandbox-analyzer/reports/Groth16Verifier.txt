@@ -1,0 +1,88 @@
+
+════════════════════════════════════════════════════════════
+  EIP-8130 Sandbox Verifier Bytecode Analyzer
+════════════════════════════════════════════════════════════
+
+── Header ──────────────────────────────────────────────────
+  Format:      None (no valid 8130 header)
+  Total Size:  2521 bytes
+  ✗ No PUSH1/JUMP preamble
+
+── Opcode Safety ───────────────────────────────────────────
+  Instructions:  1668 total, 76 unique opcodes
+  Forbidden:     11 ✗ UNSAFE
+    ✗ CALLVALUE (environment) at 0x0005
+    ✗ LOG2 (logging) at 0x09A4
+    ✗ UNKNOWN_0x22 (unknown) at 0x09AB
+    ✗ UNKNOWN_0x4C (unknown) at 0x09AE
+    ✗ UNKNOWN_0xBC (unknown) at 0x09AF
+    ✗ UNKNOWN_0xB5 (unknown) at 0x09B0
+    ✗ UNKNOWN_0xFC (unknown) at 0x09B1
+    ✗ UNKNOWN_0xBA (unknown) at 0x09B2
+    ✗ UNKNOWN_0xB9 (unknown) at 0x09B3
+    ✗ UNKNOWN_0xBE (unknown) at 0x09C7
+    ✗ UNKNOWN_0x21 (unknown) at 0x09C8
+  STATICCALL:    3 instance(s) (target check required)
+
+  Top opcodes:
+    PUSH2             315  ██░░░░░░░░░░░░░  18.9%
+    JUMPDEST          159  █░░░░░░░░░░░░░░   9.5%
+    JUMP              139  █░░░░░░░░░░░░░░   8.3%
+    PUSH1             125  █░░░░░░░░░░░░░░   7.5%
+    POP                87  ░░░░░░░░░░░░░░░   5.2%
+    SWAP1              81  ░░░░░░░░░░░░░░░   4.9%
+    SWAP2              74  ░░░░░░░░░░░░░░░   4.4%
+    PUSH0              64  ░░░░░░░░░░░░░░░   3.8%
+    SWAP3              55  ░░░░░░░░░░░░░░░   3.3%
+    ADD                52  ░░░░░░░░░░░░░░░   3.1%
+    MSTORE             46  ░░░░░░░░░░░░░░░   2.8%
+    DUP10              44  ░░░░░░░░░░░░░░░   2.6%
+
+── STATICCALL Targets ──────────────────────────────────────
+  Count: 3
+    @ 0x0717 → 0x08 (ecPairing (bn128), ~45,000 gas base) ✓
+    @ 0x076C → 0x07 (ecMul (bn128), ~6,000 gas base) ✓
+    @ 0x07C1 → 0x06 (ecAdd (bn128), ~150 gas base) ✓
+  All targets are allowlisted precompiles ✓
+
+── Control Flow ────────────────────────────────────────────
+  Basic blocks:     184
+  Edges:            176
+  Back edges:       0 (no loops)
+  Reachable:        19 blocks
+  Unreachable:      165 blocks
+  Exit points:      8 (8× REVERT)
+  Dynamic jumps:    1 ⚠
+    @ 0x08D4
+
+── Gas Estimation ──────────────────────────────────────────
+  Min path cost:    34 gas (static opcodes)
+  Max path cost:    428 gas (static opcodes)
+
+  Precompile costs (additive, not in path estimate):
+    ecPairing (bn128): ~45,000 gas base
+    ecMul (bn128): ~6,000 gas base
+    ecAdd (bn128): ~150 gas base
+
+  Dynamic gas sources: CALLDATACOPY, KECCAK256, MLOAD, MSTORE, STATICCALL
+  (actual cost depends on runtime input sizes)
+
+── Termination Analysis ────────────────────────────────────
+  Provably terminates:  UNKNOWN
+  Reason:               1 unresolved dynamic jump(s)
+
+── Stack Analysis ──────────────────────────────────────────
+  Max observed depth:  16
+  Stack underflows:    None ✓
+  Stack overflow:      No ✓ (16 / 1024)
+
+════════════════════════════════════════════════════════════
+  VERDICT: ✗  UNSAFE
+════════════════════════════════════════════════════════════
+  ✓ All STATICCALL targets are allowlisted precompiles
+  ✓ Static gas estimate: 34–428
+  ✓ Stack discipline OK
+  ✗ No valid 8130 header
+  ✗ 11 forbidden opcode type(s) found
+  ✗ Termination not provable
+════════════════════════════════════════════════════════════

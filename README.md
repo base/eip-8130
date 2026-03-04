@@ -25,7 +25,10 @@ EIP-8130 defines a new transaction type and onchain system contract that togethe
 | `WebAuthnVerifier` | secp256r1 / P-256 (WebAuthn) |
 | `DelegateVerifier` | Delegated validation (1-hop) |
 | `BLSVerifier` | BLS12-381 (sandbox) |
-| `Ed25519Verifier` | Ed25519 (sandbox) |
+| `SchnorrVerifier` | Schnorr over secp256k1 (sandbox) |
+| `MultisigVerifier` | M-of-N K1 multisig (sandbox) |
+| `Groth16Verifier` | Groth16 ZK-SNARK over BN254 (sandbox) |
+| `AlwaysValidVerifier` | Always valid — keyless relay (sandbox) |
 
 ## Usage
 

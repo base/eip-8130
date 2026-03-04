@@ -10,6 +10,11 @@ import {P256Verifier} from "../src/verifiers/P256Verifier.sol";
 import {WebAuthnVerifier} from "../src/verifiers/WebAuthnVerifier.sol";
 import {DelegateVerifier} from "../src/verifiers/DelegateVerifier.sol";
 import {BLSVerifier} from "../src/verifiers/BLSVerifier.sol";
+import {SchnorrVerifier} from "../src/verifiers/SchnorrVerifier.sol";
+import {MultisigVerifier} from "../src/verifiers/MultisigVerifier.sol";
+import {Groth16Verifier} from "../src/verifiers/Groth16Verifier.sol";
+import {AlwaysValidVerifier} from "../src/verifiers/AlwaysValidVerifier.sol";
+
 import {SandboxLib} from "../src/SandboxLib.sol";
 
 /// @notice Deploys the full EIP-8130 system with sandbox-wrapped verifiers.
@@ -37,34 +42,30 @@ contract Deploy is Script {
         address defaultAccount = address(new DefaultAccount{salt: 0}(address(accountConfig)));
         console.log("DefaultAccount:      ", defaultAccount);
 
-        // ── Native verifiers (regular contracts) ──
+        // ── Verifiers (deploy impl + sandbox wrapper, then log) ──
 
-        address k1 = address(new K1Verifier{salt: 0}());
-        address p256 = address(new P256Verifier{salt: 0}());
-        address webAuthn = address(new WebAuthnVerifier{salt: 0}());
-        address delegate = address(new DelegateVerifier{salt: 0}(address(accountConfig)));
-        address bls = address(new BLSVerifier{salt: 0}());
-
-        // ── Sandbox wrappers (forward to native verifiers via STATICCALL) ──
-
-        address k1Sandbox = SandboxLib.deploy(k1, SANDBOX_VERSION, bytes32("K1"));
-        address p256Sandbox = SandboxLib.deploy(p256, SANDBOX_VERSION, bytes32("P256_RAW"));
-        address webAuthnSandbox = SandboxLib.deploy(webAuthn, SANDBOX_VERSION, bytes32("P256_WEBAUTHN"));
-        address delegateSandbox = SandboxLib.deploy(delegate, SANDBOX_VERSION, bytes32("DELEGATE"));
-        address blsSandbox = SandboxLib.deploy(bls, SANDBOX_VERSION, bytes32("BLS"));
+        _deployVerifier("K1Verifier", address(new K1Verifier{salt: 0}()), bytes32("K1"));
+        _deployVerifier("P256Verifier", address(new P256Verifier{salt: 0}()), bytes32("P256_RAW"));
+        _deployVerifier("WebAuthnVerifier", address(new WebAuthnVerifier{salt: 0}()), bytes32("P256_WEBAUTHN"));
+        _deployVerifier(
+            "DelegateVerifier",
+            address(new DelegateVerifier{salt: 0}(address(accountConfig))),
+            bytes32("DELEGATE")
+        );
+        _deployVerifier("BLSVerifier", address(new BLSVerifier{salt: 0}()), bytes32("BLS"));
+        _deployVerifier("SchnorrVerifier", address(new SchnorrVerifier{salt: 0}()), bytes32("SCHNORR"));
+        _deployVerifier("MultisigVerifier", address(new MultisigVerifier{salt: 0}()), bytes32("MULTISIG"));
+        _deployVerifier("Groth16Verifier", address(new Groth16Verifier{salt: 0}()), bytes32("GROTH16"));
+        _deployVerifier(
+            "AlwaysValidVerifier", address(new AlwaysValidVerifier{salt: 0}()), bytes32("ALWAYS_VALID")
+        );
 
         vm.stopBroadcast();
-
-        // ── Log results ──
-
-        _logVerifier("K1Verifier", k1, k1Sandbox);
-        _logVerifier("P256Verifier", p256, p256Sandbox);
-        _logVerifier("WebAuthnVerifier", webAuthn, webAuthnSandbox);
-        _logVerifier("DelegateVerifier", delegate, delegateSandbox);
-        _logVerifier("BLSVerifier", bls, blsSandbox);
     }
 
-    function _logVerifier(string memory name, address impl, address sandbox) internal view {
+    function _deployVerifier(string memory name, address impl, bytes32 salt) internal {
+        address sandbox = SandboxLib.deploy(impl, SANDBOX_VERSION, salt);
+
         console.log(string.concat(name, ":"));
         console.log("  impl:   ", impl);
         console.log("  sandbox:", sandbox);

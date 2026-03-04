@@ -1,0 +1,200 @@
+{
+  "header": {
+    "valid": false,
+    "format": "none",
+    "version": 0,
+    "header_size": 0,
+    "bytecode_size": 287,
+    "errors": [
+      "No PUSH1/JUMP preamble"
+    ]
+  },
+  "safety": {
+    "safe": false,
+    "forbidden_opcodes": [
+      {
+        "offset": 5,
+        "name": "CALLVALUE",
+        "category": "environment"
+      },
+      {
+        "offset": 234,
+        "name": "LOG2",
+        "category": "logging"
+      },
+      {
+        "offset": 241,
+        "name": "UNKNOWN_0x22",
+        "category": "unknown"
+      },
+      {
+        "offset": 245,
+        "name": "UNKNOWN_0x22",
+        "category": "unknown"
+      },
+      {
+        "offset": 263,
+        "name": "UNKNOWN_0x21",
+        "category": "unknown"
+      },
+      {
+        "offset": 265,
+        "name": "EXTCODEHASH",
+        "category": "environment"
+      },
+      {
+        "offset": 266,
+        "name": "UNKNOWN_0xB9",
+        "category": "unknown"
+      },
+      {
+        "offset": 267,
+        "name": "UNKNOWN_0x28",
+        "category": "unknown"
+      },
+      {
+        "offset": 268,
+        "name": "TIMESTAMP",
+        "category": "block"
+      },
+      {
+        "offset": 269,
+        "name": "UNKNOWN_0xE6",
+        "category": "unknown"
+      },
+      {
+        "offset": 271,
+        "name": "CALLER",
+        "category": "environment"
+      },
+      {
+        "offset": 272,
+        "name": "UNKNOWN_0x2E",
+        "category": "unknown"
+      },
+      {
+        "offset": 275,
+        "name": "UNKNOWN_0xBF",
+        "category": "unknown"
+      },
+      {
+        "offset": 284,
+        "name": "UNKNOWN_0x21",
+        "category": "unknown"
+      },
+      {
+        "offset": 286,
+        "name": "CALLER",
+        "category": "environment"
+      }
+    ],
+    "instruction_count": 213,
+    "unique_opcodes": 60,
+    "opcode_counts": {
+      "PUSH1": 31,
+      "MSTORE": 2,
+      "CALLVALUE": 1,
+      "DUP1": 5,
+      "ISZERO": 7,
+      "JUMPI": 9,
+      "PUSH0": 22,
+      "REVERT": 8,
+      "JUMPDEST": 13,
+      "POP": 14,
+      "CALLDATASIZE": 2,
+      "LT": 1,
+      "CALLDATALOAD": 7,
+      "SHR": 1,
+      "PUSH4": 1,
+      "EQ": 2,
+      "JUMP": 3,
+      "SWAP6": 3,
+      "SWAP5": 3,
+      "MLOAD": 2,
+      "SWAP1": 3,
+      "DUP2": 6,
+      "ADD": 9,
+      "SWAP2": 2,
+      "SUB": 3,
+      "RETURN": 1,
+      "DUP7": 5,
+      "DUP9": 4,
+      "SLT": 2,
+      "DUP6": 1,
+      "SHL": 1,
+      "AND": 1,
+      "SWAP4": 1,
+      "SWAP3": 3,
+      "PUSH8": 2,
+      "GT": 3,
+      "SGT": 1,
+      "DUP3": 1,
+      "DUP5": 1,
+      "SWAP9": 1,
+      "SWAP8": 1,
+      "INVALID": 1,
+      "LOG2": 1,
+      "PUSH5": 2,
+      "UNKNOWN_0x22": 2,
+      "KECCAK256": 1,
+      "SIGNEXTEND": 1,
+      "PUSH13": 1,
+      "DUP14": 1,
+      "UNKNOWN_0x21": 2,
+      "EXTCODEHASH": 1,
+      "UNKNOWN_0xB9": 1,
+      "UNKNOWN_0x28": 1,
+      "TIMESTAMP": 1,
+      "UNKNOWN_0xE6": 1,
+      "CALLER": 2,
+      "UNKNOWN_0x2E": 1,
+      "UNKNOWN_0xBF": 1,
+      "STOP": 2,
+      "ADDMOD": 1
+    }
+  },
+  "staticcall_targets": [],
+  "control_flow": {
+    "basic_blocks": 26,
+    "edges": 20,
+    "back_edges": 0,
+    "has_loops": false,
+    "dynamic_jumps": [
+      232
+    ],
+    "reachable_blocks": 19,
+    "unreachable_blocks": 7,
+    "exit_points": {
+      "REVERT": 8
+    }
+  },
+  "gas": {
+    "min_path": 34,
+    "max_path": 428,
+    "exact": true,
+    "reason": "Loop-free \u2014 exact path analysis (static gas only)",
+    "dynamic_sources": [
+      "KECCAK256",
+      "MLOAD",
+      "MSTORE"
+    ],
+    "precompile_costs": []
+  },
+  "termination": {
+    "provably_terminates": false,
+    "has_loops": false,
+    "loop_count": 0,
+    "back_edges": []
+  },
+  "stack": {
+    "max_depth": 16,
+    "underflow_count": 0,
+    "overflow": false
+  },
+  "wrapper": null,
+  "_meta": {
+    "artifact": "AlwaysValidVerifier.sol/AlwaysValidVerifier.json",
+    "contract": "AlwaysValidVerifier",
+    "bytecode_size": 287
+  }
+}
