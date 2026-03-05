@@ -6,21 +6,18 @@ import {Script, console} from "forge-std/Script.sol";
 import {AccountConfiguration} from "../src/AccountConfiguration.sol";
 import {InitialKey} from "../src/AccountDeployer.sol";
 import {IAuthVerifier} from "../src/verifiers/IAuthVerifier.sol";
-import {SandboxLib} from "../src/SandboxLib.sol";
 
 /// @notice End-to-end smoke test against a live deployment.
 ///
 ///         Tests:
 ///           1. Account creation via AccountConfiguration
 ///           2. Key authorization + data reads
-///           3. K1 signature verification (direct verifier call)
-///           4. K1 signature verification (through sandbox wrapper)
-///           5. ERC-1167 proxy bytecode correctness
-///           6. Sandbox header parsing
+///           3. K1 signature verification
+///           4. ERC-1167 proxy bytecode correctness
 contract SmokeTest is Script {
     uint256 constant SIGNER_PK = 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
 
-    function run(address acctConfig, address k1Verifier, address k1Sandbox, address defaultImpl) public {
+    function run(address acctConfig, address k1Verifier, address defaultImpl) public {
         address signer = vm.addr(SIGNER_PK);
         bytes32 keyId = bytes32(bytes20(signer));
         AccountConfiguration config = AccountConfiguration(acctConfig);
@@ -33,21 +30,13 @@ contract SmokeTest is Script {
         _checkKey(config, account, keyId, k1Verifier);
         console.log("[PASS] Key authorized with correct verifier and flags");
 
-        // 3. K1 signature verification (direct)
+        // 3. K1 signature verification
         _checkSignature(k1Verifier, account, keyId);
-        console.log("[PASS] K1 verify (direct)");
+        console.log("[PASS] K1 verify");
 
-        // 4. K1 signature verification (through sandbox wrapper)
-        _checkSignature(k1Sandbox, account, keyId);
-        console.log("[PASS] K1 verify (sandbox wrapper)");
-
-        // 5. ERC-1167 proxy
+        // 4. ERC-1167 proxy
         require(account.code.length == 45, "expected 45-byte ERC-1167 proxy");
         console.log("[PASS] Account is 45-byte ERC-1167 proxy");
-
-        // 6. Sandbox header parsing
-        _checkSandboxHeader(k1Sandbox, k1Verifier);
-        console.log("[PASS] Sandbox header valid, wraps correct verifier");
 
         console.log("");
         console.log("=== ALL SMOKE TESTS PASSED ===");
@@ -81,12 +70,5 @@ contract SmokeTest is Script {
 
         bool valid = IAuthVerifier(verifier).verify(account, keyId, testHash, abi.encodePacked(r, s, v));
         require(valid, "signature verification failed");
-    }
-
-    function _checkSandboxHeader(address sandbox, address expectedImpl) internal view {
-        (uint8 version, address wrapped, bool valid) = SandboxLib.parseSandboxHeader(sandbox);
-        require(valid, "invalid sandbox header");
-        require(wrapped == expectedImpl, "wrapper points to wrong impl");
-        require(version == 0, "version should be 0");
     }
 }

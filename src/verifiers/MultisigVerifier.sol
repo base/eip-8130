@@ -43,10 +43,7 @@ contract MultisigVerifier is IAuthVerifier {
         for (uint256 i; i < sigCount; i++) {
             uint256 off = sigDataStart + i * 65;
             address recovered = ECDSA.recover(
-                hash,
-                uint8(data[off + 64]),
-                bytes32(data[off:off + 32]),
-                bytes32(data[off + 32:off + 64])
+                hash, uint8(data[off + 64]), bytes32(data[off:off + 32]), bytes32(data[off + 32:off + 64])
             );
             require(recovered > prev);
             prev = recovered;

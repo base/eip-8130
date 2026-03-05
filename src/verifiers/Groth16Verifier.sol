@@ -29,8 +29,7 @@ import {IAuthVerifier} from "./IAuthVerifier.sol";
 ///         NOTE: For production use, deploy per-circuit verifiers with hardcoded
 ///         VKs to avoid the calldata overhead of passing the VK every transaction.
 contract Groth16Verifier is IAuthVerifier {
-    uint256 private constant BN254_FP =
-        0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47;
+    uint256 private constant BN254_FP = 0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47;
 
     function verify(address, bytes32 keyId, bytes32 hash, bytes calldata data) external view returns (bool) {
         uint256 k = uint256(uint8(data[256]));
@@ -43,10 +42,8 @@ contract Groth16Verifier is IAuthVerifier {
 
         // ── Compute vk_x = IC[0] + hash·IC[1] + Σ(extraInputs[i]·IC[i+2]) ──
 
-        (uint256 vkxX, uint256 vkxY) = (
-            uint256(bytes32(data[icOff:icOff + 32])),
-            uint256(bytes32(data[icOff + 32:icOff + 64]))
-        );
+        (uint256 vkxX, uint256 vkxY) =
+            (uint256(bytes32(data[icOff:icOff + 32])), uint256(bytes32(data[icOff + 32:icOff + 64])));
 
         {
             (uint256 mx, uint256 my) = _ecMul(
@@ -60,11 +57,8 @@ contract Groth16Verifier is IAuthVerifier {
         for (uint256 i; i < k; i++) {
             uint256 inputVal = uint256(bytes32(data[257 + i * 32:289 + i * 32]));
             uint256 ic = icOff + (i + 2) * 64;
-            (uint256 mx, uint256 my) = _ecMul(
-                uint256(bytes32(data[ic:ic + 32])),
-                uint256(bytes32(data[ic + 32:ic + 64])),
-                inputVal
-            );
+            (uint256 mx, uint256 my) =
+                _ecMul(uint256(bytes32(data[ic:ic + 32])), uint256(bytes32(data[ic + 32:ic + 64])), inputVal);
             (vkxX, vkxY) = _ecAdd(vkxX, vkxY, mx, my);
         }
 

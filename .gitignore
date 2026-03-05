@@ -12,3 +12,13 @@ docs/
 
 # Dotenv file
 .env
+
+# Node
+node_modules/
+
+# Tool reports (generated output)
+**/reports/*.json
+**/reports/*.txt
+
+# OS files
+.DS_Store

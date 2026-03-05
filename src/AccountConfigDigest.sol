@@ -41,9 +41,10 @@ abstract contract AccountConfigDigest {
                 abi.encode(operations[i].opType, operations[i].verifier, operations[i].keyId, operations[i].flags)
             );
         }
-        return keccak256(
-            abi.encode(KEY_CHANGE_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(opHashes)))
-        );
+        return
+            keccak256(
+                abi.encode(KEY_CHANGE_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(opHashes)))
+            );
     }
 
     function _computeAccountChangeDigest(
@@ -54,9 +55,7 @@ abstract contract AccountConfigDigest {
     ) internal pure returns (bytes32) {
         bytes32[] memory opHashes = new bytes32[](operations.length);
         for (uint256 i; i < operations.length; i++) {
-            opHashes[i] = keccak256(
-                abi.encode(operations[i].opType, operations[i].flags, operations[i].unlockDelay)
-            );
+            opHashes[i] = keccak256(abi.encode(operations[i].opType, operations[i].flags, operations[i].unlockDelay));
         }
         return keccak256(
             abi.encode(ACCOUNT_CHANGE_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(opHashes)))
