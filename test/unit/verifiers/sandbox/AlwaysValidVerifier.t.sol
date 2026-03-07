@@ -17,18 +17,16 @@ contract AlwaysValidSandboxTest is Test {
 
     function test_returnsOwnerIdFromData() public {
         bytes32 ownerId = bytes32(uint256(0xBEEF));
-        (bool ok, bytes memory ret) = sandbox.staticcall(
-            abi.encodeWithSignature("verify(bytes32,bytes)", keccak256("test"), abi.encode(ownerId))
-        );
+        (bool ok, bytes memory ret) =
+            sandbox.staticcall(abi.encodeWithSignature("verify(bytes32,bytes)", keccak256("test"), abi.encode(ownerId)));
         assertTrue(ok);
         assertEq(abi.decode(ret, (bytes32)), ownerId);
     }
 
     function test_returnsOwnerIdViaVerifySelector() public {
         bytes32 ownerId = bytes32(uint256(0xDEAD));
-        (bool ok, bytes memory ret) = sandbox.staticcall(
-            abi.encodeWithSignature("verify(bytes32,bytes)", keccak256("msg"), abi.encode(ownerId))
-        );
+        (bool ok, bytes memory ret) =
+            sandbox.staticcall(abi.encodeWithSignature("verify(bytes32,bytes)", keccak256("msg"), abi.encode(ownerId)));
         assertTrue(ok);
         assertEq(abi.decode(ret, (bytes32)), ownerId);
     }

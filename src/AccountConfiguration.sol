@@ -286,9 +286,8 @@ contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
         address registeredVerifier = _ownerConfigs[account][ownerId];
         if (registeredVerifier == verifier) {
             valid = true;
-        } else if (
-            registeredVerifier == address(0) && ownerId == bytes32(bytes20(account)) && verifier == K1_VERIFIER
-        ) {
+        } else if (registeredVerifier == address(0) && ownerId == bytes32(bytes20(account)) && verifier == K1_VERIFIER)
+        {
             valid = true;
         }
     }

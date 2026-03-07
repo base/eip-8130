@@ -30,9 +30,8 @@ contract AccountConfigurationTest is Test {
         k1Verifier = IAuthVerifier(new K1Verifier());
         p256Verifier = IAuthVerifier(new P256Verifier());
         webAuthnVerifier = IAuthVerifier(new WebAuthnVerifier());
-        accountConfiguration = new AccountConfiguration(
-            address(k1Verifier), address(p256Verifier), address(webAuthnVerifier), address(0)
-        );
+        accountConfiguration =
+            new AccountConfiguration(address(k1Verifier), address(p256Verifier), address(webAuthnVerifier), address(0));
         delegateVerifier = IAuthVerifier(new DelegateVerifier(address(accountConfiguration)));
         defaultAccountImplementation = address(new DefaultAccount(address(accountConfiguration)));
     }
@@ -90,8 +89,7 @@ contract AccountConfigurationTest is Test {
     ) internal pure returns (bytes32) {
         bytes32[] memory opHashes = new bytes32[](operations.length);
         for (uint256 i; i < operations.length; i++) {
-            opHashes[i] =
-                keccak256(abi.encode(operations[i].opType, operations[i].verifier, operations[i].ownerId));
+            opHashes[i] = keccak256(abi.encode(operations[i].opType, operations[i].verifier, operations[i].ownerId));
         }
         return keccak256(
             abi.encode(CONFIG_CHANGE_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(opHashes)))
