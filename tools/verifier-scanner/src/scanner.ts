@@ -1,8 +1,8 @@
 /**
- * EIP-8130 sandbox bytecode scanner.
+ * EIP-8130 verifier scanner.
  *
- * Analyses EVM bytecode to determine if it's safe to run inside the 8130
- * sandbox. Only opcodes that break determinism are forbidden.
+ * Analyses EVM bytecode to determine if a verifier contract is safe to run
+ * inside the 8130 sandbox. Only opcodes that break determinism are forbidden.
  * Solidity-compiled contracts can pass.
  *
  * Spec limits (enforced at runtime, checked here statically):

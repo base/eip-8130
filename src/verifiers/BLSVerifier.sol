@@ -7,8 +7,8 @@ import {IAuthVerifier} from "./IAuthVerifier.sol";
 
 /// @notice BLS12-381 signature verifier using EIP-2537 precompiles.
 ///
-///         keyId  = keccak256(pubKey_G1)  where pubKey_G1 is 128-byte uncompressed G1 point
-///         data   = sig_G2 (256 bytes) || pubKey_G1 (128 bytes)  — 384 bytes total
+///         ownerId = keccak256(pubKey_G1)  where pubKey_G1 is 128-byte uncompressed G1 point
+///         data    = sig_G2 (256 bytes) || pubKey_G1 (128 bytes)  — 384 bytes total
 ///
 ///         Verification performs a pairing check:
 ///           e(-pubKey, H(hash)) · e(G1_gen, sig) == 1
@@ -19,9 +19,9 @@ contract BLSVerifier is IAuthVerifier {
     bytes32 private constant P_A = 0x000000000000000000000000000000001a0111ea397fe69a4b1ba7b6434bacd7;
     bytes32 private constant P_B = 0x64774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab;
 
-    function verify(address, bytes32 keyId, bytes32 hash, bytes calldata data) external view returns (bool) {
+    function verify(bytes32 hash, bytes calldata data) external view returns (bytes32 ownerId) {
         require(data.length == 384);
-        require(keccak256(data[256:384]) == keyId);
+        ownerId = keccak256(data[256:384]);
 
         BLS.G2Point memory msgPoint = BLS.hashToG2(abi.encodePacked(hash));
 
@@ -33,7 +33,7 @@ contract BLSVerifier is IAuthVerifier {
         g2s[0] = msgPoint;
         g2s[1] = _decodeG2(data[0:256]);
 
-        return BLS.pairing(g1s, g2s);
+        if (!BLS.pairing(g1s, g2s)) return bytes32(0);
     }
 
     function _decodeG2(bytes calldata sig) internal pure returns (BLS.G2Point memory) {

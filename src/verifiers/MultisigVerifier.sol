@@ -7,7 +7,7 @@ import {IAuthVerifier} from "./IAuthVerifier.sol";
 
 /// @notice K1 multisig verifier. Threshold M-of-N using secp256k1 ECDSA.
 ///
-///         keyId = keccak256(threshold (1) || signerCount (1)
+///         ownerId = keccak256(threshold (1) || signerCount (1)
 ///                           || signer_0 (20) || ... || signer_n (20))
 ///                 Signers MUST be sorted ascending by address.
 ///
@@ -17,7 +17,7 @@ import {IAuthVerifier} from "./IAuthVerifier.sol";
 ///
 ///         Only calls the ecrecover precompile (0x01) — sandbox-compatible.
 contract MultisigVerifier is IAuthVerifier {
-    function verify(address, bytes32 keyId, bytes32 hash, bytes calldata data) external pure returns (bool) {
+    function verify(bytes32 hash, bytes calldata data) external pure returns (bytes32 ownerId) {
         require(data.length >= 2);
         uint256 threshold = uint256(uint8(data[0]));
         uint256 signerCount = uint256(uint8(data[1]));
@@ -29,14 +29,12 @@ contract MultisigVerifier is IAuthVerifier {
         uint256 sigCount = (data.length - sigDataStart) / 65;
         require(sigCount >= threshold);
 
-        require(keccak256(data[:sigDataStart]) == keyId);
+        ownerId = keccak256(data[:sigDataStart]);
 
-        // Verify signers are sorted ascending (prevents misconfigured keyIds)
         for (uint256 j = 1; j < signerCount; j++) {
             require(_signerAt(data, j) > _signerAt(data, j - 1));
         }
 
-        // Walk sigs and signers in parallel — both ascending by address
         uint256 signerIdx;
         address prev;
 
@@ -56,12 +54,10 @@ contract MultisigVerifier is IAuthVerifier {
                     found = true;
                     break;
                 }
-                if (signer > recovered) return false;
+                if (signer > recovered) return bytes32(0);
             }
-            if (!found) return false;
+            if (!found) return bytes32(0);
         }
-
-        return true;
     }
 
     function _signerAt(bytes calldata data, uint256 idx) private pure returns (address signer) {

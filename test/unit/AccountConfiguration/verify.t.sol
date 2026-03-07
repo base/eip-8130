@@ -1,131 +1,142 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {KeyOperation} from "../../../src/AccountConfigDigest.sol";
+import {ConfigOperation} from "../../../src/AccountConfigDigest.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 contract VerifyTest is AccountConfigurationTest {
     uint256 constant OWNER_PK = 400;
 
-    function test_verify_validK1Signature() public {
-        (address account, bytes32 keyId) = _createK1Account(OWNER_PK);
+    function test_verifySignature_validK1() public {
+        (address account, bytes32 ownerId) = _createK1Account(OWNER_PK);
 
         bytes32 hash = keccak256("verify me");
         bytes memory sig = _signDigest(OWNER_PK, hash);
+        bytes memory auth = abi.encodePacked(uint8(0x01), sig);
 
-        assertTrue(accountConfiguration.verify(account, keyId, hash, sig));
+        (bool valid, bytes32 returnedOwnerId, address verifier) =
+            accountConfiguration.verifySignature(account, hash, auth);
+        assertTrue(valid);
+        assertEq(returnedOwnerId, ownerId);
+        assertEq(verifier, address(k1Verifier));
     }
 
-    function test_verify_wrongSignature() public {
-        (address account, bytes32 keyId) = _createK1Account(OWNER_PK);
+    function test_verifySignature_wrongSignature() public {
+        (address account,) = _createK1Account(OWNER_PK);
 
         bytes32 hash = keccak256("verify me");
         bytes memory wrongSig = _signDigest(999, hash);
+        bytes memory auth = abi.encodePacked(uint8(0x01), wrongSig);
 
-        assertFalse(accountConfiguration.verify(account, keyId, hash, wrongSig));
+        (bool valid,,) = accountConfiguration.verifySignature(account, hash, auth);
+        assertFalse(valid);
     }
 
-    function test_verify_unregisteredKey() public {
+    function test_verifySignature_unregisteredOwner() public {
         (address account,) = _createK1Account(OWNER_PK);
 
-        bytes32 unknownKeyId = bytes32(bytes20(vm.addr(999)));
         bytes32 hash = keccak256("verify me");
         bytes memory sig = _signDigest(999, hash);
+        bytes memory auth = abi.encodePacked(uint8(0x01), sig);
 
-        assertFalse(accountConfiguration.verify(account, unknownKeyId, hash, sig));
+        (bool valid,,) = accountConfiguration.verifySignature(account, hash, auth);
+        assertFalse(valid);
     }
 
-    function test_verify_revokedKey() public {
-        (address account, bytes32 ownerKeyId) = _createK1Account(OWNER_PK);
+    function test_verifySignature_revokedOwner() public {
+        (address account, bytes32 ownerOwnerId) = _createK1Account(OWNER_PK);
 
-        // Add a second key
         address newSigner = vm.addr(401);
-        bytes32 newKeyId = bytes32(bytes20(newSigner));
-        _authorizeKey(account, OWNER_PK, newKeyId, address(k1Verifier), 0);
+        bytes32 newOwnerId = bytes32(bytes20(newSigner));
+        _authorizeOwner(account, OWNER_PK, newOwnerId, address(k1Verifier));
 
-        // Revoke it
-        _revokeKey(account, OWNER_PK, newKeyId);
+        _revokeOwner(account, OWNER_PK, newOwnerId);
 
-        // Verify should fail for revoked key
         bytes32 hash = keccak256("after revoke");
         bytes memory sig = _signDigest(401, hash);
-        assertFalse(accountConfiguration.verify(account, newKeyId, hash, sig));
+        bytes memory auth = abi.encodePacked(uint8(0x01), sig);
 
-        // Owner key should still work
+        (bool valid,,) = accountConfiguration.verifySignature(account, hash, auth);
+        assertFalse(valid);
+
+        // Owner should still work
         bytes memory ownerSig = _signDigest(OWNER_PK, hash);
-        assertTrue(accountConfiguration.verify(account, ownerKeyId, hash, ownerSig));
+        bytes memory ownerAuth = abi.encodePacked(uint8(0x01), ownerSig);
+
+        (valid,,) = accountConfiguration.verifySignature(account, hash, ownerAuth);
+        assertTrue(valid);
     }
 
-    function test_verify_differentAccounts() public {
-        (address account1, bytes32 keyId1) = _createK1AccountWithSalt(OWNER_PK, bytes32(uint256(1)));
+    function test_verifySignature_differentAccounts() public {
+        (address account1, bytes32 ownerId1) = _createK1AccountWithSalt(OWNER_PK, bytes32(uint256(1)));
         (address account2,) = _createK1AccountWithSalt(OWNER_PK, bytes32(uint256(2)));
 
         bytes32 hash = keccak256("cross-account test");
         bytes memory sig = _signDigest(OWNER_PK, hash);
+        bytes memory auth = abi.encodePacked(uint8(0x01), sig);
 
-        // Same key is registered on account1 but not necessarily the same storage for account2
-        assertTrue(accountConfiguration.verify(account1, keyId1, hash, sig));
-        assertTrue(accountConfiguration.verify(account2, keyId1, hash, sig));
+        (bool valid1,,) = accountConfiguration.verifySignature(account1, hash, auth);
+        (bool valid2,,) = accountConfiguration.verifySignature(account2, hash, auth);
+
+        assertTrue(valid1);
+        assertTrue(valid2);
     }
 
     function test_isAuthorized_returnsCorrectly() public {
-        (address account, bytes32 keyId) = _createK1Account(OWNER_PK);
+        (address account, bytes32 ownerId) = _createK1Account(OWNER_PK);
 
-        assertTrue(accountConfiguration.isAuthorized(account, keyId));
+        assertTrue(accountConfiguration.isAuthorized(account, ownerId));
 
-        bytes32 unknownKeyId = bytes32(bytes20(vm.addr(999)));
-        assertFalse(accountConfiguration.isAuthorized(account, unknownKeyId));
+        bytes32 unknownOwnerId = bytes32(bytes20(vm.addr(999)));
+        assertFalse(accountConfiguration.isAuthorized(account, unknownOwnerId));
     }
 
-    function test_getKeyData_returnsVerifierAndFlags() public {
-        (address account, bytes32 keyId) = _createK1Account(OWNER_PK);
+    function test_getOwner_returnsVerifier() public {
+        (address account, bytes32 ownerId) = _createK1Account(OWNER_PK);
 
-        (address verifier, uint8 flags) = accountConfiguration.getKeyData(account, keyId);
+        address verifier = accountConfiguration.getOwner(account, ownerId);
         assertEq(verifier, address(k1Verifier));
-        assertEq(flags, 0);
     }
 
-    function test_getKeyData_returnsZeroForUnknownKey() public {
+    function test_getOwner_returnsZeroForUnknownOwner() public {
         (address account,) = _createK1Account(OWNER_PK);
 
-        bytes32 unknownKeyId = bytes32(bytes20(vm.addr(999)));
-        (address verifier, uint8 flags) = accountConfiguration.getKeyData(account, unknownKeyId);
+        bytes32 unknownOwnerId = bytes32(bytes20(vm.addr(999)));
+        address verifier = accountConfiguration.getOwner(account, unknownOwnerId);
         assertEq(verifier, address(0));
-        assertEq(flags, 0);
     }
 
     function test_computeERC1167Bytecode() public view {
         bytes memory bytecode = accountConfiguration.computeERC1167Bytecode(defaultAccountImplementation);
         assertEq(bytecode.length, 45);
 
-        // Verify it matches the standard ERC-1167 pattern
         bytes memory expected = _computeERC1167Bytecode(defaultAccountImplementation);
         assertEq(keccak256(bytecode), keccak256(expected));
     }
 
     // ── Helpers ──
 
-    function _authorizeKey(address account, uint256 pk, bytes32 newKeyId, address verifier, uint8 flags) internal {
-        KeyOperation[] memory ops = new KeyOperation[](1);
-        ops[0] = KeyOperation({opType: 0x01, verifier: verifier, keyId: newKeyId, flags: flags});
+    function _authorizeOwner(address account, uint256 pk, bytes32 newOwnerId, address verifier) internal {
+        ConfigOperation[] memory ops = new ConfigOperation[](1);
+        ops[0] = ConfigOperation({opType: 0x01, verifier: verifier, ownerId: newOwnerId});
 
         uint64 chainId = uint64(block.chainid);
         uint64 seq = accountConfiguration.getChangeSequence(account, chainId);
-        bytes32 digest = _computeKeyChangeDigest(account, chainId, seq, ops);
+        bytes32 digest = _computeConfigChangeDigest(account, chainId, seq, ops);
         bytes memory auth = _buildK1Auth(pk, digest);
 
-        accountConfiguration.applyKeyChange(account, chainId, seq, ops, auth);
+        accountConfiguration.applyConfigChange(account, chainId, seq, ops, auth);
     }
 
-    function _revokeKey(address account, uint256 pk, bytes32 keyId) internal {
-        KeyOperation[] memory ops = new KeyOperation[](1);
-        ops[0] = KeyOperation({opType: 0x02, verifier: address(0), keyId: keyId, flags: 0});
+    function _revokeOwner(address account, uint256 pk, bytes32 ownerId) internal {
+        ConfigOperation[] memory ops = new ConfigOperation[](1);
+        ops[0] = ConfigOperation({opType: 0x02, verifier: address(0), ownerId: ownerId});
 
         uint64 chainId = uint64(block.chainid);
         uint64 seq = accountConfiguration.getChangeSequence(account, chainId);
-        bytes32 digest = _computeKeyChangeDigest(account, chainId, seq, ops);
+        bytes32 digest = _computeConfigChangeDigest(account, chainId, seq, ops);
         bytes memory auth = _buildK1Auth(pk, digest);
 
-        accountConfiguration.applyKeyChange(account, chainId, seq, ops, auth);
+        accountConfiguration.applyConfigChange(account, chainId, seq, ops, auth);
     }
 }

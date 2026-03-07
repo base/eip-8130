@@ -1,103 +1,74 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {KeyOperation, AccountOperation} from "../../../src/AccountConfigDigest.sol";
+import {ConfigOperation} from "../../../src/AccountConfigDigest.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
-contract ApplyKeyChangeTest is AccountConfigurationTest {
+contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
     uint256 constant OWNER_PK = 200;
-    uint256 constant NEW_KEY_PK = 201;
+    uint256 constant NEW_OWNER_PK = 201;
 
-    function test_authorizeKey() public {
-        (address account, bytes32 ownerKeyId) = _createK1Account(OWNER_PK);
-
-        address newKeySigner = vm.addr(NEW_KEY_PK);
-        bytes32 newKeyId = bytes32(bytes20(newKeySigner));
-
-        KeyOperation[] memory ops = new KeyOperation[](1);
-        ops[0] = KeyOperation({opType: 0x01, verifier: address(k1Verifier), keyId: newKeyId, flags: 0});
-
-        uint64 chainId = uint64(block.chainid);
-        uint64 seq = accountConfiguration.getChangeSequence(account, chainId);
-        bytes32 digest = _computeKeyChangeDigest(account, chainId, seq, ops);
-        bytes memory auth = _buildK1Auth(OWNER_PK, digest);
-
-        accountConfiguration.applyKeyChange(account, chainId, seq, ops, auth);
-
-        assertTrue(accountConfiguration.isAuthorized(account, newKeyId));
-        (address v, uint8 f) = accountConfiguration.getKeyData(account, newKeyId);
-        assertEq(v, address(k1Verifier));
-        assertEq(f, 0);
-    }
-
-    function test_authorizeKeyWithFlags() public {
+    function test_authorizeOwner() public {
         (address account,) = _createK1Account(OWNER_PK);
 
-        address newKeySigner = vm.addr(NEW_KEY_PK);
-        bytes32 newKeyId = bytes32(bytes20(newKeySigner));
+        address newSigner = vm.addr(NEW_OWNER_PK);
+        bytes32 newOwnerId = bytes32(bytes20(newSigner));
 
-        KeyOperation[] memory ops = new KeyOperation[](1);
-        ops[0] = KeyOperation({
-            opType: 0x01,
-            verifier: address(k1Verifier),
-            keyId: newKeyId,
-            flags: 0x03 // disableKeyAdmin + disableGasPayment
-        });
+        ConfigOperation[] memory ops = new ConfigOperation[](1);
+        ops[0] = ConfigOperation({opType: 0x01, verifier: address(k1Verifier), ownerId: newOwnerId});
 
         uint64 chainId = uint64(block.chainid);
         uint64 seq = accountConfiguration.getChangeSequence(account, chainId);
-        bytes32 digest = _computeKeyChangeDigest(account, chainId, seq, ops);
+        bytes32 digest = _computeConfigChangeDigest(account, chainId, seq, ops);
         bytes memory auth = _buildK1Auth(OWNER_PK, digest);
 
-        accountConfiguration.applyKeyChange(account, chainId, seq, ops, auth);
+        accountConfiguration.applyConfigChange(account, chainId, seq, ops, auth);
 
-        (, uint8 flags) = accountConfiguration.getKeyData(account, newKeyId);
-        assertEq(flags, 0x03);
+        assertTrue(accountConfiguration.isAuthorized(account, newOwnerId));
+        assertEq(accountConfiguration.getOwner(account, newOwnerId), address(k1Verifier));
     }
 
-    function test_revokeKey() public {
+    function test_revokeOwner() public {
         (address account,) = _createK1Account(OWNER_PK);
 
-        // First authorize a new key
-        address newKeySigner = vm.addr(NEW_KEY_PK);
-        bytes32 newKeyId = bytes32(bytes20(newKeySigner));
-        _authorizeKey(account, OWNER_PK, newKeyId, address(k1Verifier), 0);
+        address newSigner = vm.addr(NEW_OWNER_PK);
+        bytes32 newOwnerId = bytes32(bytes20(newSigner));
+        _authorizeOwner(account, OWNER_PK, newOwnerId, address(k1Verifier));
 
-        assertTrue(accountConfiguration.isAuthorized(account, newKeyId));
+        assertTrue(accountConfiguration.isAuthorized(account, newOwnerId));
 
-        // Now revoke it
-        KeyOperation[] memory ops = new KeyOperation[](1);
-        ops[0] = KeyOperation({opType: 0x02, verifier: address(0), keyId: newKeyId, flags: 0});
+        ConfigOperation[] memory ops = new ConfigOperation[](1);
+        ops[0] = ConfigOperation({opType: 0x02, verifier: address(0), ownerId: newOwnerId});
 
         uint64 chainId = uint64(block.chainid);
         uint64 seq = accountConfiguration.getChangeSequence(account, chainId);
-        bytes32 digest = _computeKeyChangeDigest(account, chainId, seq, ops);
+        bytes32 digest = _computeConfigChangeDigest(account, chainId, seq, ops);
         bytes memory auth = _buildK1Auth(OWNER_PK, digest);
 
-        accountConfiguration.applyKeyChange(account, chainId, seq, ops, auth);
+        accountConfiguration.applyConfigChange(account, chainId, seq, ops, auth);
 
-        assertFalse(accountConfiguration.isAuthorized(account, newKeyId));
+        assertFalse(accountConfiguration.isAuthorized(account, newOwnerId));
     }
 
     function test_multipleOperationsInSingleChange() public {
         (address account,) = _createK1Account(OWNER_PK);
 
-        bytes32 key1 = bytes32(bytes20(vm.addr(300)));
-        bytes32 key2 = bytes32(bytes20(vm.addr(301)));
+        bytes32 owner1 = bytes32(bytes20(vm.addr(300)));
+        bytes32 owner2 = bytes32(bytes20(vm.addr(301)));
 
-        KeyOperation[] memory ops = new KeyOperation[](2);
-        ops[0] = KeyOperation({opType: 0x01, verifier: address(k1Verifier), keyId: key1, flags: 0});
-        ops[1] = KeyOperation({opType: 0x01, verifier: address(k1Verifier), keyId: key2, flags: 0});
+        ConfigOperation[] memory ops = new ConfigOperation[](2);
+        ops[0] = ConfigOperation({opType: 0x01, verifier: address(k1Verifier), ownerId: owner1});
+        ops[1] = ConfigOperation({opType: 0x01, verifier: address(k1Verifier), ownerId: owner2});
 
         uint64 chainId = uint64(block.chainid);
         uint64 seq = accountConfiguration.getChangeSequence(account, chainId);
-        bytes32 digest = _computeKeyChangeDigest(account, chainId, seq, ops);
+        bytes32 digest = _computeConfigChangeDigest(account, chainId, seq, ops);
         bytes memory auth = _buildK1Auth(OWNER_PK, digest);
 
-        accountConfiguration.applyKeyChange(account, chainId, seq, ops, auth);
+        accountConfiguration.applyConfigChange(account, chainId, seq, ops, auth);
 
-        assertTrue(accountConfiguration.isAuthorized(account, key1));
-        assertTrue(accountConfiguration.isAuthorized(account, key2));
+        assertTrue(accountConfiguration.isAuthorized(account, owner1));
+        assertTrue(accountConfiguration.isAuthorized(account, owner2));
     }
 
     function test_sequenceIncrements() public {
@@ -106,122 +77,110 @@ contract ApplyKeyChangeTest is AccountConfigurationTest {
         uint64 chainId = uint64(block.chainid);
         assertEq(accountConfiguration.getChangeSequence(account, chainId), 0);
 
-        _authorizeKey(account, OWNER_PK, bytes32(bytes20(vm.addr(300))), address(k1Verifier), 0);
+        _authorizeOwner(account, OWNER_PK, bytes32(bytes20(vm.addr(300))), address(k1Verifier));
         assertEq(accountConfiguration.getChangeSequence(account, chainId), 1);
 
-        _authorizeKey(account, OWNER_PK, bytes32(bytes20(vm.addr(301))), address(k1Verifier), 0);
+        _authorizeOwner(account, OWNER_PK, bytes32(bytes20(vm.addr(301))), address(k1Verifier));
         assertEq(accountConfiguration.getChangeSequence(account, chainId), 2);
     }
 
     function test_revertsOnWrongSequence() public {
         (address account,) = _createK1Account(OWNER_PK);
 
-        KeyOperation[] memory ops = new KeyOperation[](1);
-        ops[0] = KeyOperation({
-            opType: 0x01, verifier: address(k1Verifier), keyId: bytes32(bytes20(vm.addr(300))), flags: 0
-        });
+        ConfigOperation[] memory ops = new ConfigOperation[](1);
+        ops[0] = ConfigOperation({opType: 0x01, verifier: address(k1Verifier), ownerId: bytes32(bytes20(vm.addr(300)))});
 
         uint64 chainId = uint64(block.chainid);
         uint64 wrongSeq = 999;
-        bytes32 digest = _computeKeyChangeDigest(account, chainId, wrongSeq, ops);
+        bytes32 digest = _computeConfigChangeDigest(account, chainId, wrongSeq, ops);
         bytes memory auth = _buildK1Auth(OWNER_PK, digest);
 
         vm.expectRevert();
-        accountConfiguration.applyKeyChange(account, chainId, wrongSeq, ops, auth);
+        accountConfiguration.applyConfigChange(account, chainId, wrongSeq, ops, auth);
     }
 
     function test_revertsWhenLocked() public {
-        (address account, bytes32 keyId) = _createK1Account(OWNER_PK);
-
-        // Lock the account
-        _lockAccount(account, OWNER_PK);
-
-        KeyOperation[] memory ops = new KeyOperation[](1);
-        ops[0] = KeyOperation({
-            opType: 0x01, verifier: address(k1Verifier), keyId: bytes32(bytes20(vm.addr(300))), flags: 0
-        });
-
-        uint64 chainId = uint64(block.chainid);
-        uint64 seq = accountConfiguration.getChangeSequence(account, chainId);
-        bytes32 digest = _computeKeyChangeDigest(account, chainId, seq, ops);
-        bytes memory auth = _buildK1Auth(OWNER_PK, digest);
-
-        vm.expectRevert();
-        accountConfiguration.applyKeyChange(account, chainId, seq, ops, auth);
-    }
-
-    function test_revertsWhenAuthorizerHasDisableKeyAdmin() public {
         (address account,) = _createK1Account(OWNER_PK);
 
-        // Add a new key with disableKeyAdmin flag
-        bytes32 nonAdminKeyId = bytes32(bytes20(vm.addr(NEW_KEY_PK)));
-        _authorizeKey(account, OWNER_PK, nonAdminKeyId, address(k1Verifier), 0x01);
+        _lockAccount(account);
 
-        // Try to use the non-admin key to authorize another key
-        KeyOperation[] memory ops = new KeyOperation[](1);
-        ops[0] = KeyOperation({
-            opType: 0x01, verifier: address(k1Verifier), keyId: bytes32(bytes20(vm.addr(302))), flags: 0
-        });
+        ConfigOperation[] memory ops = new ConfigOperation[](1);
+        ops[0] = ConfigOperation({opType: 0x01, verifier: address(k1Verifier), ownerId: bytes32(bytes20(vm.addr(300)))});
 
         uint64 chainId = uint64(block.chainid);
         uint64 seq = accountConfiguration.getChangeSequence(account, chainId);
-        bytes32 digest = _computeKeyChangeDigest(account, chainId, seq, ops);
-        bytes memory auth = _buildK1Auth(NEW_KEY_PK, digest);
-
-        vm.expectRevert();
-        accountConfiguration.applyKeyChange(account, chainId, seq, ops, auth);
-    }
-
-    function test_revertsOnDuplicateKeyAuthorization() public {
-        (address account, bytes32 ownerKeyId) = _createK1Account(OWNER_PK);
-
-        // Try to authorize a key that already exists (the owner key)
-        KeyOperation[] memory ops = new KeyOperation[](1);
-        ops[0] = KeyOperation({opType: 0x01, verifier: address(k1Verifier), keyId: ownerKeyId, flags: 0});
-
-        uint64 chainId = uint64(block.chainid);
-        uint64 seq = accountConfiguration.getChangeSequence(account, chainId);
-        bytes32 digest = _computeKeyChangeDigest(account, chainId, seq, ops);
+        bytes32 digest = _computeConfigChangeDigest(account, chainId, seq, ops);
         bytes memory auth = _buildK1Auth(OWNER_PK, digest);
 
         vm.expectRevert();
-        accountConfiguration.applyKeyChange(account, chainId, seq, ops, auth);
+        accountConfiguration.applyConfigChange(account, chainId, seq, ops, auth);
     }
 
-    function test_revertsOnRevokingNonExistentKey() public {
+    function test_anyOwnerCanAuthorize() public {
         (address account,) = _createK1Account(OWNER_PK);
 
-        bytes32 nonExistentKeyId = bytes32(bytes20(vm.addr(999)));
+        bytes32 secondOwnerId = bytes32(bytes20(vm.addr(NEW_OWNER_PK)));
+        _authorizeOwner(account, OWNER_PK, secondOwnerId, address(k1Verifier));
 
-        KeyOperation[] memory ops = new KeyOperation[](1);
-        ops[0] = KeyOperation({opType: 0x02, verifier: address(0), keyId: nonExistentKeyId, flags: 0});
+        bytes32 thirdOwnerId = bytes32(bytes20(vm.addr(302)));
+        ConfigOperation[] memory ops = new ConfigOperation[](1);
+        ops[0] = ConfigOperation({opType: 0x01, verifier: address(k1Verifier), ownerId: thirdOwnerId});
 
         uint64 chainId = uint64(block.chainid);
         uint64 seq = accountConfiguration.getChangeSequence(account, chainId);
-        bytes32 digest = _computeKeyChangeDigest(account, chainId, seq, ops);
+        bytes32 digest = _computeConfigChangeDigest(account, chainId, seq, ops);
+        bytes memory auth = _buildK1Auth(NEW_OWNER_PK, digest);
+
+        accountConfiguration.applyConfigChange(account, chainId, seq, ops, auth);
+        assertTrue(accountConfiguration.isAuthorized(account, thirdOwnerId));
+    }
+
+    function test_revertsOnDuplicateOwnerAuthorization() public {
+        (address account, bytes32 ownerOwnerId) = _createK1Account(OWNER_PK);
+
+        ConfigOperation[] memory ops = new ConfigOperation[](1);
+        ops[0] = ConfigOperation({opType: 0x01, verifier: address(k1Verifier), ownerId: ownerOwnerId});
+
+        uint64 chainId = uint64(block.chainid);
+        uint64 seq = accountConfiguration.getChangeSequence(account, chainId);
+        bytes32 digest = _computeConfigChangeDigest(account, chainId, seq, ops);
         bytes memory auth = _buildK1Auth(OWNER_PK, digest);
 
         vm.expectRevert();
-        accountConfiguration.applyKeyChange(account, chainId, seq, ops, auth);
+        accountConfiguration.applyConfigChange(account, chainId, seq, ops, auth);
+    }
+
+    function test_revertsOnRevokingNonExistentOwner() public {
+        (address account,) = _createK1Account(OWNER_PK);
+
+        bytes32 nonExistentOwnerId = bytes32(bytes20(vm.addr(999)));
+
+        ConfigOperation[] memory ops = new ConfigOperation[](1);
+        ops[0] = ConfigOperation({opType: 0x02, verifier: address(0), ownerId: nonExistentOwnerId});
+
+        uint64 chainId = uint64(block.chainid);
+        uint64 seq = accountConfiguration.getChangeSequence(account, chainId);
+        bytes32 digest = _computeConfigChangeDigest(account, chainId, seq, ops);
+        bytes memory auth = _buildK1Auth(OWNER_PK, digest);
+
+        vm.expectRevert();
+        accountConfiguration.applyConfigChange(account, chainId, seq, ops, auth);
     }
 
     function test_revertsWithInvalidSignature() public {
         (address account,) = _createK1Account(OWNER_PK);
 
-        KeyOperation[] memory ops = new KeyOperation[](1);
-        ops[0] = KeyOperation({
-            opType: 0x01, verifier: address(k1Verifier), keyId: bytes32(bytes20(vm.addr(300))), flags: 0
-        });
+        ConfigOperation[] memory ops = new ConfigOperation[](1);
+        ops[0] = ConfigOperation({opType: 0x01, verifier: address(k1Verifier), ownerId: bytes32(bytes20(vm.addr(300)))});
 
         uint64 chainId = uint64(block.chainid);
         uint64 seq = accountConfiguration.getChangeSequence(account, chainId);
-        bytes32 digest = _computeKeyChangeDigest(account, chainId, seq, ops);
+        bytes32 digest = _computeConfigChangeDigest(account, chainId, seq, ops);
 
-        // Sign with wrong private key
         bytes memory badAuth = _buildK1Auth(999, digest);
 
         vm.expectRevert();
-        accountConfiguration.applyKeyChange(account, chainId, seq, ops, badAuth);
+        accountConfiguration.applyConfigChange(account, chainId, seq, ops, badAuth);
     }
 
     function test_multichainSequenceChannelsAreIndependent() public {
@@ -233,8 +192,7 @@ contract ApplyKeyChangeTest is AccountConfigurationTest {
         assertEq(accountConfiguration.getChangeSequence(account, localChainId), 0);
         assertEq(accountConfiguration.getChangeSequence(account, multichainId), 0);
 
-        // Apply on local chain
-        _authorizeKey(account, OWNER_PK, bytes32(bytes20(vm.addr(300))), address(k1Verifier), 0);
+        _authorizeOwner(account, OWNER_PK, bytes32(bytes20(vm.addr(300))), address(k1Verifier));
 
         assertEq(accountConfiguration.getChangeSequence(account, localChainId), 1);
         assertEq(accountConfiguration.getChangeSequence(account, multichainId), 0);
@@ -242,27 +200,22 @@ contract ApplyKeyChangeTest is AccountConfigurationTest {
 
     // ── Helpers ──
 
-    function _authorizeKey(address account, uint256 pk, bytes32 newKeyId, address verifier, uint8 flags) internal {
-        KeyOperation[] memory ops = new KeyOperation[](1);
-        ops[0] = KeyOperation({opType: 0x01, verifier: verifier, keyId: newKeyId, flags: flags});
+    function _authorizeOwner(address account, uint256 pk, bytes32 newOwnerId, address verifier) internal {
+        ConfigOperation[] memory ops = new ConfigOperation[](1);
+        ops[0] = ConfigOperation({opType: 0x01, verifier: verifier, ownerId: newOwnerId});
 
         uint64 chainId = uint64(block.chainid);
         uint64 seq = accountConfiguration.getChangeSequence(account, chainId);
-        bytes32 digest = _computeKeyChangeDigest(account, chainId, seq, ops);
+        bytes32 digest = _computeConfigChangeDigest(account, chainId, seq, ops);
         bytes memory auth = _buildK1Auth(pk, digest);
 
-        accountConfiguration.applyKeyChange(account, chainId, seq, ops, auth);
+        accountConfiguration.applyConfigChange(account, chainId, seq, ops, auth);
     }
 
-    function _lockAccount(address account, uint256 pk) internal {
-        AccountOperation[] memory ops = new AccountOperation[](1);
-        ops[0] = AccountOperation({opType: 0x03, flags: 0x01, unlockDelay: 1 hours});
-
-        uint64 chainId = uint64(block.chainid);
-        uint64 seq = accountConfiguration.getChangeSequence(account, chainId);
-        bytes32 digest = _computeAccountChangeDigest(account, chainId, seq, ops);
-        bytes memory auth = _buildK1Auth(pk, digest);
-
-        accountConfiguration.applyAccountChange(account, chainId, seq, ops, auth);
+    function _lockAccount(address account) internal {
+        bytes32 lockTypehash = keccak256("Lock(address account,uint32 unlockDelay)");
+        bytes32 digest = keccak256(abi.encode(lockTypehash, account, uint32(1 hours)));
+        bytes memory auth = _buildK1Auth(OWNER_PK, digest);
+        accountConfiguration.lock(account, 1 hours, auth);
     }
 }

@@ -5,37 +5,37 @@ import {Receiver} from "solady/accounts/Receiver.sol";
 
 import {AccountConfiguration} from "../AccountConfiguration.sol";
 
-struct Call {
-    address target;
-    uint256 value;
-    bytes data;
-}
+import {Call} from "./DefaultAccount.sol";
 
-/// @notice Default account implementation for EIP-8130.
-///         Deployed behind ERC-1167 minimal proxy (45 bytes, deterministic pattern).
+/// @notice High-rate account variant for EIP-8130.
 ///
-///         With direct dispatch, the protocol sends calls to `to` addresses with `msg.sender = from`.
-///         This contract handles ETH transfers (via self-call) and batched operations.
-contract DefaultAccount is Receiver {
+///         Blocks outbound ETH value transfers when the account is locked.
+///         Combined with lock, ETH balance only decreases through gas fees,
+///         giving mempools maximum balance predictability and enabling higher
+///         transaction rate limits.
+contract DefaultHighRateAccount is Receiver {
     AccountConfiguration public immutable ACCOUNT_CONFIGURATION;
 
     constructor(address accountConfiguration) {
         ACCOUNT_CONFIGURATION = AccountConfiguration(accountConfiguration);
     }
 
-    /// @notice Execute a batch of calls. Only callable via self-call
+    /// @notice Execute a batch of calls. Only callable via self-call.
+    ///         Refuses outbound value transfers when account is locked.
     function executeBatch(Call[] calldata calls) external {
         require(msg.sender == address(this));
+
         for (uint256 i; i < calls.length; i++) {
+            if (calls[i].value > 0) {
+                (bool locked,,) = ACCOUNT_CONFIGURATION.getLockState(address(this));
+                require(!locked);
+            }
             (bool success,) = calls[i].target.call{value: calls[i].value}(calls[i].data);
             require(success);
         }
     }
 
     /// @notice ERC-1271 signature validation. Used by AccountConfiguration for portable change authorization.
-    /// @param hash The digest to verify
-    /// @param signature Auth data in verifier || data format
-    /// @return magicValue 0x1626ba7e if valid, 0xffffffff otherwise
     function isValidSignature(bytes32 hash, bytes calldata signature) external view returns (bytes4) {
         (bool valid,,) = ACCOUNT_CONFIGURATION.verifySignature(address(this), hash, signature);
         if (!valid) return bytes4(0xFFFFFFFF);

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {DefaultAccount} from "../../../src/accounts/DefaultAccount.sol";
+import {DefaultAccount, Call} from "../../../src/accounts/DefaultAccount.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 contract MockTarget {
@@ -25,107 +25,101 @@ contract DefaultAccountTest is AccountConfigurationTest {
         target = new MockTarget();
     }
 
+    function _singleCall(address t, uint256 v, bytes memory d) internal pure returns (Call[] memory calls) {
+        calls = new Call[](1);
+        calls[0] = Call(t, v, d);
+    }
+
     // ── executeBatch ──
 
     function test_executeBatch_success() public {
         (address account,) = _createK1Account(OWNER_PK);
-        vm.deal(account, 1 ether);
-
-        DefaultAccount.Call[] memory calls = new DefaultAccount.Call[](1);
-        calls[0] =
-            DefaultAccount.Call({target: address(target), data: abi.encodeCall(MockTarget.setValue, (42)), value: 0});
 
         vm.prank(account);
-        DefaultAccount(payable(account)).executeBatch(calls);
+        DefaultAccount(payable(account)).executeBatch(
+            _singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (42)))
+        );
 
         assertEq(target.value(), 42);
-    }
-
-    function test_executeBatch_multipleCalls() public {
-        (address account,) = _createK1Account(OWNER_PK);
-
-        DefaultAccount.Call[] memory calls = new DefaultAccount.Call[](2);
-        calls[0] =
-            DefaultAccount.Call({target: address(target), data: abi.encodeCall(MockTarget.setValue, (10)), value: 0});
-        calls[1] =
-            DefaultAccount.Call({target: address(target), data: abi.encodeCall(MockTarget.setValue, (20)), value: 0});
-
-        vm.prank(account);
-        DefaultAccount(payable(account)).executeBatch(calls);
-
-        assertEq(target.value(), 20);
     }
 
     function test_executeBatch_withETHValue() public {
         (address account,) = _createK1Account(OWNER_PK);
         vm.deal(account, 1 ether);
 
-        DefaultAccount.Call[] memory calls = new DefaultAccount.Call[](1);
-        calls[0] = DefaultAccount.Call({
-            target: address(target), data: abi.encodeCall(MockTarget.setValue, (1)), value: 0.5 ether
-        });
+        vm.prank(account);
+        DefaultAccount(payable(account)).executeBatch(
+            _singleCall(address(target), 0.5 ether, abi.encodeCall(MockTarget.setValue, (1)))
+        );
+
+        assertEq(address(target).balance, 0.5 ether);
+    }
+
+    function test_executeBatch_multipleCalls() public {
+        (address account,) = _createK1Account(OWNER_PK);
+        MockTarget target2 = new MockTarget();
+
+        Call[] memory calls = new Call[](2);
+        calls[0] = Call(address(target), 0, abi.encodeCall(MockTarget.setValue, (10)));
+        calls[1] = Call(address(target2), 0, abi.encodeCall(MockTarget.setValue, (20)));
 
         vm.prank(account);
         DefaultAccount(payable(account)).executeBatch(calls);
 
-        assertEq(address(target).balance, 0.5 ether);
+        assertEq(target.value(), 10);
+        assertEq(target2.value(), 20);
     }
 
     function test_executeBatch_revertsFromNonSelf() public {
         (address account,) = _createK1Account(OWNER_PK);
 
-        DefaultAccount.Call[] memory calls = new DefaultAccount.Call[](1);
-        calls[0] =
-            DefaultAccount.Call({target: address(target), data: abi.encodeCall(MockTarget.setValue, (1)), value: 0});
-
         vm.prank(address(0xdead));
         vm.expectRevert();
-        DefaultAccount(payable(account)).executeBatch(calls);
+        DefaultAccount(payable(account)).executeBatch(
+            _singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1)))
+        );
     }
 
     function test_executeBatch_revertsOnFailedCall() public {
         (address account,) = _createK1Account(OWNER_PK);
 
-        DefaultAccount.Call[] memory calls = new DefaultAccount.Call[](1);
-        calls[0] =
-            DefaultAccount.Call({target: address(target), data: abi.encodeCall(MockTarget.reverting, ()), value: 0});
-
         vm.prank(account);
         vm.expectRevert();
-        DefaultAccount(payable(account)).executeBatch(calls);
+        DefaultAccount(payable(account)).executeBatch(
+            _singleCall(address(target), 0, abi.encodeCall(MockTarget.reverting, ()))
+        );
     }
 
     // ── isValidSignature ──
 
     function test_isValidSignature_validK1() public {
-        (address account, bytes32 keyId) = _createK1Account(OWNER_PK);
+        (address account,) = _createK1Account(OWNER_PK);
 
         bytes32 hash = keccak256("validate me");
         bytes memory sig = _signDigest(OWNER_PK, hash);
-        bytes memory authData = abi.encode(keyId, sig);
+        bytes memory authData = abi.encodePacked(uint8(0x01), sig);
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0x1626ba7e));
     }
 
     function test_isValidSignature_invalidSignature() public {
-        (address account, bytes32 keyId) = _createK1Account(OWNER_PK);
+        (address account,) = _createK1Account(OWNER_PK);
 
         bytes32 hash = keccak256("validate me");
         bytes memory wrongSig = _signDigest(999, hash);
-        bytes memory authData = abi.encode(keyId, wrongSig);
+        bytes memory authData = abi.encodePacked(uint8(0x01), wrongSig);
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0xFFFFFFFF));
     }
 
-    function test_isValidSignature_unknownKeyId() public {
+    function test_isValidSignature_unknownOwnerId() public {
         (address account,) = _createK1Account(OWNER_PK);
 
         bytes32 hash = keccak256("validate me");
-        bytes32 unknownKeyId = bytes32(bytes20(vm.addr(999)));
         bytes memory sig = _signDigest(999, hash);
-        bytes memory authData = abi.encode(unknownKeyId, sig);
+        bytes memory authData = abi.encodePacked(uint8(0x01), sig);
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0xFFFFFFFF));

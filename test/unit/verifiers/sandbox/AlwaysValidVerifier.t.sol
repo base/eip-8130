@@ -11,35 +11,26 @@ contract AlwaysValidSandboxTest is Test {
         sandbox = AlwaysValidSandbox.deploy(bytes32("test"));
     }
 
-    function test_bytecodeIs8Bytes() public pure {
-        assertEq(AlwaysValidSandbox.bytecode().length, 8);
+    function test_deployedCodeMatchesBytecode() public view {
+        assertEq(sandbox.code.length, AlwaysValidSandbox.bytecode().length);
     }
 
-    function test_deployedCodeIs8Bytes() public view {
-        assertEq(sandbox.code.length, 8);
-    }
-
-    function test_returnsTrue() public {
-        (bool ok, bytes memory ret) =
-            sandbox.staticcall(abi.encode(address(0x1), bytes32(uint256(1)), keccak256("test"), bytes("")));
-        assertTrue(ok);
-        assertEq(abi.decode(ret, (uint256)), 1);
-    }
-
-    function test_returnsTrueForAnyInput() public {
-        (bool ok, bytes memory ret) = sandbox.staticcall(hex"");
-        assertTrue(ok);
-        assertEq(abi.decode(ret, (uint256)), 1);
-    }
-
-    function test_returnsTrueViaVerifySelector() public {
+    function test_returnsOwnerIdFromData() public {
+        bytes32 ownerId = bytes32(uint256(0xBEEF));
         (bool ok, bytes memory ret) = sandbox.staticcall(
-            abi.encodeWithSignature(
-                "verify(address,bytes32,bytes32,bytes)", address(0xdead), bytes32(0), keccak256("msg"), bytes("")
-            )
+            abi.encodeWithSignature("verify(bytes32,bytes)", keccak256("test"), abi.encode(ownerId))
         );
         assertTrue(ok);
-        assertEq(abi.decode(ret, (uint256)), 1);
+        assertEq(abi.decode(ret, (bytes32)), ownerId);
+    }
+
+    function test_returnsOwnerIdViaVerifySelector() public {
+        bytes32 ownerId = bytes32(uint256(0xDEAD));
+        (bool ok, bytes memory ret) = sandbox.staticcall(
+            abi.encodeWithSignature("verify(bytes32,bytes)", keccak256("msg"), abi.encode(ownerId))
+        );
+        assertTrue(ok);
+        assertEq(abi.decode(ret, (bytes32)), ownerId);
     }
 
     function test_onlyAllowedOpcodes() public view {
@@ -53,6 +44,8 @@ contract AlwaysValidSandboxTest is Test {
             assertTrue(
                 op == 0x5F // PUSH0
                     || op == 0x52 // MSTORE
+                    || op == 0x35 // CALLDATALOAD
+                    || op == 0x01 // ADD
                     || op == 0xF3, // RETURN
                 "unexpected opcode in verification code"
             );

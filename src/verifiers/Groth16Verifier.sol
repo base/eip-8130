@@ -10,9 +10,9 @@ import {IAuthVerifier} from "./IAuthVerifier.sol";
 ///
 ///         The transaction hash is automatically bound as the first public input.
 ///         Additional public inputs (e.g. the foreign public key) and the full
-///         verification key (VK) are passed in data and committed via keyId.
+///         verification key (VK) are passed in data and committed via ownerId.
 ///
-///         keyId  = keccak256(vk || extraInputs)
+///         ownerId = keccak256(vk || extraInputs)
 ///
 ///         data layout (k = numExtraInputs):
 ///           proof_A  (G1, 64)  || proof_B (G2, 128) || proof_C (G1, 64) = 256
@@ -31,14 +31,13 @@ import {IAuthVerifier} from "./IAuthVerifier.sol";
 contract Groth16Verifier is IAuthVerifier {
     uint256 private constant BN254_FP = 0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47;
 
-    function verify(address, bytes32 keyId, bytes32 hash, bytes calldata data) external view returns (bool) {
+    function verify(bytes32 hash, bytes calldata data) external view returns (bytes32 ownerId) {
         uint256 k = uint256(uint8(data[256]));
         uint256 vkOff = 257 + k * 32;
         uint256 icOff = vkOff + 448;
         require(data.length == icOff + (k + 2) * 64);
 
-        // keyId commits to (vk || extraInputs)
-        require(keccak256(abi.encodePacked(data[vkOff:], data[257:vkOff])) == keyId);
+        ownerId = keccak256(abi.encodePacked(data[vkOff:], data[257:vkOff]));
 
         // ── Compute vk_x = IC[0] + hash·IC[1] + Σ(extraInputs[i]·IC[i+2]) ──
 
@@ -104,7 +103,7 @@ contract Groth16Verifier is IAuthVerifier {
         assembly {
             ok := staticcall(gas(), 0x08, buf, 768, result, 32)
         }
-        return ok && result[0] == 1;
+        if (!ok || result[0] != 1) return bytes32(0);
     }
 
     function _ecAdd(uint256 x1, uint256 y1, uint256 x2, uint256 y2) private view returns (uint256, uint256) {

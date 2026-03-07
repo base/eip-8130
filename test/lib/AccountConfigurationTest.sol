@@ -4,8 +4,8 @@ pragma solidity ^0.8.30;
 import {Test} from "forge-std/Test.sol";
 
 import {AccountConfiguration} from "../../src/AccountConfiguration.sol";
-import {InitialKey} from "../../src/AccountDeployer.sol";
-import {KeyOperation, AccountOperation} from "../../src/AccountConfigDigest.sol";
+import {InitialOwner} from "../../src/AccountDeployer.sol";
+import {ConfigOperation} from "../../src/AccountConfigDigest.sol";
 import {IAuthVerifier} from "../../src/verifiers/IAuthVerifier.sol";
 import {K1Verifier} from "../../src/verifiers/K1Verifier.sol";
 import {P256Verifier} from "../../src/verifiers/P256Verifier.sol";
@@ -21,20 +21,18 @@ contract AccountConfigurationTest is Test {
     IAuthVerifier public delegateVerifier;
     address public defaultAccountImplementation;
 
-    bytes32 constant KEY_CHANGE_TYPEHASH = keccak256(
-        "KeyChange(address account,uint64 chainId,uint64 sequence,KeyOperation[] operations)"
-        "KeyOperation(uint8 opType,address verifier,bytes32 keyId,uint8 flags)"
-    );
-    bytes32 constant ACCOUNT_CHANGE_TYPEHASH = keccak256(
-        "AccountChange(address account,uint64 chainId,uint64 sequence,AccountOperation[] operations)"
-        "AccountOperation(uint8 opType,uint8 flags,uint32 unlockDelay)"
+    bytes32 constant CONFIG_CHANGE_TYPEHASH = keccak256(
+        "ConfigChange(address account,uint64 chainId,uint64 sequence,ConfigOperation[] operations)"
+        "ConfigOperation(uint8 opType,address verifier,bytes32 ownerId)"
     );
 
     function setUp() public virtual {
-        accountConfiguration = new AccountConfiguration();
         k1Verifier = IAuthVerifier(new K1Verifier());
         p256Verifier = IAuthVerifier(new P256Verifier());
         webAuthnVerifier = IAuthVerifier(new WebAuthnVerifier());
+        accountConfiguration = new AccountConfiguration(
+            address(k1Verifier), address(p256Verifier), address(webAuthnVerifier), address(0)
+        );
         delegateVerifier = IAuthVerifier(new DelegateVerifier(address(accountConfiguration)));
         defaultAccountImplementation = address(new DefaultAccount(address(accountConfiguration)));
     }
@@ -47,26 +45,26 @@ contract AccountConfigurationTest is Test {
 
     // ── Account creation helpers ──
 
-    function _createK1Account(uint256 pk) internal returns (address account, bytes32 keyId) {
+    function _createK1Account(uint256 pk) internal returns (address account, bytes32 ownerId) {
         address signer = vm.addr(pk);
-        keyId = bytes32(bytes20(signer));
+        ownerId = bytes32(bytes20(signer));
 
-        InitialKey[] memory keys = new InitialKey[](1);
-        keys[0] = InitialKey({verifier: address(k1Verifier), keyId: keyId});
+        InitialOwner[] memory owners = new InitialOwner[](1);
+        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        account = accountConfiguration.createAccount(bytes32(0), bytecode, keys);
+        account = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
     }
 
-    function _createK1AccountWithSalt(uint256 pk, bytes32 salt) internal returns (address account, bytes32 keyId) {
+    function _createK1AccountWithSalt(uint256 pk, bytes32 salt) internal returns (address account, bytes32 ownerId) {
         address signer = vm.addr(pk);
-        keyId = bytes32(bytes20(signer));
+        ownerId = bytes32(bytes20(signer));
 
-        InitialKey[] memory keys = new InitialKey[](1);
-        keys[0] = InitialKey({verifier: address(k1Verifier), keyId: keyId});
+        InitialOwner[] memory owners = new InitialOwner[](1);
+        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        account = accountConfiguration.createAccount(salt, bytecode, keys);
+        account = accountConfiguration.createAccount(salt, bytecode, owners);
     }
 
     // ── K1 signature helpers ──
@@ -76,45 +74,27 @@ contract AccountConfigurationTest is Test {
         return abi.encodePacked(r, s, v);
     }
 
-    /// @dev Build authorizerAuth for isValidSignature: abi.encode(keyId, ecdsaSig)
+    /// @dev Build authorizerAuth for verifySignature / isValidSignature: type_byte || ecdsaSig
     function _buildK1Auth(uint256 pk, bytes32 digest) internal pure returns (bytes memory) {
-        address signer = vm.addr(pk);
-        bytes32 keyId = bytes32(bytes20(signer));
         bytes memory sig = _signDigest(pk, digest);
-        return abi.encode(keyId, sig);
+        return abi.encodePacked(uint8(0x01), sig);
     }
 
     // ── Canonical digest computation ──
 
-    function _computeKeyChangeDigest(address account, uint64 chainId, uint64 sequence, KeyOperation[] memory operations)
-        internal
-        pure
-        returns (bytes32)
-    {
-        bytes32[] memory opHashes = new bytes32[](operations.length);
-        for (uint256 i; i < operations.length; i++) {
-            opHashes[i] = keccak256(
-                abi.encode(operations[i].opType, operations[i].verifier, operations[i].keyId, operations[i].flags)
-            );
-        }
-        return
-            keccak256(
-                abi.encode(KEY_CHANGE_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(opHashes)))
-            );
-    }
-
-    function _computeAccountChangeDigest(
+    function _computeConfigChangeDigest(
         address account,
         uint64 chainId,
         uint64 sequence,
-        AccountOperation[] memory operations
+        ConfigOperation[] memory operations
     ) internal pure returns (bytes32) {
         bytes32[] memory opHashes = new bytes32[](operations.length);
         for (uint256 i; i < operations.length; i++) {
-            opHashes[i] = keccak256(abi.encode(operations[i].opType, operations[i].flags, operations[i].unlockDelay));
+            opHashes[i] =
+                keccak256(abi.encode(operations[i].opType, operations[i].verifier, operations[i].ownerId));
         }
         return keccak256(
-            abi.encode(ACCOUNT_CHANGE_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(opHashes)))
+            abi.encode(CONFIG_CHANGE_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(opHashes)))
         );
     }
 }

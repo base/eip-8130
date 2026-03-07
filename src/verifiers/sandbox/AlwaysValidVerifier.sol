@@ -1,38 +1,46 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-/// @notice Hand-written EIP-8130 sandbox verifier that always returns true.
+/// @notice Hand-written EIP-8130 sandbox verifier that always returns the ownerId
+///         from data (first 32 bytes).
 ///
 ///         This is the sandbox-native equivalent of AlwaysValidVerifier.sol.
-///         Instead of Solidity-compiled bytecode (287 bytes, forbidden opcodes),
-///         this is 8 bytes of raw EVM that passes the sandbox opcode scan.
 ///
-///         Bytecode layout (8 bytes):
+///         Calldata layout (ABI-encoded):
+///           0x00  selector      (4 bytes, ignored)
+///           0x04  hash          (bytes32, ignored)
+///           0x24  data offset   (uint256, relative to 0x04)
+///           ...   data length   (uint256)
+///           ...   ownerId       (bytes32 — first 32 bytes of data)
 ///
-///           60 01     PUSH1 0x01   (true)
-///           5F        PUSH0        (memory offset 0)
-///           52        MSTORE       (mem[0] = 1)
-///           60 20     PUSH1 0x20   (32 bytes)
-///           5F        PUSH0        (memory offset 0)
-///           F3        RETURN       (return mem[0..32])
+///         Bytecode (13 bytes):
 ///
-///         The sandbox calls this with calldata (account, keyId, hash, data).
-///         We ignore all inputs and return true unconditionally.
+///           60 24     PUSH1 0x24       (data offset location in calldata)
+///           35        CALLDATALOAD     (load offset value, relative to 0x04)
+///           60 24     PUSH1 0x24       (0x04 ABI base + 0x20 length word)
+///           01        ADD              (absolute position of first data byte)
+///           35        CALLDATALOAD     (load ownerId — first 32 bytes of data)
+///           5F        PUSH0            (memory offset 0)
+///           52        MSTORE           (mem[0] = ownerId)
+///           60 20     PUSH1 0x20       (32 bytes)
+///           5F        PUSH0            (memory offset 0)
+///           F3        RETURN           (return ownerId)
 ///
-///         WARNING: An AlwaysValid key authorizes ANY transaction for the account.
-///         Only use with `disableGasPayment = true` for keyless relay patterns.
+///         WARNING: An AlwaysValid owner authorizes ANY transaction for the account.
 library AlwaysValidSandbox {
-    /// @notice Runtime bytecode for the sandbox verifier (8 bytes).
+    /// @notice Runtime bytecode for the sandbox verifier (13 bytes).
     function bytecode() internal pure returns (bytes memory) {
-        return hex"6001" //  PUSH1 1        (true)
-            hex"5f" //  PUSH0          (offset)
-            hex"52" //  MSTORE
-            hex"6020" //  PUSH1 32       (size)
-            hex"5f" //  PUSH0          (offset)
-            hex"f3"; //  RETURN
+        return hex"602435" // CALLDATALOAD(0x24) → data offset (relative to 0x04)
+            hex"602401" // ADD 0x24 → absolute position past length word (offset + 0x04 + 0x20)
+            hex"35" // CALLDATALOAD → ownerId (first 32 bytes of data)
+            hex"5f" // PUSH0 (memory offset)
+            hex"52" // MSTORE(0, ownerId)
+            hex"6020" // PUSH1 32 (return size)
+            hex"5f" // PUSH0 (memory offset)
+            hex"f3"; // RETURN(0, 32)
     }
 
-    /// @notice Deployment code: 14-byte loader + 8-byte runtime.
+    /// @notice Deployment code: 14-byte loader + runtime.
     function deploymentCode() internal pure returns (bytes memory) {
         bytes memory runtime = bytecode();
         uint16 n = uint16(runtime.length);

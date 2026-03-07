@@ -4,8 +4,14 @@ pragma solidity ^0.8.30;
 import {IAuthVerifier} from "./IAuthVerifier.sol";
 import {AccountConfiguration} from "../AccountConfiguration.sol";
 
-/// @notice Delegates verification to another account's key configuration.
-///         keyId = bytes32(bytes20(delegate_address)). Only 1 hop permitted.
+/// @notice Delegates verification to another account's owner configuration.
+///         ownerId = bytes32(bytes20(delegate_address)). Only 1 hop permitted.
+///
+///         This contract exists for non-8130 chains where verifySignature() runs
+///         in normal EVM without sandbox restrictions. On 8130 chains, the protocol
+///         handles DELEGATE directly at the protocol level.
+///
+///         Data layout: delegate_address (20) || nested_verifier_type (1) || nested_data
 contract DelegateVerifier is IAuthVerifier {
     AccountConfiguration public immutable ACCOUNT_CONFIGURATION;
 
@@ -13,15 +19,16 @@ contract DelegateVerifier is IAuthVerifier {
         ACCOUNT_CONFIGURATION = AccountConfiguration(accountConfiguration);
     }
 
-    function verify(address, bytes32 keyId, bytes32 hash, bytes calldata data) external view returns (bool) {
-        address delegate = address(bytes20(keyId));
-        require(bytes32(bytes20(delegate)) == keyId);
+    function verify(bytes32 hash, bytes calldata data) external view returns (bytes32 ownerId) {
+        require(data.length >= 21);
+        address delegate = address(bytes20(data[:20]));
+        bytes calldata nestedAuth = data[20:];
 
-        (bytes32 nestedKeyId, bytes memory nestedData) = abi.decode(data, (bytes32, bytes));
-        (address nestedVerifier,) = ACCOUNT_CONFIGURATION.getKeyData(delegate, nestedKeyId);
-        require(nestedVerifier != address(0));
-        require(nestedVerifier != address(this));
+        ownerId = bytes32(bytes20(delegate));
 
-        return IAuthVerifier(nestedVerifier).verify(delegate, nestedKeyId, hash, nestedData);
+        require(uint8(nestedAuth[0]) != 0x04);
+
+        (bool valid,,) = ACCOUNT_CONFIGURATION.verifySignature(delegate, hash, nestedAuth);
+        require(valid);
     }
 }

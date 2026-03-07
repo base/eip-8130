@@ -5,11 +5,10 @@ import {ECDSA} from "openzeppelin/utils/cryptography/ECDSA.sol";
 
 import {IAuthVerifier} from "./IAuthVerifier.sol";
 
-/// @notice secp256k1 ECDSA verifier. keyId = bytes32(bytes20(address)).
+/// @notice secp256k1 ECDSA verifier. ownerId = bytes32(bytes20(ecrecover(hash, v, r, s))).
 contract K1Verifier is IAuthVerifier {
-    function verify(address, bytes32 keyId, bytes32 hash, bytes calldata data) external pure returns (bool) {
-        address key = address(bytes20(keyId));
-        require(bytes32(bytes20(key)) == keyId);
-        return key == ECDSA.recover(hash, data);
+    function verify(bytes32 hash, bytes calldata data) external pure returns (bytes32 ownerId) {
+        address recovered = ECDSA.recover(hash, data);
+        ownerId = bytes32(bytes20(recovered));
     }
 }

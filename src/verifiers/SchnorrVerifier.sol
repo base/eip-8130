@@ -5,8 +5,8 @@ import {IAuthVerifier} from "./IAuthVerifier.sol";
 
 /// @notice Schnorr signature verifier over secp256k1 using the ecrecover precompile.
 ///
-///         keyId  = keccak256(parity (1) || px (32))  — 33-byte compressed public key
-///         data   = s (32) || e (32) || px (32) || parity (1)  — 97 bytes total
+///         ownerId = keccak256(parity (1) || px (32))  — 33-byte compressed public key
+///         data    = s (32) || e (32) || px (32) || parity (1)  — 97 bytes total
 ///
 ///         Signature scheme:
 ///           1. Pick random k, compute R = k·G
@@ -20,7 +20,7 @@ import {IAuthVerifier} from "./IAuthVerifier.sol";
 contract SchnorrVerifier is IAuthVerifier {
     uint256 private constant N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141;
 
-    function verify(address, bytes32 keyId, bytes32 hash, bytes calldata data) external pure returns (bool) {
+    function verify(bytes32 hash, bytes calldata data) external pure returns (bytes32 ownerId) {
         require(data.length == 97);
 
         uint256 sVal = uint256(bytes32(data[0:32]));
@@ -29,20 +29,14 @@ contract SchnorrVerifier is IAuthVerifier {
         uint8 parity = uint8(data[96]);
 
         require(parity <= 1);
-        require(keccak256(abi.encodePacked(parity, bytes32(pxVal))) == keyId);
+        ownerId = keccak256(abi.encodePacked(parity, bytes32(pxVal)));
 
-        // ecrecover(h, v, r, s_ec) recovers Q = r⁻¹·(s_ec·R_pt − h·G).
-        // Setting R_pt = P (the pubkey) via r = px, v = 27 + parity:
-        //   Q = px⁻¹·(s_ec·P − h·G)
-        // To get Q = s·G − e·P (Schnorr verification point R):
-        //   h    = −s·px  (mod N)
-        //   s_ec = −e·px  (mod N)
         bytes32 hEc = bytes32(N - mulmod(sVal, pxVal, N));
         bytes32 sEc = bytes32(N - mulmod(uint256(e), pxVal, N));
 
         address rAddr = ecrecover(hEc, 27 + parity, bytes32(pxVal), sEc);
-        if (rAddr == address(0)) return false;
+        if (rAddr == address(0)) return bytes32(0);
 
-        return e == keccak256(abi.encodePacked(rAddr, hash));
+        if (e != keccak256(abi.encodePacked(rAddr, hash))) return bytes32(0);
     }
 }

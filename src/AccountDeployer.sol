@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-struct InitialKey {
+struct InitialOwner {
     address verifier;
-    bytes32 keyId;
+    bytes32 ownerId;
 }
 
 /// @notice Pure deployment utilities for EIP-8130 account creation.
 ///         Handles CREATE2 address derivation, deployment header construction, and ERC-1167 bytecode.
 abstract contract AccountDeployer {
     /// @notice Compute the counterfactual address for an account.
-    function getAddress(bytes32 userSalt, bytes calldata bytecode, InitialKey[] calldata initialKeys)
+    function getAddress(bytes32 userSalt, bytes calldata bytecode, InitialOwner[] calldata initialOwners)
         public
         view
         returns (address)
     {
-        bytes32 effectiveSalt = _computeEffectiveSalt(userSalt, initialKeys);
+        bytes32 effectiveSalt = _computeEffectiveSalt(userSalt, initialOwners);
         bytes32 codeHash = keccak256(_buildDeploymentCode(bytecode));
         return
             address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xFF), address(this), effectiveSalt, codeHash)))));
@@ -26,28 +26,28 @@ abstract contract AccountDeployer {
         return abi.encodePacked(hex"363d3d373d3d3d363d73", implementation, hex"5af43d82803e903d91602b57fd5bf3");
     }
 
-    function _deploy(bytes calldata bytecode, InitialKey[] calldata initialKeys, bytes32 userSalt) internal {
+    function _deploy(bytes calldata bytecode, InitialOwner[] calldata initialOwners, bytes32 userSalt) internal {
         bytes memory deploymentCode = _buildDeploymentCode(bytecode);
-        bytes32 effectiveSalt = _computeEffectiveSalt(userSalt, initialKeys);
+        bytes32 effectiveSalt = _computeEffectiveSalt(userSalt, initialOwners);
         assembly {
             pop(create2(0, add(deploymentCode, 0x20), mload(deploymentCode), effectiveSalt))
         }
     }
 
-    function _computeKeysCommitment(InitialKey[] calldata keys) internal pure returns (bytes32) {
+    function _computeOwnersCommitment(InitialOwner[] calldata owners) internal pure returns (bytes32) {
         bytes memory data;
-        for (uint256 i; i < keys.length; i++) {
-            data = abi.encodePacked(data, keys[i].keyId, keys[i].verifier);
+        for (uint256 i; i < owners.length; i++) {
+            data = abi.encodePacked(data, owners[i].ownerId, owners[i].verifier);
         }
         return keccak256(data);
     }
 
-    function _computeEffectiveSalt(bytes32 userSalt, InitialKey[] calldata initialKeys)
+    function _computeEffectiveSalt(bytes32 userSalt, InitialOwner[] calldata initialOwners)
         internal
         pure
         returns (bytes32)
     {
-        return keccak256(abi.encodePacked(userSalt, _computeKeysCommitment(initialKeys)));
+        return keccak256(abi.encodePacked(userSalt, _computeOwnersCommitment(initialOwners)));
     }
 
     /// @dev Constructs DEPLOYMENT_HEADER(n) || bytecode. The 14-byte EVM loader

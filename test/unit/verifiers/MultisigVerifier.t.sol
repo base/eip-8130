@@ -79,7 +79,7 @@ contract MultisigVerifierTest is Test {
     function test_2of3_validWithSignersAB() public view {
         (address[3] memory signers, uint256[3] memory pks) = _sortedSigners(PK_A, PK_B, PK_C);
         bytes memory keyMaterial = _buildKeyMaterial(2, signers);
-        bytes32 keyId = keccak256(keyMaterial);
+        bytes32 expectedOwnerId = keccak256(keyMaterial);
         bytes32 hash = keccak256("2of3 test");
 
         uint256[] memory signingPks = new uint256[](2);
@@ -87,13 +87,14 @@ contract MultisigVerifierTest is Test {
         signingPks[1] = pks[1];
 
         bytes memory data = _buildData(keyMaterial, signingPks, hash);
-        assertTrue(verifier.verify(address(0), keyId, hash, data));
+        bytes32 ownerId = verifier.verify(hash, data);
+        assertEq(ownerId, expectedOwnerId);
     }
 
     function test_2of3_validWithSignersAC() public view {
         (address[3] memory signers, uint256[3] memory pks) = _sortedSigners(PK_A, PK_B, PK_C);
         bytes memory keyMaterial = _buildKeyMaterial(2, signers);
-        bytes32 keyId = keccak256(keyMaterial);
+        bytes32 expectedOwnerId = keccak256(keyMaterial);
         bytes32 hash = keccak256("2of3 AC");
 
         uint256[] memory signingPks = new uint256[](2);
@@ -101,13 +102,13 @@ contract MultisigVerifierTest is Test {
         signingPks[1] = pks[2];
 
         bytes memory data = _buildData(keyMaterial, signingPks, hash);
-        assertTrue(verifier.verify(address(0), keyId, hash, data));
+        assertEq(verifier.verify(hash, data), expectedOwnerId);
     }
 
     function test_2of3_validWithSignersBC() public view {
         (address[3] memory signers, uint256[3] memory pks) = _sortedSigners(PK_A, PK_B, PK_C);
         bytes memory keyMaterial = _buildKeyMaterial(2, signers);
-        bytes32 keyId = keccak256(keyMaterial);
+        bytes32 expectedOwnerId = keccak256(keyMaterial);
         bytes32 hash = keccak256("2of3 BC");
 
         uint256[] memory signingPks = new uint256[](2);
@@ -115,13 +116,13 @@ contract MultisigVerifierTest is Test {
         signingPks[1] = pks[2];
 
         bytes memory data = _buildData(keyMaterial, signingPks, hash);
-        assertTrue(verifier.verify(address(0), keyId, hash, data));
+        assertEq(verifier.verify(hash, data), expectedOwnerId);
     }
 
     function test_2of3_validWithAll3Signatures() public view {
         (address[3] memory signers, uint256[3] memory pks) = _sortedSigners(PK_A, PK_B, PK_C);
         bytes memory keyMaterial = _buildKeyMaterial(2, signers);
-        bytes32 keyId = keccak256(keyMaterial);
+        bytes32 expectedOwnerId = keccak256(keyMaterial);
         bytes32 hash = keccak256("2of3 all");
 
         uint256[] memory signingPks = new uint256[](3);
@@ -130,13 +131,12 @@ contract MultisigVerifierTest is Test {
         signingPks[2] = pks[2];
 
         bytes memory data = _buildData(keyMaterial, signingPks, hash);
-        assertTrue(verifier.verify(address(0), keyId, hash, data));
+        assertEq(verifier.verify(hash, data), expectedOwnerId);
     }
 
     function test_2of3_failsWithOnly1Signature() public {
         (address[3] memory signers, uint256[3] memory pks) = _sortedSigners(PK_A, PK_B, PK_C);
         bytes memory keyMaterial = _buildKeyMaterial(2, signers);
-        bytes32 keyId = keccak256(keyMaterial);
         bytes32 hash = keccak256("2of3 insufficient");
 
         uint256[] memory signingPks = new uint256[](1);
@@ -145,13 +145,12 @@ contract MultisigVerifierTest is Test {
         bytes memory data = _buildData(keyMaterial, signingPks, hash);
 
         vm.expectRevert();
-        verifier.verify(address(0), keyId, hash, data);
+        verifier.verify(hash, data);
     }
 
     function test_2of3_failsWithWrongHash() public view {
         (address[3] memory signers, uint256[3] memory pks) = _sortedSigners(PK_A, PK_B, PK_C);
         bytes memory keyMaterial = _buildKeyMaterial(2, signers);
-        bytes32 keyId = keccak256(keyMaterial);
         bytes32 hash = keccak256("correct");
         bytes32 wrongHash = keccak256("wrong");
 
@@ -160,13 +159,13 @@ contract MultisigVerifierTest is Test {
         signingPks[1] = pks[1];
 
         bytes memory data = _buildData(keyMaterial, signingPks, hash);
-        assertFalse(verifier.verify(address(0), keyId, wrongHash, data));
+        bytes32 ownerId = verifier.verify(wrongHash, data);
+        assertEq(ownerId, bytes32(0));
     }
 
     function test_2of3_failsWithNonMemberSignature() public view {
         (address[3] memory signers, uint256[3] memory pks) = _sortedSigners(PK_A, PK_B, PK_C);
         bytes memory keyMaterial = _buildKeyMaterial(2, signers);
-        bytes32 keyId = keccak256(keyMaterial);
         bytes32 hash = keccak256("2of3 outsider");
 
         uint256 outsiderPk = 0xDEAD;
@@ -175,22 +174,7 @@ contract MultisigVerifierTest is Test {
         signingPks[1] = outsiderPk;
 
         bytes memory data = _buildData(keyMaterial, signingPks, hash);
-        assertFalse(verifier.verify(address(0), keyId, hash, data));
-    }
-
-    function test_2of3_failsWithWrongKeyId() public {
-        (address[3] memory signers, uint256[3] memory pks) = _sortedSigners(PK_A, PK_B, PK_C);
-        bytes memory keyMaterial = _buildKeyMaterial(2, signers);
-        bytes32 wrongKeyId = keccak256("not the real keyId");
-        bytes32 hash = keccak256("2of3 bad keyId");
-
-        uint256[] memory signingPks = new uint256[](2);
-        signingPks[0] = pks[0];
-        signingPks[1] = pks[1];
-
-        bytes memory data = _buildData(keyMaterial, signingPks, hash);
-
-        vm.expectRevert();
-        verifier.verify(address(0), wrongKeyId, hash, data);
+        bytes32 ownerId = verifier.verify(hash, data);
+        assertEq(ownerId, bytes32(0));
     }
 }

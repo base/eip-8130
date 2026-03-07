@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {InitialKey} from "../../../src/AccountDeployer.sol";
+import {InitialOwner} from "../../../src/AccountDeployer.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 contract DelegateVerifierTest is AccountConfigurationTest {
@@ -9,94 +9,79 @@ contract DelegateVerifierTest is AccountConfigurationTest {
     uint256 constant DELEGATOR_PK = 43;
 
     function test_verify_validDelegation() public {
-        // Create delegate account (Account A) with a K1 key
-        (address delegateAccount, bytes32 delegateKeyId) = _createK1Account(DELEGATE_PK);
+        (address delegateAccount, bytes32 delegateOwnerId) = _createK1Account(DELEGATE_PK);
 
-        // Create delegator account (Account B) with a delegate key pointing to A
         address delegateSigner = vm.addr(DELEGATOR_PK);
-        bytes32 delegatorKeyId = bytes32(bytes20(delegateSigner));
-        bytes32 delegateRefKeyId = bytes32(bytes20(delegateAccount));
+        bytes32 delegatorOwnerId = bytes32(bytes20(delegateSigner));
+        bytes32 delegateRefOwnerId = bytes32(bytes20(delegateAccount));
 
-        InitialKey[] memory keys = new InitialKey[](2);
-        // Sort keys by keyId
-        if (delegatorKeyId < delegateRefKeyId) {
-            keys[0] = InitialKey({verifier: address(k1Verifier), keyId: delegatorKeyId});
-            keys[1] = InitialKey({verifier: address(delegateVerifier), keyId: delegateRefKeyId});
+        InitialOwner[] memory owners = new InitialOwner[](2);
+        if (delegatorOwnerId < delegateRefOwnerId) {
+            owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: delegatorOwnerId});
+            owners[1] = InitialOwner({verifier: address(delegateVerifier), ownerId: delegateRefOwnerId});
         } else {
-            keys[0] = InitialKey({verifier: address(delegateVerifier), keyId: delegateRefKeyId});
-            keys[1] = InitialKey({verifier: address(k1Verifier), keyId: delegatorKeyId});
+            owners[0] = InitialOwner({verifier: address(delegateVerifier), ownerId: delegateRefOwnerId});
+            owners[1] = InitialOwner({verifier: address(k1Verifier), ownerId: delegatorOwnerId});
         }
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        address delegatorAccount = accountConfiguration.createAccount(bytes32(uint256(1)), bytecode, keys);
+        address delegatorAccount = accountConfiguration.createAccount(bytes32(uint256(1)), bytecode, owners);
 
-        // Sign a hash with the delegate's K1 key (Account A's key)
         bytes32 hash = keccak256("delegate test");
         bytes memory delegateSig = _signDigest(DELEGATE_PK, hash);
 
-        // Build nested data: (nestedKeyId, nestedVerifierData)
-        bytes memory nestedData = abi.encode(delegateKeyId, delegateSig);
+        // delegate data: delegate_address (20) || nested_verifier_type (1) || nested_data
+        bytes memory data = abi.encodePacked(delegateAccount, uint8(0x01), delegateSig);
 
-        // Verify through delegate verifier
-        assertTrue(delegateVerifier.verify(delegatorAccount, delegateRefKeyId, hash, nestedData));
+        bytes32 ownerId = delegateVerifier.verify(hash, data);
+        assertEq(ownerId, delegateRefOwnerId);
     }
 
-    function test_verify_revertsOnInvalidKeyId() public {
+    function test_verify_revertsOnTooShortData() public {
         bytes32 hash = keccak256("test");
-        // keyId with non-zero low bytes (not a valid address-padded keyId)
-        bytes32 badKeyId = bytes32(uint256(1));
 
         vm.expectRevert();
-        delegateVerifier.verify(address(0), badKeyId, hash, hex"");
+        delegateVerifier.verify(hash, hex"");
     }
 
-    function test_verify_revertsOnUnauthorizedNestedKey() public {
+    function test_verify_revertsOnUnauthorizedNestedOwner() public {
         (address delegateAccount,) = _createK1Account(DELEGATE_PK);
-        bytes32 delegateRefKeyId = bytes32(bytes20(delegateAccount));
 
         bytes32 hash = keccak256("test");
 
-        // Use a keyId that doesn't exist on the delegate account
-        bytes32 fakeNestedKeyId = bytes32(bytes20(vm.addr(999)));
         bytes memory fakeSig = _signDigest(999, hash);
-        bytes memory nestedData = abi.encode(fakeNestedKeyId, fakeSig);
+        bytes memory data = abi.encodePacked(delegateAccount, uint8(0x01), fakeSig);
 
         vm.expectRevert();
-        delegateVerifier.verify(address(0), delegateRefKeyId, hash, nestedData);
+        delegateVerifier.verify(hash, data);
     }
 
     function test_verify_revertsOnDoubleDelegate() public {
-        // Account A with K1 key
         (address accountA,) = _createK1Account(DELEGATE_PK);
-        bytes32 aK1KeyId = bytes32(bytes20(vm.addr(DELEGATE_PK)));
 
-        // Account B with a delegate key pointing to A
         bytes32 delegateRefA = bytes32(bytes20(accountA));
-        InitialKey[] memory keysB = new InitialKey[](1);
-        keysB[0] = InitialKey({verifier: address(delegateVerifier), keyId: delegateRefA});
+        InitialOwner[] memory ownersB = new InitialOwner[](1);
+        ownersB[0] = InitialOwner({verifier: address(delegateVerifier), ownerId: delegateRefA});
         bytes memory bytecodeB = _computeERC1167Bytecode(defaultAccountImplementation);
-        address accountB = accountConfiguration.createAccount(bytes32(uint256(10)), bytecodeB, keysB);
+        address accountB = accountConfiguration.createAccount(bytes32(uint256(10)), bytecodeB, ownersB);
 
-        // Account C with a delegate key pointing to B
         bytes32 delegateRefB = bytes32(bytes20(accountB));
-        InitialKey[] memory keysC = new InitialKey[](1);
-        keysC[0] = InitialKey({verifier: address(delegateVerifier), keyId: delegateRefB});
+        InitialOwner[] memory ownersC = new InitialOwner[](1);
+        ownersC[0] = InitialOwner({verifier: address(delegateVerifier), ownerId: delegateRefB});
         bytes memory bytecodeC = _computeERC1167Bytecode(defaultAccountImplementation);
-        accountConfiguration.createAccount(bytes32(uint256(20)), bytecodeC, keysC);
+        accountConfiguration.createAccount(bytes32(uint256(20)), bytecodeC, ownersC);
 
         bytes32 hash = keccak256("double delegate test");
         bytes memory k1Sig = _signDigest(DELEGATE_PK, hash);
 
-        // Single-hop B → A data: (nestedKeyId = A's K1 key, nestedData = K1 sig)
-        bytes memory singleHopData = abi.encode(aK1KeyId, k1Sig);
+        // Single-hop B → A: should work
+        bytes memory singleHopData = abi.encodePacked(accountA, uint8(0x01), k1Sig);
+        bytes32 ownerId = delegateVerifier.verify(hash, singleHopData);
+        assertEq(ownerId, delegateRefA);
 
-        // Verify B → A: should work (1 hop)
-        assertTrue(delegateVerifier.verify(accountB, delegateRefA, hash, singleHopData));
-
-        // Double-hop C → B data: (nestedKeyId = B's delegate key, nestedData = singleHopData)
-        // B's delegate key has verifier = DelegateVerifier → triggers 1-hop limit
-        bytes memory doubleHopData = abi.encode(delegateRefA, singleHopData);
+        // Double-hop C → B → A: nested_verifier is DELEGATE (0x04) → triggers 1-hop limit
+        bytes memory doubleHopData = abi.encodePacked(accountB, uint8(0x04), singleHopData);
         vm.expectRevert();
-        delegateVerifier.verify(address(0), delegateRefB, hash, doubleHopData);
+        delegateVerifier.verify(hash, doubleHopData);
     }
 }

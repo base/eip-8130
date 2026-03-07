@@ -1,5 +1,5 @@
 /**
- * EVM opcode definitions for the EIP-8130 sandbox scanner.
+ * EVM opcode definitions for the EIP-8130 verifier scanner.
  *
  * Uses a NARROWER forbidden set than the current spec: only opcodes that break
  * determinism (external state, block context, side effects) are forbidden.
