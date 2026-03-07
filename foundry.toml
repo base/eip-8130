@@ -1,5 +1,6 @@
 [profile.default]
 optimizer = true
+evm_version = "osaka"
 remappings = [
     "openzeppelin/=lib/openzeppelin-contracts/contracts/",
     "solady/=lib/solady/src/",
