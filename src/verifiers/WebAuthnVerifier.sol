@@ -3,10 +3,10 @@ pragma solidity ^0.8.30;
 
 import {WebAuthn} from "openzeppelin/utils/cryptography/WebAuthn.sol";
 
-import {IAuthVerifier} from "./IAuthVerifier.sol";
+import {IVerifier} from "./IVerifier.sol";
 
 /// @notice P-256 WebAuthn/Passkey verifier. ownerId = keccak256(pub_key_x || pub_key_y).
-contract WebAuthnVerifier is IAuthVerifier {
+contract WebAuthnVerifier is IVerifier {
     function verify(bytes32 hash, bytes calldata data) external view returns (bytes32 ownerId) {
         (WebAuthn.WebAuthnAuth memory auth, bytes32 x, bytes32 y) =
             abi.decode(data, (WebAuthn.WebAuthnAuth, bytes32, bytes32));

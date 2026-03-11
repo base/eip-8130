@@ -2,9 +2,14 @@
 pragma solidity ^0.8.30;
 
 import {IERC1271} from "openzeppelin/interfaces/IERC1271.sol";
-import {IAuthVerifier} from "./verifiers/IAuthVerifier.sol";
+import {IVerifier} from "./verifiers/IVerifier.sol";
 import {AccountConfigDigest, ConfigOperation} from "./AccountConfigDigest.sol";
 import {AccountDeployer, InitialOwner} from "./AccountDeployer.sol";
+
+struct OwnerConfig {
+    address verifier;
+    uint8 scope; // 0x00 = unrestricted
+}
 
 struct AccountLock {
     bool locked;
@@ -14,7 +19,6 @@ struct AccountLock {
 
 /// @notice Account Configuration system contract for EIP-8130.
 ///         Manages owner authorization, account creation, change sequencing, and account lock.
-///         All authorized owners have equal privileges.
 contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
     // ──────────────────────────────────────────────
     //  Constants
@@ -22,6 +26,11 @@ contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
 
     uint8 constant OP_AUTHORIZE_OWNER = 0x01;
     uint8 constant OP_REVOKE_OWNER = 0x02;
+
+    uint8 constant SCOPE_SIGNATURE = 0x01;
+    uint8 constant SCOPE_SENDER = 0x02;
+    uint8 constant SCOPE_PAYER = 0x04;
+    uint8 constant SCOPE_CONFIG = 0x08;
 
     /// @dev Sentinel for the self-ownerId (ownerId == bytes32(bytes20(account))) to distinguish
     ///      "explicitly revoked" from "never registered" (address(0)), which would re-trigger the
@@ -33,7 +42,7 @@ contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
     bytes32 constant UNLOCK_TYPEHASH = keccak256("Unlock(address account)");
 
     // ──────────────────────────────────────────────
-    //  Reference Verifier Immutables
+    //  Native Verifier Immutables
     // ──────────────────────────────────────────────
 
     address public immutable K1_VERIFIER; // 0x01
@@ -45,7 +54,7 @@ contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
     //  Storage
     // ──────────────────────────────────────────────
 
-    mapping(address account => mapping(bytes32 ownerId => address verifier)) internal _ownerConfigs;
+    mapping(address account => mapping(bytes32 ownerId => OwnerConfig)) internal _ownerConfigs;
     mapping(address account => AccountLock) internal _accountLocks;
 
     struct ChangeSequences {
@@ -59,7 +68,7 @@ contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
     //  Events
     // ──────────────────────────────────────────────
 
-    event OwnerAuthorized(address indexed account, bytes32 indexed ownerId, address verifier);
+    event OwnerAuthorized(address indexed account, bytes32 indexed ownerId, address verifier, uint8 scope);
     event OwnerRevoked(address indexed account, bytes32 indexed ownerId);
     event AccountCreated(address indexed account, bytes32 userSalt, bytes32 codeHash);
     event ChangeApplied(address indexed account, uint64 sequence);
@@ -83,6 +92,7 @@ contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
     // ══════════════════════════════════════════════
 
     /// @notice Deploy a new account with initial owners configured using safe defaults.
+    ///         Initial owners are always unrestricted (scope = 0x00).
     function createAccount(bytes32 userSalt, bytes calldata bytecode, InitialOwner[] calldata initialOwners)
         external
         returns (address account)
@@ -98,8 +108,9 @@ contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
             previousOwnerId = initialOwners[i].ownerId;
             require(initialOwners[i].verifier != address(0));
 
-            _ownerConfigs[account][initialOwners[i].ownerId] = initialOwners[i].verifier;
-            emit OwnerAuthorized(account, initialOwners[i].ownerId, initialOwners[i].verifier);
+            _ownerConfigs[account][initialOwners[i].ownerId] =
+                OwnerConfig({verifier: initialOwners[i].verifier, scope: 0x00});
+            emit OwnerAuthorized(account, initialOwners[i].ownerId, initialOwners[i].verifier, 0x00);
         }
 
         _accountLocks[account] = AccountLock(false, 0, 0);
@@ -130,7 +141,7 @@ contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
 
         bytes32 digest = _computeConfigChangeDigest(account, chainId, sequence, operations);
 
-        _requireValidSignature(account, digest, authorizerAuth);
+        _requireValidConfigSignature(account, digest, authorizerAuth);
 
         for (uint256 i; i < operations.length; i++) {
             _applyOperation(account, operations[i]);
@@ -185,11 +196,12 @@ contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
     // ══════════════════════════════════════════════
 
     function isAuthorized(address account, bytes32 ownerId) external view returns (bool) {
-        return _getEffectiveVerifier(account, ownerId) != address(0);
+        (address v,) = _getEffectiveOwnerConfig(account, ownerId);
+        return v != address(0);
     }
 
-    function getOwner(address account, bytes32 ownerId) public view returns (address verifier) {
-        return _getEffectiveVerifier(account, ownerId);
+    function getOwner(address account, bytes32 ownerId) public view returns (address verifier, uint8 scope) {
+        return _getEffectiveOwnerConfig(account, ownerId);
     }
 
     function getLockState(address account)
@@ -208,10 +220,10 @@ contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
     }
 
     // ══════════════════════════════════════════════
-    //  REFERENCE VERIFIERS
+    //  NATIVE VERIFIERS
     // ══════════════════════════════════════════════
 
-    function getReferenceVerifiers()
+    function getNativeVerifiers()
         external
         view
         returns (address k1, address p256Raw, address p256WebAuthn, address delegate)
@@ -228,41 +240,27 @@ contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
     }
 
     // ══════════════════════════════════════════════
-    //  TRANSACTION CONTEXT (EIP-1153 transient storage)
-    // ══════════════════════════════════════════════
-
-    /// @notice Returns the current AA transaction's gas payer address.
-    ///         Only meaningful during AA transaction execution on 8130 chains.
-    function getCurrentPayer() public view returns (address payer) {
-        bytes32 slot = keccak256("context.payer");
-        assembly {
-            payer := tload(slot)
-        }
-    }
-
-    /// @notice Returns the current AA transaction's signer owner info.
-    ///         Protocol writes ownerId to transient storage; verifier looked up from persistent storage.
-    ///         On non-8130 chains, returns zero values (no protocol writes to transient storage).
-    function getCurrentSigner() public view returns (bytes32 ownerId, address verifier) {
-        bytes32 signerSlot = keccak256("context.signer");
-        assembly {
-            ownerId := tload(signerSlot)
-        }
-        if (ownerId != bytes32(0)) {
-            verifier = _getEffectiveVerifier(msg.sender, ownerId);
-        }
-    }
-
-    // ══════════════════════════════════════════════
     //  SIGNATURE VERIFICATION (type-byte format)
     // ══════════════════════════════════════════════
 
     /// @notice Verify a signature against an account using the type-byte format.
-    ///         Type 0x01-0x04: reference verifier (resolved from immutables).
-    ///         Type 0x00: custom verifier (next 20 bytes = contract address).
-    ///         Includes the implicit EOA authorization rule.
+    ///         Checks SIGNATURE scope (0x01). Includes the implicit EOA authorization rule.
     function verifySignature(address account, bytes32 hash, bytes calldata auth)
         public
+        view
+        returns (bool valid, bytes32 ownerId, address verifier)
+    {
+        return _verify(account, hash, auth, SCOPE_SIGNATURE);
+    }
+
+    // ══════════════════════════════════════════════
+    //  INTERNALS
+    // ══════════════════════════════════════════════
+
+    /// @dev Core verification with scope context checking.
+    ///      Parses verifier type, calls verifier, checks owner_config, and validates scope.
+    function _verify(address account, bytes32 hash, bytes calldata auth, uint8 contextBit)
+        internal
         view
         returns (bool valid, bytes32 ownerId, address verifier)
     {
@@ -281,26 +279,29 @@ contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
 
         if (verifier == address(0)) return (false, bytes32(0), address(0));
 
-        ownerId = IAuthVerifier(verifier).verify(hash, data);
+        ownerId = IVerifier(verifier).verify(hash, data);
         if (ownerId == bytes32(0)) return (false, bytes32(0), verifier);
 
-        address registeredVerifier = _ownerConfigs[account][ownerId];
+        OwnerConfig storage config = _ownerConfigs[account][ownerId];
+        address registeredVerifier = config.verifier;
+        uint8 scope = config.scope;
+
         if (registeredVerifier == verifier) {
-            valid = true;
+            valid = scope == 0x00 || (scope & contextBit) != 0;
         } else if (registeredVerifier == address(0) && ownerId == bytes32(bytes20(account)) && verifier == K1_VERIFIER)
         {
+            // Implicit EOA: unrestricted scope (0x00)
             valid = true;
         }
     }
 
-    // ══════════════════════════════════════════════
-    //  INTERNALS
-    // ══════════════════════════════════════════════
-
-    /// @dev Two-tier authorization: try verifySignature first (direct verification via owner_config),
+    /// @dev Two-tier authorization for config changes: try _verify with CONFIG scope first,
     ///      then fall back to isValidSignature (ERC-1271) for migration.
-    function _requireValidSignature(address account, bytes32 digest, bytes calldata authorizerAuth) internal view {
-        (bool valid,,) = verifySignature(account, digest, authorizerAuth);
+    function _requireValidConfigSignature(address account, bytes32 digest, bytes calldata authorizerAuth)
+        internal
+        view
+    {
+        (bool valid,,) = _verify(account, digest, authorizerAuth, SCOPE_CONFIG);
         if (valid) return;
 
         require(account.code.length > 0);
@@ -316,13 +317,19 @@ contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
         require(abi.decode(result, (bytes4)) == IERC1271.isValidSignature.selector);
     }
 
-    /// @dev Returns the effective verifier for an owner, applying the implicit EOA rule.
-    ///      REVOKED sentinel (self-ownerId only) → address(0). Empty slot + implicit EOA eligible → K1_VERIFIER.
-    function _getEffectiveVerifier(address account, bytes32 ownerId) internal view returns (address) {
-        address v = _ownerConfigs[account][ownerId];
-        if (v == REVOKED) return address(0);
-        if (v == address(0) && ownerId == bytes32(bytes20(account))) return K1_VERIFIER;
-        return v;
+    /// @dev Returns the effective verifier and scope for an owner, applying the implicit EOA rule.
+    ///      REVOKED sentinel (self-ownerId only) → (address(0), 0).
+    ///      Empty slot + implicit EOA eligible → (K1_VERIFIER, 0x00).
+    function _getEffectiveOwnerConfig(address account, bytes32 ownerId)
+        internal
+        view
+        returns (address verifier, uint8 scope)
+    {
+        OwnerConfig storage config = _ownerConfigs[account][ownerId];
+        verifier = config.verifier;
+        scope = config.scope;
+        if (verifier == REVOKED) return (address(0), 0);
+        if (verifier == address(0) && ownerId == bytes32(bytes20(account))) return (K1_VERIFIER, 0x00);
     }
 
     function _getSequence(address account, uint64 chainId) internal view returns (uint64) {
@@ -346,14 +353,15 @@ contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
     function _applyOperation(address account, ConfigOperation calldata op) internal {
         if (op.opType == OP_AUTHORIZE_OWNER) {
             require(op.verifier != address(0) && op.verifier != REVOKED);
-            address current = _ownerConfigs[account][op.ownerId];
+            address current = _ownerConfigs[account][op.ownerId].verifier;
             require(current == address(0) || current == REVOKED);
-            _ownerConfigs[account][op.ownerId] = op.verifier;
-            emit OwnerAuthorized(account, op.ownerId, op.verifier);
+            _ownerConfigs[account][op.ownerId] = OwnerConfig({verifier: op.verifier, scope: op.scope});
+            emit OwnerAuthorized(account, op.ownerId, op.verifier, op.scope);
         } else if (op.opType == OP_REVOKE_OWNER) {
-            require(_getEffectiveVerifier(account, op.ownerId) != address(0));
+            (address effectiveVerifier,) = _getEffectiveOwnerConfig(account, op.ownerId);
+            require(effectiveVerifier != address(0));
             if (op.ownerId == bytes32(bytes20(account))) {
-                _ownerConfigs[account][op.ownerId] = REVOKED;
+                _ownerConfigs[account][op.ownerId] = OwnerConfig({verifier: REVOKED, scope: 0});
             } else {
                 delete _ownerConfigs[account][op.ownerId];
             }

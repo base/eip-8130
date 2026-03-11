@@ -121,8 +121,9 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address account = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
 
-        address verifier = accountConfiguration.getOwner(account, ownerId);
+        (address verifier, uint8 scope) = accountConfiguration.getOwner(account, ownerId);
         assertEq(verifier, address(k1Verifier));
+        assertEq(scope, 0x00);
 
         (bool locked, uint32 unlockDelay, uint32 unlockRequestedAt) = accountConfiguration.getLockState(account);
         assertFalse(locked);

@@ -6,7 +6,7 @@ import {Test, console} from "forge-std/Test.sol";
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {InitialOwner} from "../../../src/AccountDeployer.sol";
 import {DefaultAccount} from "../../../src/accounts/DefaultAccount.sol";
-import {IAuthVerifier} from "../../../src/verifiers/IAuthVerifier.sol";
+import {IVerifier} from "../../../src/verifiers/IVerifier.sol";
 import {K1Verifier} from "../../../src/verifiers/K1Verifier.sol";
 import {K1Sandbox} from "../../../src/verifiers/sandbox/K1Verifier.sol";
 import {P256Verifier} from "../../../src/verifiers/P256Verifier.sol";
@@ -94,7 +94,7 @@ contract GasBenchmarkTest is Test {
     }
 
     function test_gasK1Sandbox() public {
-        bytes memory cd = abi.encodeWithSelector(IAuthVerifier.verify.selector, testHash, k1Sig);
+        bytes memory cd = abi.encodeWithSelector(IVerifier.verify.selector, testHash, k1Sig);
         k1Sandbox.staticcall(cd); // warm up
         uint256 gas0 = gasleft();
         (bool ok, bytes memory ret) = k1Sandbox.staticcall(cd);
@@ -114,7 +114,7 @@ contract GasBenchmarkTest is Test {
     }
 
     function test_gasP256Sandbox() public {
-        bytes memory cd = abi.encodeWithSelector(IAuthVerifier.verify.selector, testHash, p256Data);
+        bytes memory cd = abi.encodeWithSelector(IVerifier.verify.selector, testHash, p256Data);
         p256Sandbox.staticcall(cd); // warm up
         uint256 gas0 = gasleft();
         (bool ok, bytes memory ret) = p256Sandbox.staticcall(cd);
@@ -155,7 +155,7 @@ contract GasBenchmarkTest is Test {
 
         // K1 Sandbox (hand-written)
         {
-            bytes memory cd = abi.encodeWithSelector(IAuthVerifier.verify.selector, testHash, k1Sig);
+            bytes memory cd = abi.encodeWithSelector(IVerifier.verify.selector, testHash, k1Sig);
             uint256 g0 = gasleft();
             k1Sandbox.staticcall(cd);
             uint256 cold = g0 - gasleft();
@@ -178,7 +178,7 @@ contract GasBenchmarkTest is Test {
 
         // P256 Sandbox (hand-written)
         {
-            bytes memory cd = abi.encodeWithSelector(IAuthVerifier.verify.selector, testHash, p256Data);
+            bytes memory cd = abi.encodeWithSelector(IVerifier.verify.selector, testHash, p256Data);
             uint256 g0 = gasleft();
             p256Sandbox.staticcall(cd);
             uint256 cold = g0 - gasleft();

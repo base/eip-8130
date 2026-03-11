@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {IAuthVerifier} from "./IAuthVerifier.sol";
+import {IVerifier} from "./IVerifier.sol";
 
 /// @notice Verifier that always returns the provided ownerId — no signature data required.
 ///
@@ -11,7 +11,7 @@ import {IAuthVerifier} from "./IAuthVerifier.sol";
 ///
 ///         WARNING: An AlwaysValid owner authorizes ANY transaction for the account.
 ///
-contract AlwaysValidVerifier is IAuthVerifier {
+contract AlwaysValidVerifier is IVerifier {
     function verify(bytes32, bytes calldata data) external pure returns (bytes32 ownerId) {
         if (data.length >= 32) {
             ownerId = bytes32(data[:32]);

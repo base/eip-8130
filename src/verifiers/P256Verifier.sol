@@ -3,12 +3,12 @@ pragma solidity ^0.8.30;
 
 import {P256} from "openzeppelin/utils/cryptography/P256.sol";
 
-import {IAuthVerifier} from "./IAuthVerifier.sol";
+import {IVerifier} from "./IVerifier.sol";
 
 /// @notice P-256 raw ECDSA verifier. ownerId = keccak256(pub_key_x || pub_key_y).
 /// @dev Data layout: r (32) || s (32) || pub_key_x (32) || pub_key_y (32) || pre_hash (1)
 ///      pre_hash byte is included for protocol-level native verifier consistency.
-contract P256Verifier is IAuthVerifier {
+contract P256Verifier is IVerifier {
     function verify(bytes32 hash, bytes calldata data) external view returns (bytes32 ownerId) {
         require(data.length == 129);
         bytes32 r = bytes32(data[:32]);

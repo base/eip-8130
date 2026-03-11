@@ -5,7 +5,7 @@ import {Script, console} from "forge-std/Script.sol";
 
 import {AccountConfiguration} from "../src/AccountConfiguration.sol";
 import {InitialOwner} from "../src/AccountDeployer.sol";
-import {IAuthVerifier} from "../src/verifiers/IAuthVerifier.sol";
+import {IVerifier} from "../src/verifiers/IVerifier.sol";
 
 /// @notice End-to-end smoke test against a live deployment.
 ///
@@ -62,7 +62,7 @@ contract SmokeTest is Script {
         view
     {
         require(config.isAuthorized(account, ownerId), "owner not authorized");
-        address verifier = config.getOwner(account, ownerId);
+        (address verifier,) = config.getOwner(account, ownerId);
         require(verifier == k1Verifier, "wrong verifier");
     }
 

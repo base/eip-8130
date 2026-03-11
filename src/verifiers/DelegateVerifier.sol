@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {IAuthVerifier} from "./IAuthVerifier.sol";
+import {IVerifier} from "./IVerifier.sol";
 import {AccountConfiguration} from "../AccountConfiguration.sol";
 
 /// @notice Delegates verification to another account's owner configuration.
@@ -12,7 +12,7 @@ import {AccountConfiguration} from "../AccountConfiguration.sol";
 ///         handles DELEGATE directly at the protocol level.
 ///
 ///         Data layout: delegate_address (20) || nested_verifier_type (1) || nested_data
-contract DelegateVerifier is IAuthVerifier {
+contract DelegateVerifier is IVerifier {
     AccountConfiguration public immutable ACCOUNT_CONFIGURATION;
 
     constructor(address accountConfiguration) {

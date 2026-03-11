@@ -3,7 +3,7 @@ pragma solidity ^0.8.30;
 
 import {ECDSA} from "openzeppelin/utils/cryptography/ECDSA.sol";
 
-import {IAuthVerifier} from "./IAuthVerifier.sol";
+import {IVerifier} from "./IVerifier.sol";
 
 /// @notice K1 multisig verifier. Threshold M-of-N using secp256k1 ECDSA.
 ///
@@ -16,7 +16,7 @@ import {IAuthVerifier} from "./IAuthVerifier.sol";
 ///                 Signatures MUST be ordered by ascending recovered address.
 ///
 ///         Only calls the ecrecover precompile (0x01) — sandbox-compatible.
-contract MultisigVerifier is IAuthVerifier {
+contract MultisigVerifier is IVerifier {
     function verify(bytes32 hash, bytes calldata data) external pure returns (bytes32 ownerId) {
         require(data.length >= 2);
         uint256 threshold = uint256(uint8(data[0]));

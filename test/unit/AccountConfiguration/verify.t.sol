@@ -91,19 +91,21 @@ contract VerifyTest is AccountConfigurationTest {
         assertFalse(accountConfiguration.isAuthorized(account, unknownOwnerId));
     }
 
-    function test_getOwner_returnsVerifier() public {
+    function test_getOwner_returnsVerifierAndScope() public {
         (address account, bytes32 ownerId) = _createK1Account(OWNER_PK);
 
-        address verifier = accountConfiguration.getOwner(account, ownerId);
+        (address verifier, uint8 scope) = accountConfiguration.getOwner(account, ownerId);
         assertEq(verifier, address(k1Verifier));
+        assertEq(scope, 0x00);
     }
 
     function test_getOwner_returnsZeroForUnknownOwner() public {
         (address account,) = _createK1Account(OWNER_PK);
 
         bytes32 unknownOwnerId = bytes32(bytes20(vm.addr(999)));
-        address verifier = accountConfiguration.getOwner(account, unknownOwnerId);
+        (address verifier, uint8 scope) = accountConfiguration.getOwner(account, unknownOwnerId);
         assertEq(verifier, address(0));
+        assertEq(scope, 0);
     }
 
     function test_computeERC1167Bytecode() public view {
@@ -114,11 +116,63 @@ contract VerifyTest is AccountConfigurationTest {
         assertEq(keccak256(bytecode), keccak256(expected));
     }
 
+    function test_verifySignature_scopedOwner_signatureScope() public {
+        (address account,) = _createK1Account(OWNER_PK);
+
+        address newSigner = vm.addr(401);
+        bytes32 newOwnerId = bytes32(bytes20(newSigner));
+        _authorizeOwnerWithScope(account, OWNER_PK, newOwnerId, address(k1Verifier), 0x01);
+
+        bytes32 hash = keccak256("scoped verify");
+        bytes memory sig = _signDigest(401, hash);
+        bytes memory auth = abi.encodePacked(uint8(0x01), sig);
+
+        (bool valid,,) = accountConfiguration.verifySignature(account, hash, auth);
+        assertTrue(valid);
+    }
+
+    function test_verifySignature_scopedOwner_wrongScope() public {
+        (address account,) = _createK1Account(OWNER_PK);
+
+        address newSigner = vm.addr(401);
+        bytes32 newOwnerId = bytes32(bytes20(newSigner));
+        // Authorize with SENDER scope only (0x02) — should fail SIGNATURE (0x01) check
+        _authorizeOwnerWithScope(account, OWNER_PK, newOwnerId, address(k1Verifier), 0x02);
+
+        bytes32 hash = keccak256("scoped verify");
+        bytes memory sig = _signDigest(401, hash);
+        bytes memory auth = abi.encodePacked(uint8(0x01), sig);
+
+        (bool valid,,) = accountConfiguration.verifySignature(account, hash, auth);
+        assertFalse(valid);
+    }
+
+    function test_verifySignature_unrestrictedScope() public {
+        (address account,) = _createK1Account(OWNER_PK);
+
+        address newSigner = vm.addr(401);
+        bytes32 newOwnerId = bytes32(bytes20(newSigner));
+        _authorizeOwnerWithScope(account, OWNER_PK, newOwnerId, address(k1Verifier), 0x00);
+
+        bytes32 hash = keccak256("unrestricted");
+        bytes memory sig = _signDigest(401, hash);
+        bytes memory auth = abi.encodePacked(uint8(0x01), sig);
+
+        (bool valid,,) = accountConfiguration.verifySignature(account, hash, auth);
+        assertTrue(valid);
+    }
+
     // ── Helpers ──
 
     function _authorizeOwner(address account, uint256 pk, bytes32 newOwnerId, address verifier) internal {
+        _authorizeOwnerWithScope(account, pk, newOwnerId, verifier, 0x00);
+    }
+
+    function _authorizeOwnerWithScope(address account, uint256 pk, bytes32 newOwnerId, address verifier, uint8 scope)
+        internal
+    {
         ConfigOperation[] memory ops = new ConfigOperation[](1);
-        ops[0] = ConfigOperation({opType: 0x01, verifier: verifier, ownerId: newOwnerId});
+        ops[0] = ConfigOperation({opType: 0x01, verifier: verifier, ownerId: newOwnerId, scope: scope});
 
         uint64 chainId = uint64(block.chainid);
         uint64 seq = accountConfiguration.getChangeSequence(account, chainId);
@@ -130,7 +184,7 @@ contract VerifyTest is AccountConfigurationTest {
 
     function _revokeOwner(address account, uint256 pk, bytes32 ownerId) internal {
         ConfigOperation[] memory ops = new ConfigOperation[](1);
-        ops[0] = ConfigOperation({opType: 0x02, verifier: address(0), ownerId: ownerId});
+        ops[0] = ConfigOperation({opType: 0x02, verifier: address(0), ownerId: ownerId, scope: 0});
 
         uint64 chainId = uint64(block.chainid);
         uint64 seq = accountConfiguration.getChangeSequence(account, chainId);

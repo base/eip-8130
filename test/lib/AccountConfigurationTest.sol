@@ -6,7 +6,7 @@ import {Test} from "forge-std/Test.sol";
 import {AccountConfiguration} from "../../src/AccountConfiguration.sol";
 import {InitialOwner} from "../../src/AccountDeployer.sol";
 import {ConfigOperation} from "../../src/AccountConfigDigest.sol";
-import {IAuthVerifier} from "../../src/verifiers/IAuthVerifier.sol";
+import {IVerifier} from "../../src/verifiers/IVerifier.sol";
 import {K1Verifier} from "../../src/verifiers/K1Verifier.sol";
 import {P256Verifier} from "../../src/verifiers/P256Verifier.sol";
 import {WebAuthnVerifier} from "../../src/verifiers/WebAuthnVerifier.sol";
@@ -15,24 +15,24 @@ import {DefaultAccount} from "../../src/accounts/DefaultAccount.sol";
 
 contract AccountConfigurationTest is Test {
     AccountConfiguration public accountConfiguration;
-    IAuthVerifier public k1Verifier;
-    IAuthVerifier public p256Verifier;
-    IAuthVerifier public webAuthnVerifier;
-    IAuthVerifier public delegateVerifier;
+    IVerifier public k1Verifier;
+    IVerifier public p256Verifier;
+    IVerifier public webAuthnVerifier;
+    IVerifier public delegateVerifier;
     address public defaultAccountImplementation;
 
     bytes32 constant CONFIG_CHANGE_TYPEHASH = keccak256(
         "ConfigChange(address account,uint64 chainId,uint64 sequence,ConfigOperation[] operations)"
-        "ConfigOperation(uint8 opType,address verifier,bytes32 ownerId)"
+        "ConfigOperation(uint8 opType,address verifier,bytes32 ownerId,uint8 scope)"
     );
 
     function setUp() public virtual {
-        k1Verifier = IAuthVerifier(new K1Verifier());
-        p256Verifier = IAuthVerifier(new P256Verifier());
-        webAuthnVerifier = IAuthVerifier(new WebAuthnVerifier());
+        k1Verifier = IVerifier(new K1Verifier());
+        p256Verifier = IVerifier(new P256Verifier());
+        webAuthnVerifier = IVerifier(new WebAuthnVerifier());
         accountConfiguration =
             new AccountConfiguration(address(k1Verifier), address(p256Verifier), address(webAuthnVerifier), address(0));
-        delegateVerifier = IAuthVerifier(new DelegateVerifier(address(accountConfiguration)));
+        delegateVerifier = IVerifier(new DelegateVerifier(address(accountConfiguration)));
         defaultAccountImplementation = address(new DefaultAccount(address(accountConfiguration)));
     }
 
@@ -89,7 +89,9 @@ contract AccountConfigurationTest is Test {
     ) internal pure returns (bytes32) {
         bytes32[] memory opHashes = new bytes32[](operations.length);
         for (uint256 i; i < operations.length; i++) {
-            opHashes[i] = keccak256(abi.encode(operations[i].opType, operations[i].verifier, operations[i].ownerId));
+            opHashes[i] = keccak256(
+                abi.encode(operations[i].opType, operations[i].verifier, operations[i].ownerId, operations[i].scope)
+            );
         }
         return keccak256(
             abi.encode(CONFIG_CHANGE_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(opHashes)))

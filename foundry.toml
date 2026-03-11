@@ -1,5 +1,6 @@
 [profile.default]
 optimizer = true
+via_ir = true
 evm_version = "osaka"
 remappings = [
     "openzeppelin/=lib/openzeppelin-contracts/contracts/",

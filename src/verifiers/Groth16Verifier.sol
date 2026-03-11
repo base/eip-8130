@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {IAuthVerifier} from "./IAuthVerifier.sol";
+import {IVerifier} from "./IVerifier.sol";
 
 /// @notice Groth16 ZK-SNARK verifier over BN254 using EIP-196/197 precompiles.
 ///
@@ -28,7 +28,7 @@ import {IAuthVerifier} from "./IAuthVerifier.sol";
 ///
 ///         NOTE: For production use, deploy per-circuit verifiers with hardcoded
 ///         VKs to avoid the calldata overhead of passing the VK every transaction.
-contract Groth16Verifier is IAuthVerifier {
+contract Groth16Verifier is IVerifier {
     uint256 private constant BN254_FP = 0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47;
 
     function verify(bytes32 hash, bytes calldata data) external view returns (bytes32 ownerId) {

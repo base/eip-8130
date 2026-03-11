@@ -3,7 +3,7 @@ pragma solidity ^0.8.30;
 
 import {BLS} from "solady/utils/ext/ithaca/BLS.sol";
 
-import {IAuthVerifier} from "./IAuthVerifier.sol";
+import {IVerifier} from "./IVerifier.sol";
 
 /// @notice BLS12-381 signature verifier using EIP-2537 precompiles.
 ///
@@ -14,7 +14,7 @@ import {IAuthVerifier} from "./IAuthVerifier.sol";
 ///           e(-pubKey, H(hash)) · e(G1_gen, sig) == 1
 ///
 ///         Requires EIP-2537 BLS12-381 precompiles (Pectra+).
-contract BLSVerifier is IAuthVerifier {
+contract BLSVerifier is IVerifier {
     // BLS12-381 base field modulus p (two halves, big-endian)
     bytes32 private constant P_A = 0x000000000000000000000000000000001a0111ea397fe69a4b1ba7b6434bacd7;
     bytes32 private constant P_B = 0x64774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab;

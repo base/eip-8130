@@ -5,6 +5,7 @@ struct ConfigOperation {
     uint8 opType; // 0x01 = authorizeOwner, 0x02 = revokeOwner
     address verifier; // authorizeOwner only
     bytes32 ownerId; // authorizeOwner, revokeOwner
+    uint8 scope; // authorizeOwner only (0x00 = unrestricted)
 }
 
 /// @notice Canonical ABI-encoded digest computation for EIP-8130 config changes.
@@ -12,7 +13,7 @@ struct ConfigOperation {
 abstract contract AccountConfigDigest {
     bytes32 constant CONFIG_CHANGE_TYPEHASH = keccak256(
         "ConfigChange(address account,uint64 chainId,uint64 sequence,ConfigOperation[] operations)"
-        "ConfigOperation(uint8 opType,address verifier,bytes32 ownerId)"
+        "ConfigOperation(uint8 opType,address verifier,bytes32 ownerId,uint8 scope)"
     );
 
     function _computeConfigChangeDigest(
@@ -23,7 +24,9 @@ abstract contract AccountConfigDigest {
     ) internal pure returns (bytes32) {
         bytes32[] memory opHashes = new bytes32[](operations.length);
         for (uint256 i; i < operations.length; i++) {
-            opHashes[i] = keccak256(abi.encode(operations[i].opType, operations[i].verifier, operations[i].ownerId));
+            opHashes[i] = keccak256(
+                abi.encode(operations[i].opType, operations[i].verifier, operations[i].ownerId, operations[i].scope)
+            );
         }
         return keccak256(
             abi.encode(CONFIG_CHANGE_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(opHashes)))
