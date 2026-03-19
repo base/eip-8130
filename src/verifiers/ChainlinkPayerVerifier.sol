@@ -131,8 +131,7 @@ contract ChainlinkPayerVerifier is IVerifier {
     ///      No-op if BLOCKLIST is address(0).
     function _requireNotBlocklisted(address account) internal view {
         if (BLOCKLIST == address(0)) return;
-        (bool success, bytes memory result) =
-            BLOCKLIST.staticcall(abi.encodeWithSelector(BLOCKLIST_SELECTOR, account));
+        (bool success, bytes memory result) = BLOCKLIST.staticcall(abi.encodeWithSelector(BLOCKLIST_SELECTOR, account));
         require(success && result.length >= 32, "blocklist check failed");
         require(!abi.decode(result, (bool)), "blocklisted");
     }
