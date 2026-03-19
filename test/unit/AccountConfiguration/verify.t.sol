@@ -82,15 +82,6 @@ contract VerifyTest is AccountConfigurationTest {
         assertTrue(valid2);
     }
 
-    function test_isAuthorized_returnsCorrectly() public {
-        (address account, bytes32 ownerId) = _createK1Account(OWNER_PK);
-
-        assertTrue(accountConfiguration.isAuthorized(account, ownerId));
-
-        bytes32 unknownOwnerId = bytes32(bytes20(vm.addr(999)));
-        assertFalse(accountConfiguration.isAuthorized(account, unknownOwnerId));
-    }
-
     function test_getOwner_returnsVerifierAndScope() public {
         (address account, bytes32 ownerId) = _createK1Account(OWNER_PK);
 

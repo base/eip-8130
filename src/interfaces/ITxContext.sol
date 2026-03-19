@@ -14,5 +14,6 @@ interface ITxContext {
     function getPayer() external view returns (address);
     function getOwnerId() external view returns (bytes32);
     function getCalls() external view returns (Call[][] memory);
+    function getMaxCost() external view returns (uint256);
     function getGasLimit() external view returns (uint256);
 }

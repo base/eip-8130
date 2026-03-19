@@ -167,6 +167,7 @@ contract AccountLockTest is AccountConfigurationTest {
         bytes memory auth = _buildK1Auth(OWNER_PK, digest);
 
         accountConfiguration.applyConfigChange(account, chainId, seq, ops, auth);
-        assertTrue(accountConfiguration.isAuthorized(account, bytes32(bytes20(vm.addr(500)))));
+        (address v,) = accountConfiguration.getOwner(account, bytes32(bytes20(vm.addr(500))));
+        assertTrue(v != address(0));
     }
 }

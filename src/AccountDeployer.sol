@@ -4,6 +4,7 @@ pragma solidity ^0.8.30;
 struct InitialOwner {
     address verifier;
     bytes32 ownerId;
+    uint8 scope;
 }
 
 /// @notice Pure deployment utilities for EIP-8130 account creation.
@@ -37,7 +38,7 @@ abstract contract AccountDeployer {
     function _computeOwnersCommitment(InitialOwner[] calldata owners) internal pure returns (bytes32) {
         bytes memory data;
         for (uint256 i; i < owners.length; i++) {
-            data = abi.encodePacked(data, owners[i].ownerId, owners[i].verifier);
+            data = abi.encodePacked(data, owners[i].ownerId, owners[i].verifier, owners[i].scope);
         }
         return keccak256(data);
     }

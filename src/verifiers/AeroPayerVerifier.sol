@@ -27,10 +27,11 @@ interface IAeroRouterGeneric {
 ///
 ///         Validation flow:
 ///           1. Read token address from data, derive ownerId as the right-aligned address
-///           2. Compute gas cost: tx.gasprice × TX_CONTEXT.getGasLimit() → ETH
-///           3. Quote Aerodrome: WETH → TOKEN at current pool price → required tokens
-///           4. Check sender's token balance ≥ required amount
-///           5. Validate first call phase: exactly 1 call, transfer(payer, amount ≥ required)
+///           2. Check gas limit is sufficient to execute the token transfer
+///           3. Compute ETH cost: TX_CONTEXT.getMaxCost() + verifier gas overhead
+///           4. Quote Aerodrome: WETH → TOKEN at current pool price → required tokens
+///           5. Check sender's token balance ≥ required amount
+///           6. Validate first call phase: exactly 1 call, transfer(payer, amount ≥ required)
 ///
 ///         Data layout: token (20 bytes)
 ///
@@ -41,23 +42,36 @@ interface IAeroRouterGeneric {
 ///
 ///         Uses volatile pool routing by default. Deploy a separate instance or use
 ///         USDCPayerVerifier for tokens requiring stable-curve pools.
-contract ERC20PayerVerifier is IVerifier {
+contract AeroPayerVerifier is IVerifier {
     bytes4 private constant TRANSFER_SELECTOR = 0xa9059cbb; // transfer(address,uint256)
 
     address public immutable AERO_ROUTER;
     address public immutable WETH;
     address public immutable POOL_FACTORY;
     address public immutable TX_CONTEXT;
+    uint256 public immutable VERIFIER_GAS_OVERHEAD;
+    uint256 public immutable MIN_GAS_LIMIT;
 
     /// @param aeroRouter Aerodrome Router address
     /// @param weth WETH address on the target chain
     /// @param poolFactory Aerodrome default pool factory
     /// @param txContext Transaction Context precompile address (TX_CONTEXT_ADDRESS)
-    constructor(address aeroRouter, address weth, address poolFactory, address txContext) {
+    /// @param verifierGasOverhead Extra gas to account for the verifier's own metered execution
+    /// @param minGasLimit Minimum gas_limit required to ensure the token transfer succeeds
+    constructor(
+        address aeroRouter,
+        address weth,
+        address poolFactory,
+        address txContext,
+        uint256 verifierGasOverhead,
+        uint256 minGasLimit
+    ) {
         AERO_ROUTER = aeroRouter;
         WETH = weth;
         POOL_FACTORY = poolFactory;
         TX_CONTEXT = txContext;
+        VERIFIER_GAS_OVERHEAD = verifierGasOverhead;
+        MIN_GAS_LIMIT = minGasLimit;
     }
 
     /// @dev Data: token (20 bytes)
@@ -67,7 +81,10 @@ contract ERC20PayerVerifier is IVerifier {
         ownerId = bytes32(uint256(uint160(token)));
 
         ITxContext ctx = ITxContext(TX_CONTEXT);
-        uint256 requiredTokens = _quoteTokensForEth(token, tx.gasprice * ctx.getGasLimit());
+        require(ctx.getGasLimit() >= MIN_GAS_LIMIT, "gas limit too low for transfer");
+
+        uint256 maxEthCost = ctx.getMaxCost() + VERIFIER_GAS_OVERHEAD * tx.gasprice;
+        uint256 requiredTokens = _quoteTokensForEth(token, maxEthCost);
 
         _checkSenderBalance(ctx, token, requiredTokens);
         _checkPaymentPhase(ctx, token, requiredTokens);

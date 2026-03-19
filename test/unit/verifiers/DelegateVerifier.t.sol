@@ -17,11 +17,11 @@ contract DelegateVerifierTest is AccountConfigurationTest {
 
         InitialOwner[] memory owners = new InitialOwner[](2);
         if (delegatorOwnerId < delegateRefOwnerId) {
-            owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: delegatorOwnerId});
-            owners[1] = InitialOwner({verifier: address(delegateVerifier), ownerId: delegateRefOwnerId});
+            owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: delegatorOwnerId, scope: 0x00});
+            owners[1] = InitialOwner({verifier: address(delegateVerifier), ownerId: delegateRefOwnerId, scope: 0x00});
         } else {
-            owners[0] = InitialOwner({verifier: address(delegateVerifier), ownerId: delegateRefOwnerId});
-            owners[1] = InitialOwner({verifier: address(k1Verifier), ownerId: delegatorOwnerId});
+            owners[0] = InitialOwner({verifier: address(delegateVerifier), ownerId: delegateRefOwnerId, scope: 0x00});
+            owners[1] = InitialOwner({verifier: address(k1Verifier), ownerId: delegatorOwnerId, scope: 0x00});
         }
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
@@ -61,13 +61,13 @@ contract DelegateVerifierTest is AccountConfigurationTest {
 
         bytes32 delegateRefA = bytes32(bytes20(accountA));
         InitialOwner[] memory ownersB = new InitialOwner[](1);
-        ownersB[0] = InitialOwner({verifier: address(delegateVerifier), ownerId: delegateRefA});
+        ownersB[0] = InitialOwner({verifier: address(delegateVerifier), ownerId: delegateRefA, scope: 0x00});
         bytes memory bytecodeB = _computeERC1167Bytecode(defaultAccountImplementation);
         address accountB = accountConfiguration.createAccount(bytes32(uint256(10)), bytecodeB, ownersB);
 
         bytes32 delegateRefB = bytes32(bytes20(accountB));
         InitialOwner[] memory ownersC = new InitialOwner[](1);
-        ownersC[0] = InitialOwner({verifier: address(delegateVerifier), ownerId: delegateRefB});
+        ownersC[0] = InitialOwner({verifier: address(delegateVerifier), ownerId: delegateRefB, scope: 0x00});
         bytes memory bytecodeC = _computeERC1167Bytecode(defaultAccountImplementation);
         accountConfiguration.createAccount(bytes32(uint256(20)), bytecodeC, ownersC);
 

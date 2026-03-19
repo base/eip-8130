@@ -109,8 +109,8 @@ contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
             require(initialOwners[i].verifier != address(0));
 
             _ownerConfigs[account][initialOwners[i].ownerId] =
-                OwnerConfig({verifier: initialOwners[i].verifier, scope: 0x00});
-            emit OwnerAuthorized(account, initialOwners[i].ownerId, initialOwners[i].verifier, 0x00);
+                OwnerConfig({verifier: initialOwners[i].verifier, scope: initialOwners[i].scope});
+            emit OwnerAuthorized(account, initialOwners[i].ownerId, initialOwners[i].verifier, initialOwners[i].scope);
         }
 
         _accountLocks[account] = AccountLock(false, 0, 0);
@@ -194,11 +194,6 @@ contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
     // ══════════════════════════════════════════════
     //  READ FUNCTIONS
     // ══════════════════════════════════════════════
-
-    function isAuthorized(address account, bytes32 ownerId) external view returns (bool) {
-        (address v,) = _getEffectiveOwnerConfig(account, ownerId);
-        return v != address(0);
-    }
 
     function getOwner(address account, bytes32 ownerId) public view returns (address verifier, uint8 scope) {
         return _getEffectiveOwnerConfig(account, ownerId);

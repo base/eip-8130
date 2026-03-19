@@ -24,8 +24,8 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
 
         accountConfiguration.applyConfigChange(account, chainId, seq, ops, auth);
 
-        assertTrue(accountConfiguration.isAuthorized(account, newOwnerId));
         (address verifier, uint8 scope) = accountConfiguration.getOwner(account, newOwnerId);
+        assertTrue(verifier != address(0));
         assertEq(verifier, address(k1Verifier));
         assertEq(scope, 0x00);
     }
@@ -58,7 +58,8 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bytes32 newOwnerId = bytes32(bytes20(newSigner));
         _authorizeOwner(account, OWNER_PK, newOwnerId, address(k1Verifier));
 
-        assertTrue(accountConfiguration.isAuthorized(account, newOwnerId));
+        (address v,) = accountConfiguration.getOwner(account, newOwnerId);
+        assertTrue(v != address(0));
 
         ConfigOperation[] memory ops = new ConfigOperation[](1);
         ops[0] = ConfigOperation({opType: 0x02, verifier: address(0), ownerId: newOwnerId, scope: 0});
@@ -70,7 +71,8 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
 
         accountConfiguration.applyConfigChange(account, chainId, seq, ops, auth);
 
-        assertFalse(accountConfiguration.isAuthorized(account, newOwnerId));
+        (address v2,) = accountConfiguration.getOwner(account, newOwnerId);
+        assertTrue(v2 == address(0));
     }
 
     function test_multipleOperationsInSingleChange() public {
@@ -90,8 +92,10 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
 
         accountConfiguration.applyConfigChange(account, chainId, seq, ops, auth);
 
-        assertTrue(accountConfiguration.isAuthorized(account, owner1));
-        assertTrue(accountConfiguration.isAuthorized(account, owner2));
+        (address v1,) = accountConfiguration.getOwner(account, owner1);
+        assertTrue(v1 != address(0));
+        (address v2,) = accountConfiguration.getOwner(account, owner2);
+        assertTrue(v2 != address(0));
     }
 
     function test_sequenceIncrements() public {
@@ -159,7 +163,8 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bytes memory auth = _buildK1Auth(NEW_OWNER_PK, digest);
 
         accountConfiguration.applyConfigChange(account, chainId, seq, ops, auth);
-        assertTrue(accountConfiguration.isAuthorized(account, thirdOwnerId));
+        (address v,) = accountConfiguration.getOwner(account, thirdOwnerId);
+        assertTrue(v != address(0));
     }
 
     function test_scopedOwner_cannotAuthorizeWithoutConfigScope() public {
@@ -200,7 +205,8 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bytes memory auth = _buildK1Auth(NEW_OWNER_PK, digest);
 
         accountConfiguration.applyConfigChange(account, chainId, seq, ops, auth);
-        assertTrue(accountConfiguration.isAuthorized(account, thirdOwnerId));
+        (address v,) = accountConfiguration.getOwner(account, thirdOwnerId);
+        assertTrue(v != address(0));
     }
 
     function test_revertsOnDuplicateOwnerAuthorization() public {

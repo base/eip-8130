@@ -36,7 +36,7 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
         ownerId = bytes32(bytes20(signer));
 
         InitialOwner[] memory owners = new InitialOwner[](1);
-        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId});
+        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
 
         bytes memory bytecode = _computeERC1167Bytecode(highRateImplementation);
         account = accountConfiguration.createAccount(bytes32(uint256(0xbeef)), bytecode, owners);

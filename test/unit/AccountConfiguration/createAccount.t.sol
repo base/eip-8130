@@ -11,14 +11,15 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 ownerId = bytes32(bytes20(owner));
 
         InitialOwner[] memory owners = new InitialOwner[](1);
-        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId});
+        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address account = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
 
         assertTrue(account != address(0));
         assertTrue(account.code.length > 0);
-        assertTrue(accountConfiguration.isAuthorized(account, ownerId));
+        (address verifier,) = accountConfiguration.getOwner(account, ownerId);
+        assertTrue(verifier != address(0));
     }
 
     function test_createAccount_multipleOwners() public {
@@ -30,19 +31,21 @@ contract CreateAccountTest is AccountConfigurationTest {
 
         InitialOwner[] memory owners = new InitialOwner[](2);
         if (ownerId1 < ownerId2) {
-            owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId1});
-            owners[1] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId2});
+            owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId1, scope: 0x00});
+            owners[1] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId2, scope: 0x00});
         } else {
-            owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId2});
-            owners[1] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId1});
+            owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId2, scope: 0x00});
+            owners[1] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId1, scope: 0x00});
         }
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address account = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
 
         assertTrue(account != address(0));
-        assertTrue(accountConfiguration.isAuthorized(account, ownerId1));
-        assertTrue(accountConfiguration.isAuthorized(account, ownerId2));
+        (address v1,) = accountConfiguration.getOwner(account, ownerId1);
+        assertTrue(v1 != address(0));
+        (address v2,) = accountConfiguration.getOwner(account, ownerId2);
+        assertTrue(v2 != address(0));
     }
 
     function test_createAccount_deterministicAddress() public {
@@ -50,7 +53,7 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 ownerId = bytes32(bytes20(owner));
 
         InitialOwner[] memory owners = new InitialOwner[](1);
-        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId});
+        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address predicted = accountConfiguration.getAddress(bytes32(0), bytecode, owners);
@@ -64,7 +67,7 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 ownerId = bytes32(bytes20(owner));
 
         InitialOwner[] memory owners = new InitialOwner[](1);
-        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId});
+        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address first = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
@@ -84,8 +87,8 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 larger = ownerId1 < ownerId2 ? ownerId2 : ownerId1;
 
         InitialOwner[] memory owners = new InitialOwner[](2);
-        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: larger});
-        owners[1] = InitialOwner({verifier: address(k1Verifier), ownerId: smaller});
+        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: larger, scope: 0x00});
+        owners[1] = InitialOwner({verifier: address(k1Verifier), ownerId: smaller, scope: 0x00});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         vm.expectRevert();
@@ -104,26 +107,26 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 ownerId = bytes32(uint256(1));
 
         InitialOwner[] memory owners = new InitialOwner[](1);
-        owners[0] = InitialOwner({verifier: address(0), ownerId: ownerId});
+        owners[0] = InitialOwner({verifier: address(0), ownerId: ownerId, scope: 0x00});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         vm.expectRevert();
         accountConfiguration.createAccount(bytes32(0), bytecode, owners);
     }
 
-    function test_createAccount_initialOwnersHaveSafeDefaults() public {
+    function test_createAccount_initialOwnersHaveSpecifiedScope() public {
         address owner = vm.addr(1);
         bytes32 ownerId = bytes32(bytes20(owner));
 
         InitialOwner[] memory owners = new InitialOwner[](1);
-        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId});
+        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x03});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address account = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
 
         (address verifier, uint8 scope) = accountConfiguration.getOwner(account, ownerId);
         assertEq(verifier, address(k1Verifier));
-        assertEq(scope, 0x00);
+        assertEq(scope, 0x03);
 
         (bool locked, uint32 unlockDelay, uint32 unlockRequestedAt) = accountConfiguration.getLockState(account);
         assertFalse(locked);
@@ -136,7 +139,7 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 ownerId = bytes32(bytes20(owner));
 
         InitialOwner[] memory owners = new InitialOwner[](1);
-        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId});
+        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address addr1 = accountConfiguration.getAddress(bytes32(uint256(1)), bytecode, owners);

@@ -49,7 +49,7 @@ contract AccountConfigurationTest is Test {
         ownerId = bytes32(bytes20(signer));
 
         InitialOwner[] memory owners = new InitialOwner[](1);
-        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId});
+        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         account = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
@@ -60,7 +60,7 @@ contract AccountConfigurationTest is Test {
         ownerId = bytes32(bytes20(signer));
 
         InitialOwner[] memory owners = new InitialOwner[](1);
-        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId});
+        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         account = accountConfiguration.createAccount(salt, bytecode, owners);

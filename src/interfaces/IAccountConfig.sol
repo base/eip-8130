@@ -45,7 +45,6 @@ interface IAccountConfig {
     function unlock(address account, bytes calldata signature) external;
 
     // Read functions
-    function isAuthorized(address account, bytes32 ownerId) external view returns (bool);
     function getOwner(address account, bytes32 ownerId) external view returns (address verifier, uint8 scope);
     function getLockState(address account)
         external

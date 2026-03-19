@@ -73,7 +73,7 @@ contract GasBenchmarkTest is Test {
             address signerA = vm.addr(pkA);
             bytes32 ownerIdA = bytes32(bytes20(signerA));
             InitialOwner[] memory ownersA = new InitialOwner[](1);
-            ownersA[0] = InitialOwner({verifier: address(k1), ownerId: ownerIdA});
+            ownersA[0] = InitialOwner({verifier: address(k1), ownerId: ownerIdA, scope: 0x00});
             bytes memory bytecode =
                 abi.encodePacked(hex"363d3d373d3d3d363d73", defaultImpl, hex"5af43d82803e903d91602b57fd5bf3");
             config.createAccount(bytes32("benchA"), bytecode, ownersA);
