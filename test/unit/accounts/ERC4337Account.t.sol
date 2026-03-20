@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {ERC4337Account, Call, PackedUserOperation}
-    from "../../../src/accounts/BackwardCompatibleERC4337Account.sol";
+import {ERC4337Account, Call, PackedUserOperation} from "../../../src/accounts/BackwardCompatibleERC4337Account.sol";
 import {InitialOwner} from "../../../src/AccountDeployer.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 import {IVerifier} from "../../../src/verifiers/IVerifier.sol";
@@ -47,11 +46,7 @@ contract ERC4337AccountTest is AccountConfigurationTest {
         calls[0] = Call(t, v, d);
     }
 
-    function _buildUserOp(address account, bytes memory signature)
-        internal
-        pure
-        returns (PackedUserOperation memory)
-    {
+    function _buildUserOp(address account, bytes memory signature) internal pure returns (PackedUserOperation memory) {
         return PackedUserOperation({
             sender: account,
             nonce: 0,
@@ -116,9 +111,8 @@ contract ERC4337AccountTest is AccountConfigurationTest {
         (address account,) = _create4337Account(OWNER_PK);
 
         vm.prank(account);
-        ERC4337Account(payable(account)).executeBatch(
-            _singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (42)))
-        );
+        ERC4337Account(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (42))));
 
         assertEq(target.value(), 42);
     }
@@ -128,9 +122,8 @@ contract ERC4337AccountTest is AccountConfigurationTest {
         vm.deal(account, 1 ether);
 
         vm.prank(account);
-        ERC4337Account(payable(account)).executeBatch(
-            _singleCall(address(target), 0.5 ether, abi.encodeCall(MockTarget.setValue, (1)))
-        );
+        ERC4337Account(payable(account))
+            .executeBatch(_singleCall(address(target), 0.5 ether, abi.encodeCall(MockTarget.setValue, (1))));
 
         assertEq(address(target).balance, 0.5 ether);
     }
@@ -139,9 +132,8 @@ contract ERC4337AccountTest is AccountConfigurationTest {
         (address account,) = _create4337Account(OWNER_PK);
 
         vm.prank(ENTRY_POINT);
-        ERC4337Account(payable(account)).executeBatch(
-            _singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (77)))
-        );
+        ERC4337Account(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (77))));
 
         assertEq(target.value(), 77);
     }
@@ -151,9 +143,8 @@ contract ERC4337AccountTest is AccountConfigurationTest {
 
         vm.prank(address(0xdead));
         vm.expectRevert();
-        ERC4337Account(payable(account)).executeBatch(
-            _singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1)))
-        );
+        ERC4337Account(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1))));
     }
 
     function test_executeBatch_revertsOnFailedCall() public {
@@ -161,9 +152,8 @@ contract ERC4337AccountTest is AccountConfigurationTest {
 
         vm.prank(account);
         vm.expectRevert();
-        ERC4337Account(payable(account)).executeBatch(
-            _singleCall(address(target), 0, abi.encodeCall(MockTarget.reverting, ()))
-        );
+        ERC4337Account(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.reverting, ())));
     }
 
     // ── validateUserOp ──

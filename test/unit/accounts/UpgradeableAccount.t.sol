@@ -138,9 +138,8 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         (address account,) = _createUpgradeableAccount(OWNER_PK);
 
         vm.prank(account);
-        UpgradeableAccount(payable(account)).executeBatch(
-            _singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (42)))
-        );
+        UpgradeableAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (42))));
 
         assertEq(target.value(), 42);
     }
@@ -150,9 +149,8 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         vm.deal(account, 1 ether);
 
         vm.prank(account);
-        UpgradeableAccount(payable(account)).executeBatch(
-            _singleCall(address(target), 0.5 ether, abi.encodeCall(MockTarget.setValue, (1)))
-        );
+        UpgradeableAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0.5 ether, abi.encodeCall(MockTarget.setValue, (1))));
 
         assertEq(address(target).balance, 0.5 ether);
     }
@@ -165,9 +163,8 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         UpgradeableAccount(payable(account)).authorizeCaller(policyManager);
 
         vm.prank(policyManager);
-        UpgradeableAccount(payable(account)).executeBatch(
-            _singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (77)))
-        );
+        UpgradeableAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (77))));
 
         assertEq(target.value(), 77);
     }
@@ -177,9 +174,8 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
 
         vm.prank(address(0xdead));
         vm.expectRevert();
-        UpgradeableAccount(payable(account)).executeBatch(
-            _singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1)))
-        );
+        UpgradeableAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1))));
     }
 
     function test_executeBatch_revertsOnFailedCall() public {
@@ -187,9 +183,8 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
 
         vm.prank(account);
         vm.expectRevert();
-        UpgradeableAccount(payable(account)).executeBatch(
-            _singleCall(address(target), 0, abi.encodeCall(MockTarget.reverting, ()))
-        );
+        UpgradeableAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.reverting, ())));
     }
 
     // ── UUPS upgrade ──
@@ -237,9 +232,8 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         UpgradeableAccount(payable(account)).upgradeToAndCall(address(v2Impl), "");
 
         vm.prank(account);
-        UpgradeableAccount(payable(account)).executeBatch(
-            _singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (999)))
-        );
+        UpgradeableAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (999))));
 
         assertEq(target.value(), 999);
     }
@@ -249,9 +243,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         UpgradeableAccountV2 v2Impl = new UpgradeableAccountV2(address(accountConfiguration));
 
         Call[] memory calls = new Call[](1);
-        calls[0] = Call(
-            account, 0, abi.encodeCall(UUPSUpgradeable.upgradeToAndCall, (address(v2Impl), ""))
-        );
+        calls[0] = Call(account, 0, abi.encodeCall(UUPSUpgradeable.upgradeToAndCall, (address(v2Impl), "")));
 
         vm.prank(account);
         UpgradeableAccount(payable(account)).executeBatch(calls);

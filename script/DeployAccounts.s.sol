@@ -29,8 +29,7 @@ contract DeployAccounts is Script {
         // ── Step 1: Deploy system infrastructure (once per chain) ──
 
         address k1 = address(new K1Verifier{salt: 0}());
-        AccountConfiguration accountConfig =
-            new AccountConfiguration{salt: 0}(k1, address(0), address(0), address(0));
+        AccountConfiguration accountConfig = new AccountConfiguration{salt: 0}(k1, address(0), address(0), address(0));
 
         console.log("AccountConfiguration:", address(accountConfig));
         console.log("K1Verifier:          ", k1);
@@ -99,8 +98,7 @@ contract DeployAccounts is Script {
         //     To upgrade later: account calls upgradeToAndCall(newImpl, "").
 
         bytes memory upgradeableProxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
-        address upgradeableAccount =
-            accountConfig.createAccount(bytes32(uint256(3)), upgradeableProxyBytecode, owners);
+        address upgradeableAccount = accountConfig.createAccount(bytes32(uint256(3)), upgradeableProxyBytecode, owners);
 
         console.log("UpgradeableAccount:     ", upgradeableAccount);
         console.log("  proxy size:            93 bytes (ERC-1967 + default)");
