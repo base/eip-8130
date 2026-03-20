@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {InitialOwner} from "../../../src/AccountDeployer.sol";
+import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 contract DelegateVerifierTest is AccountConfigurationTest {
@@ -9,19 +9,29 @@ contract DelegateVerifierTest is AccountConfigurationTest {
     uint256 constant DELEGATOR_PK = 43;
 
     function test_verify_validDelegation() public {
-        (address delegateAccount, bytes32 delegateOwnerId) = _createK1Account(DELEGATE_PK);
+        (address delegateAccount,) = _createK1Account(DELEGATE_PK);
 
         address delegateSigner = vm.addr(DELEGATOR_PK);
         bytes32 delegatorOwnerId = bytes32(bytes20(delegateSigner));
         bytes32 delegateRefOwnerId = bytes32(bytes20(delegateAccount));
 
-        InitialOwner[] memory owners = new InitialOwner[](2);
+        AccountConfiguration.AddOwner[] memory owners = new AccountConfiguration.AddOwner[](2);
         if (delegatorOwnerId < delegateRefOwnerId) {
-            owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: delegatorOwnerId, scope: 0x00});
-            owners[1] = InitialOwner({verifier: address(delegateVerifier), ownerId: delegateRefOwnerId, scope: 0x00});
+            owners[0] =
+                AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: delegatorOwnerId, scope: 0x00});
+            owners[1] = AccountConfiguration.AddOwner({
+                verifier: address(delegateVerifier),
+                ownerId: delegateRefOwnerId,
+                scope: 0x00
+            });
         } else {
-            owners[0] = InitialOwner({verifier: address(delegateVerifier), ownerId: delegateRefOwnerId, scope: 0x00});
-            owners[1] = InitialOwner({verifier: address(k1Verifier), ownerId: delegatorOwnerId, scope: 0x00});
+            owners[0] = AccountConfiguration.AddOwner({
+                verifier: address(delegateVerifier),
+                ownerId: delegateRefOwnerId,
+                scope: 0x00
+            });
+            owners[1] =
+                AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: delegatorOwnerId, scope: 0x00});
         }
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
@@ -60,14 +70,16 @@ contract DelegateVerifierTest is AccountConfigurationTest {
         (address accountA,) = _createK1Account(DELEGATE_PK);
 
         bytes32 delegateRefA = bytes32(bytes20(accountA));
-        InitialOwner[] memory ownersB = new InitialOwner[](1);
-        ownersB[0] = InitialOwner({verifier: address(delegateVerifier), ownerId: delegateRefA, scope: 0x00});
+        AccountConfiguration.AddOwner[] memory ownersB = new AccountConfiguration.AddOwner[](1);
+        ownersB[0] =
+            AccountConfiguration.AddOwner({verifier: address(delegateVerifier), ownerId: delegateRefA, scope: 0x00});
         bytes memory bytecodeB = _computeERC1167Bytecode(defaultAccountImplementation);
         address accountB = accountConfiguration.createAccount(bytes32(uint256(10)), bytecodeB, ownersB);
 
         bytes32 delegateRefB = bytes32(bytes20(accountB));
-        InitialOwner[] memory ownersC = new InitialOwner[](1);
-        ownersC[0] = InitialOwner({verifier: address(delegateVerifier), ownerId: delegateRefB, scope: 0x00});
+        AccountConfiguration.AddOwner[] memory ownersC = new AccountConfiguration.AddOwner[](1);
+        ownersC[0] =
+            AccountConfiguration.AddOwner({verifier: address(delegateVerifier), ownerId: delegateRefB, scope: 0x00});
         bytes memory bytecodeC = _computeERC1167Bytecode(defaultAccountImplementation);
         accountConfiguration.createAccount(bytes32(uint256(20)), bytecodeC, ownersC);
 

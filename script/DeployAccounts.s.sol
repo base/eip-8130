@@ -4,8 +4,6 @@ pragma solidity ^0.8.30;
 import {Script, console} from "forge-std/Script.sol";
 
 import {AccountConfiguration} from "../src/AccountConfiguration.sol";
-import {InitialOwner} from "../src/AccountDeployer.sol";
-
 import {DefaultAccount, Call} from "../src/accounts/DefaultAccount.sol";
 import {DefaultHighRateAccount} from "../src/accounts/DefaultHighRateAccount.sol";
 import {UpgradeableAccount} from "../src/accounts/UpgradeableAccount.sol";
@@ -58,15 +56,16 @@ contract DeployAccounts is Script {
         address owner = msg.sender;
         bytes32 ownerId = bytes32(bytes20(owner));
 
-        InitialOwner[] memory owners = new InitialOwner[](1);
-        owners[0] = InitialOwner({verifier: k1, ownerId: ownerId, scope: 0x00});
+        AccountConfiguration.AddOwner[] memory owners = new AccountConfiguration.AddOwner[](1);
+        owners[0] = AccountConfiguration.AddOwner({verifier: k1, ownerId: ownerId, scope: 0x00});
 
         // ── 3a: DefaultAccount (ERC-1167 proxy, 45 bytes) ──
         //
         //     Non-upgradeable. Smallest proxy. Best for 8130-native chains
         //     where 7702 re-delegation handles "upgrades" for EOAs.
 
-        bytes memory erc1167Bytecode = accountConfig.computeERC1167Bytecode(defaultImpl);
+        bytes memory erc1167Bytecode =
+            abi.encodePacked(hex"363d3d373d3d3d363d73", defaultImpl, hex"5af43d82803e903d91602b57fd5bf3");
         address defaultAccount = accountConfig.createAccount(bytes32(uint256(1)), erc1167Bytecode, owners);
 
         console.log("");
@@ -80,7 +79,8 @@ contract DeployAccounts is Script {
         //     Same proxy pattern, different implementation.
         //     Blocks ETH transfers when locked for mempool rate limit benefits.
 
-        bytes memory highRateBytecode = accountConfig.computeERC1167Bytecode(highRateImpl);
+        bytes memory highRateBytecode =
+            abi.encodePacked(hex"363d3d373d3d3d363d73", highRateImpl, hex"5af43d82803e903d91602b57fd5bf3");
         address highRateAccount = accountConfig.createAccount(bytes32(uint256(2)), highRateBytecode, owners);
 
         console.log("DefaultHighRateAccount: ", highRateAccount);
@@ -109,11 +109,11 @@ contract DeployAccounts is Script {
         console.log("");
         console.log("=== Verification ===");
 
-        (address verifier, uint8 scope) = accountConfig.getOwner(defaultAccount, ownerId);
+        (address verifier, uint8 scope) = accountConfig.getOwnerConfig(defaultAccount, ownerId);
         console.log("DefaultAccount owner verifier:", verifier);
         console.log("DefaultAccount owner scope:   ", scope);
 
-        (verifier, scope) = accountConfig.getOwner(upgradeableAccount, ownerId);
+        (verifier, scope) = accountConfig.getOwnerConfig(upgradeableAccount, ownerId);
         console.log("UpgradeableAccount owner verifier:", verifier);
         console.log("UpgradeableAccount owner scope:   ", scope);
 

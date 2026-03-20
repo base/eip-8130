@@ -28,6 +28,12 @@ contract AccountConfiguration {
         bytes configData; // OwnerConfig for authorize, empty for revoke
     }
 
+    struct AddOwner {
+        address verifier;
+        bytes32 ownerId;
+        uint8 scope;
+    }
+
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // CONSTANTS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -120,7 +126,7 @@ contract AccountConfiguration {
         external
         returns (address account)
     {
-        account = getAddress(userSalt, bytecode, initialOwners);
+        account = computeAddress(userSalt, bytecode, initialOwners);
         if (account.code.length > 0) return account;
 
         require(initialOwners.length > 0);
@@ -171,7 +177,7 @@ contract AccountConfiguration {
         // Compute digest and verify signature
         // Verification only works in context of verifiers so that compute to applying account ownerChanges can be bounded before validating transaction payment
         bytes32 digest =
-            _computeOwnerChangeBatchDigest(account, isCrossChain ? 0 : block.chainid, sequence, ownerChanges);
+            _computeOwnerChangeBatchDigest(account, isCrossChain ? 0 : uint64(block.chainid), sequence, ownerChanges);
         (bool valid,,) = _verify(account, digest, authorization, SCOPE_CONFIG);
         require(valid);
 
@@ -226,7 +232,7 @@ contract AccountConfiguration {
 
     /// @notice Compute the counterfactual address for an account.
     function computeAddress(bytes32 userSalt, bytes calldata bytecode, AddOwner[] calldata initialOwners)
-        external
+        public
         view
         returns (address)
     {
@@ -241,7 +247,7 @@ contract AccountConfiguration {
     // ----------------------------------------------------------------------------------------------------------------
 
     function isOwner(address account, bytes32 ownerId) external view returns (bool) {
-        address verifier = _ownerConfigs[account][ownerId].verifier;
+        address verifier = _ownerConfigs[ownerId][account].verifier;
         return verifier != address(0) && verifier != REVOKED;
     }
 
@@ -266,7 +272,7 @@ contract AccountConfiguration {
         AccountConfig storage config = _accountConfigs[account];
         return (
             block.timestamp < config.unlocksAt,
-            config.unlocksAt != type(uint40).max,
+            config.unlocksAt != 0 && config.unlocksAt != type(uint40).max,
             config.unlocksAt,
             config.unlockDelay
         );
@@ -278,13 +284,13 @@ contract AccountConfiguration {
 
     function getNativeVerifiers()
         external
-        pure
+        view
         returns (address k1, address p256Raw, address p256WebAuthn, address delegate)
     {
         return (K1_VERIFIER, P256_RAW_VERIFIER, P256_WEBAUTHN_VERIFIER, DELEGATE_VERIFIER);
     }
 
-    function getVerifierAddress(uint8 verifierType) public pure returns (address) {
+    function getVerifierAddress(uint8 verifierType) public view returns (address) {
         if (verifierType == 0x01) return K1_VERIFIER;
         if (verifierType == 0x02) return P256_RAW_VERIFIER;
         if (verifierType == 0x03) return P256_WEBAUTHN_VERIFIER;
@@ -304,7 +310,7 @@ contract AccountConfiguration {
         view
         returns (address verifier, uint8 scope)
     {
-        OwnerConfig storage config = _ownerConfigs[account][ownerId];
+        OwnerConfig storage config = _ownerConfigs[ownerId][account];
         verifier = config.verifier;
         scope = config.scope;
         if (verifier == REVOKED) return (address(0), 0);
@@ -340,7 +346,7 @@ contract AccountConfiguration {
         ownerId = IVerifier(verifier).verify(hash, data);
         if (ownerId == bytes32(0)) return (false, bytes32(0), verifier);
 
-        OwnerConfig storage config = _ownerConfigs[account][ownerId];
+        OwnerConfig storage config = _ownerConfigs[ownerId][account];
         address registeredVerifier = config.verifier;
         uint8 scope = config.scope;
 
@@ -373,7 +379,8 @@ contract AccountConfiguration {
     {
         bytes memory ownersPacked;
         for (uint256 i; i < initialOwners.length; i++) {
-            ownersPacked = abi.encodePacked(ownersPacked, initialOwners[i]);
+            ownersPacked =
+                abi.encodePacked(ownersPacked, initialOwners[i].verifier, initialOwners[i].ownerId, initialOwners[i].scope);
         }
         return keccak256(abi.encodePacked(userSalt, keccak256(ownersPacked)));
     }
@@ -413,9 +420,9 @@ contract AccountConfiguration {
 
     function _authorizeOwner(address account, bytes32 ownerId, address verifier, uint8 scope) internal {
         require(verifier != address(0) && verifier != REVOKED);
-        address current = _ownerConfigs[account][ownerId].verifier;
+        address current = _ownerConfigs[ownerId][account].verifier;
         require(current == address(0) || current == REVOKED);
-        _ownerConfigs[account][ownerId] = OwnerConfig({verifier: verifier, scope: scope});
+        _ownerConfigs[ownerId][account] = OwnerConfig({verifier: verifier, scope: scope});
         emit OwnerAuthorized(account, ownerId, verifier, scope);
     }
 
@@ -423,9 +430,9 @@ contract AccountConfiguration {
         (address effectiveVerifier,) = _getEffectiveOwnerConfig(account, ownerId);
         require(effectiveVerifier != address(0));
         if (ownerId == bytes32(bytes20(account))) {
-            _ownerConfigs[account][ownerId] = OwnerConfig({verifier: REVOKED, scope: 0});
+            _ownerConfigs[ownerId][account] = OwnerConfig({verifier: REVOKED, scope: 0});
         } else {
-            delete _ownerConfigs[account][ownerId];
+            delete _ownerConfigs[ownerId][account];
         }
         emit OwnerRevoked(account, ownerId);
     }
@@ -439,7 +446,7 @@ contract AccountConfiguration {
         bytes32[] memory ownerChangeHash = new bytes32[](ownerChanges.length);
         for (uint256 i; i < ownerChanges.length; i++) {
             ownerChangeHash[i] = keccak256(
-                abi.encode(ownerChanges[i].ownerId, ownerChanges[i].changeType, keccak256(ownerChanges[i].changeData))
+                abi.encode(ownerChanges[i].ownerId, ownerChanges[i].changeType, keccak256(ownerChanges[i].configData))
             );
         }
         return keccak256(

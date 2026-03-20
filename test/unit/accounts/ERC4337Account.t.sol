@@ -2,7 +2,7 @@
 pragma solidity ^0.8.30;
 
 import {ERC4337Account, Call, PackedUserOperation} from "../../../src/accounts/BackwardCompatibleERC4337Account.sol";
-import {InitialOwner} from "../../../src/AccountDeployer.sol";
+import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 import {IVerifier} from "../../../src/verifiers/IVerifier.sol";
 
@@ -34,8 +34,8 @@ contract ERC4337AccountTest is AccountConfigurationTest {
         address signer = vm.addr(pk);
         ownerId = bytes32(bytes20(signer));
 
-        InitialOwner[] memory owners = new InitialOwner[](1);
-        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
+        AccountConfiguration.AddOwner[] memory owners = new AccountConfiguration.AddOwner[](1);
+        owners[0] = AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
 
         bytes memory bytecode = _computeERC1167Bytecode(erc4337Implementation);
         account = accountConfiguration.createAccount(bytes32(0), bytecode, owners);

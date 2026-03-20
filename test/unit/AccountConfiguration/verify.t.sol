@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {ConfigOperation} from "../../../src/AccountConfigDigest.sol";
+import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 contract VerifyTest is AccountConfigurationTest {
@@ -44,7 +44,7 @@ contract VerifyTest is AccountConfigurationTest {
     }
 
     function test_verifySignature_revokedOwner() public {
-        (address account, bytes32 ownerOwnerId) = _createK1Account(OWNER_PK);
+        (address account,) = _createK1Account(OWNER_PK);
 
         address newSigner = vm.addr(401);
         bytes32 newOwnerId = bytes32(bytes20(newSigner));
@@ -68,7 +68,7 @@ contract VerifyTest is AccountConfigurationTest {
     }
 
     function test_verifySignature_differentAccounts() public {
-        (address account1, bytes32 ownerId1) = _createK1AccountWithSalt(OWNER_PK, bytes32(uint256(1)));
+        (address account1,) = _createK1AccountWithSalt(OWNER_PK, bytes32(uint256(1)));
         (address account2,) = _createK1AccountWithSalt(OWNER_PK, bytes32(uint256(2)));
 
         bytes32 hash = keccak256("cross-account test");
@@ -82,29 +82,21 @@ contract VerifyTest is AccountConfigurationTest {
         assertTrue(valid2);
     }
 
-    function test_getOwner_returnsVerifierAndScope() public {
+    function test_getOwnerConfig_returnsVerifierAndScope() public {
         (address account, bytes32 ownerId) = _createK1Account(OWNER_PK);
 
-        (address verifier, uint8 scope) = accountConfiguration.getOwner(account, ownerId);
+        (address verifier, uint8 scope) = accountConfiguration.getOwnerConfig(account, ownerId);
         assertEq(verifier, address(k1Verifier));
         assertEq(scope, 0x00);
     }
 
-    function test_getOwner_returnsZeroForUnknownOwner() public {
+    function test_getOwnerConfig_returnsZeroForUnknownOwner() public {
         (address account,) = _createK1Account(OWNER_PK);
 
         bytes32 unknownOwnerId = bytes32(bytes20(vm.addr(999)));
-        (address verifier, uint8 scope) = accountConfiguration.getOwner(account, unknownOwnerId);
+        (address verifier, uint8 scope) = accountConfiguration.getOwnerConfig(account, unknownOwnerId);
         assertEq(verifier, address(0));
         assertEq(scope, 0);
-    }
-
-    function test_computeERC1167Bytecode() public view {
-        bytes memory bytecode = accountConfiguration.computeERC1167Bytecode(defaultAccountImplementation);
-        assertEq(bytecode.length, 45);
-
-        bytes memory expected = _computeERC1167Bytecode(defaultAccountImplementation);
-        assertEq(keccak256(bytecode), keccak256(expected));
     }
 
     function test_verifySignature_scopedOwner_signatureScope() public {
@@ -162,26 +154,30 @@ contract VerifyTest is AccountConfigurationTest {
     function _authorizeOwnerWithScope(address account, uint256 pk, bytes32 newOwnerId, address verifier, uint8 scope)
         internal
     {
-        ConfigOperation[] memory ops = new ConfigOperation[](1);
-        ops[0] = ConfigOperation({opType: 0x01, verifier: verifier, ownerId: newOwnerId, scope: scope});
+        AccountConfiguration.OwnerChange[] memory changes = new AccountConfiguration.OwnerChange[](1);
+        changes[0] = AccountConfiguration.OwnerChange({
+            ownerId: newOwnerId,
+            changeType: 0x01,
+            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: verifier, scope: scope}))
+        });
 
-        uint64 chainId = uint64(block.chainid);
-        uint64 seq = accountConfiguration.getChangeSequence(account, chainId);
-        bytes32 digest = _computeConfigChangeDigest(account, chainId, seq, ops);
+        bool isCrossChain = false;
+        uint64 seq = accountConfiguration.getChangeSequence(account, isCrossChain);
+        bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(pk, digest);
 
-        accountConfiguration.applyConfigChange(account, chainId, seq, ops, auth);
+        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
     }
 
     function _revokeOwner(address account, uint256 pk, bytes32 ownerId) internal {
-        ConfigOperation[] memory ops = new ConfigOperation[](1);
-        ops[0] = ConfigOperation({opType: 0x02, verifier: address(0), ownerId: ownerId, scope: 0});
+        AccountConfiguration.OwnerChange[] memory changes = new AccountConfiguration.OwnerChange[](1);
+        changes[0] = AccountConfiguration.OwnerChange({ownerId: ownerId, changeType: 0x02, configData: ""});
 
-        uint64 chainId = uint64(block.chainid);
-        uint64 seq = accountConfiguration.getChangeSequence(account, chainId);
-        bytes32 digest = _computeConfigChangeDigest(account, chainId, seq, ops);
+        bool isCrossChain = false;
+        uint64 seq = accountConfiguration.getChangeSequence(account, isCrossChain);
+        bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(pk, digest);
 
-        accountConfiguration.applyConfigChange(account, chainId, seq, ops, auth);
+        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
     }
 }

@@ -3,7 +3,7 @@ pragma solidity ^0.8.30;
 
 import {DefaultHighRateAccount} from "../../../src/accounts/DefaultHighRateAccount.sol";
 import {Call} from "../../../src/accounts/DefaultAccount.sol";
-import {InitialOwner} from "../../../src/AccountDeployer.sol";
+import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 contract HighRateMockTarget {
@@ -23,8 +23,6 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
     HighRateMockTarget public target;
     address public highRateImplementation;
 
-    bytes32 constant LOCK_TYPEHASH = keccak256("Lock(address account,uint32 unlockDelay)");
-
     function setUp() public override {
         super.setUp();
         target = new HighRateMockTarget();
@@ -35,17 +33,16 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
         address signer = vm.addr(pk);
         ownerId = bytes32(bytes20(signer));
 
-        InitialOwner[] memory owners = new InitialOwner[](1);
-        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
+        AccountConfiguration.AddOwner[] memory owners = new AccountConfiguration.AddOwner[](1);
+        owners[0] = AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
 
         bytes memory bytecode = _computeERC1167Bytecode(highRateImplementation);
         account = accountConfiguration.createAccount(bytes32(uint256(0xbeef)), bytecode, owners);
     }
 
-    function _lockAccount(address account, uint256 pk, uint32 unlockDelay) internal {
-        bytes32 digest = keccak256(abi.encode(LOCK_TYPEHASH, account, unlockDelay));
-        bytes memory auth = _buildK1Auth(pk, digest);
-        accountConfiguration.lock(account, unlockDelay, auth);
+    function _lockAccount(address account, uint24 unlockDelay) internal {
+        vm.prank(account);
+        accountConfiguration.lock(unlockDelay);
     }
 
     function _singleCall(address t, uint256 v, bytes memory d) internal pure returns (Call[] memory calls) {
@@ -113,7 +110,7 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
         (address account,) = _createHighRateK1Account(OWNER_PK);
         vm.deal(account, 1 ether);
 
-        _lockAccount(account, OWNER_PK, 1 hours);
+        _lockAccount(account, 1 hours);
 
         vm.prank(account);
         vm.expectRevert();
@@ -124,7 +121,7 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
     function test_executeBatch_allowsZeroValueCallsWhenLocked() public {
         (address account,) = _createHighRateK1Account(OWNER_PK);
 
-        _lockAccount(account, OWNER_PK, 1 hours);
+        _lockAccount(account, 1 hours);
 
         vm.prank(account);
         DefaultHighRateAccount(payable(account))

@@ -1,64 +1,75 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {InitialOwner} from "../AccountDeployer.sol";
-import {ConfigOperation} from "../AccountConfigDigest.sol";
-
 /// @notice Reference interface for the EIP-8130 Account Configuration system contract.
 interface IAccountConfig {
-    struct Owner {
+    struct AddOwner {
         address verifier;
         bytes32 ownerId;
-        uint8 scope; // 0x00 = unrestricted
+        uint8 scope;
+    }
+
+    struct OwnerConfig {
+        address verifier;
+        uint8 scope;
+    }
+
+    struct OwnerChange {
+        bytes32 ownerId;
+        uint8 changeType;
+        bytes configData;
     }
 
     event OwnerAuthorized(address indexed account, bytes32 indexed ownerId, address verifier, uint8 scope);
     event OwnerRevoked(address indexed account, bytes32 indexed ownerId);
     event AccountCreated(address indexed account, bytes32 userSalt, bytes32 codeHash);
-    event ChangeApplied(address indexed account, uint64 sequence);
-    event AccountLocked(address indexed account, uint32 unlockDelay);
-    event UnlockRequested(address indexed account, uint32 effectiveAt);
-    event AccountUnlocked(address indexed account);
+    event SequenceConsumed(address indexed account, bool isMultichain, uint64 sequence);
+    event AccountLocked(address indexed account, uint24 unlockDelay);
+    event AccountUnlockInitiated(address indexed account, uint40 unlocksAt);
 
-    // Account creation (factory)
-    function createAccount(bytes32 userSalt, bytes calldata bytecode, InitialOwner[] calldata initialOwners)
+    // Account creation
+    function createAccount(bytes32 userSalt, bytes calldata bytecode, AddOwner[] calldata initialOwners)
         external
         returns (address);
-    function getAddress(bytes32 userSalt, bytes calldata bytecode, InitialOwner[] calldata initialOwners)
+    function computeAddress(bytes32 userSalt, bytes calldata bytecode, AddOwner[] calldata initialOwners)
         external
         view
         returns (address);
 
-    // Portable owner changes (direct verification via owner_config, isValidSignature fallback for migration)
-    function applyConfigChange(
-        address account,
-        uint64 chainId,
-        uint64 sequence,
-        ConfigOperation[] calldata operations,
-        bytes calldata authorizerAuth
-    ) external;
-    function getChangeSequence(address account, uint64 chainId) external view returns (uint64);
+    // Direct owner management (msg.sender)
+    function authorizeOwner(bytes32 ownerId, address verifier, uint8 scope) external;
+    function revokeOwner(bytes32 ownerId) external;
 
-    // Account lock (authorized via isValidSignature on the account)
-    function lock(address account, uint32 unlockDelay, bytes calldata signature) external;
-    function requestUnlock(address account, bytes calldata signature) external;
-    function unlock(address account, bytes calldata signature) external;
+    // Authorized owner changes (any owner with CONFIG scope)
+    function applyOwnerChanges(
+        address account,
+        bool isCrossChain,
+        OwnerChange[] calldata ownerChanges,
+        bytes calldata authorization
+    ) external;
+    function getChangeSequence(address account, bool isCrossChain) external view returns (uint64);
+
+    // Account lock (msg.sender based)
+    function lock(uint24 unlockDelay) external;
+    function initiateUnlock() external;
 
     // Read functions
-    function getOwner(address account, bytes32 ownerId) external view returns (address verifier, uint8 scope);
-    function getLockState(address account)
+    function getOwnerConfig(address account, bytes32 ownerId) external view returns (address verifier, uint8 scope);
+    function isOwner(address account, bytes32 ownerId) external view returns (bool);
+    function isLocked(address account) external view returns (bool);
+    function getLockStatus(address account)
         external
         view
-        returns (bool locked, uint32 unlockDelay, uint32 unlockRequestedAt);
+        returns (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint24 unlockDelay);
 
-    // Native verifiers (immutable, updated only via protocol upgrade)
+    // Native verifiers
     function getNativeVerifiers()
         external
         view
         returns (address k1, address p256Raw, address p256WebAuthn, address delegate);
     function getVerifierAddress(uint8 verifierType) external view returns (address);
 
-    // Signature verification (checks SIGNATURE scope bit, includes implicit EOA rule)
+    // Signature verification
     function verifySignature(address account, bytes32 hash, bytes calldata auth)
         external
         view

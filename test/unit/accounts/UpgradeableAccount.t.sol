@@ -5,7 +5,7 @@ import {UpgradeableAccount} from "../../../src/accounts/UpgradeableAccount.sol";
 import {UpgradeableProxy} from "../../../src/accounts/UpgradeableProxy.sol";
 import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
 import {Call} from "../../../src/accounts/DefaultAccount.sol";
-import {InitialOwner} from "../../../src/AccountDeployer.sol";
+import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 contract MockTarget {
@@ -50,8 +50,8 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         address signer = vm.addr(pk);
         ownerId = bytes32(bytes20(signer));
 
-        InitialOwner[] memory owners = new InitialOwner[](1);
-        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
+        AccountConfiguration.AddOwner[] memory owners = new AccountConfiguration.AddOwner[](1);
+        owners[0] = AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
 
         bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
         account = accountConfiguration.createAccount(bytes32(0), proxyBytecode, owners);
@@ -84,11 +84,11 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         address signer = vm.addr(OWNER_PK);
         bytes32 ownerId = bytes32(bytes20(signer));
 
-        InitialOwner[] memory owners = new InitialOwner[](1);
-        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
+        AccountConfiguration.AddOwner[] memory owners = new AccountConfiguration.AddOwner[](1);
+        owners[0] = AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
 
         bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
-        address predicted = accountConfiguration.getAddress(bytes32(0), proxyBytecode, owners);
+        address predicted = accountConfiguration.computeAddress(bytes32(0), proxyBytecode, owners);
 
         (address actual,) = _createUpgradeableAccount(OWNER_PK);
         assertEq(actual, predicted);

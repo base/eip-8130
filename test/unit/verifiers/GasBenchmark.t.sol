@@ -4,7 +4,6 @@ pragma solidity ^0.8.30;
 import {Test, console} from "forge-std/Test.sol";
 
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
-import {InitialOwner} from "../../../src/AccountDeployer.sol";
 import {DefaultAccount} from "../../../src/accounts/DefaultAccount.sol";
 import {IVerifier} from "../../../src/verifiers/IVerifier.sol";
 import {K1Verifier} from "../../../src/verifiers/K1Verifier.sol";
@@ -66,12 +65,12 @@ contract GasBenchmarkTest is Test {
             uint256 pkA = 0xA001;
             address signerA = vm.addr(pkA);
             bytes32 ownerIdA = bytes32(bytes20(signerA));
-            InitialOwner[] memory ownersA = new InitialOwner[](1);
-            ownersA[0] = InitialOwner({verifier: address(k1), ownerId: ownerIdA, scope: 0x00});
+            AccountConfiguration.AddOwner[] memory ownersA = new AccountConfiguration.AddOwner[](1);
+            ownersA[0] = AccountConfiguration.AddOwner({verifier: address(k1), ownerId: ownerIdA, scope: 0x00});
             bytes memory bytecode =
                 abi.encodePacked(hex"363d3d373d3d3d363d73", defaultImpl, hex"5af43d82803e903d91602b57fd5bf3");
             config.createAccount(bytes32("benchA"), bytecode, ownersA);
-            address accountA = config.getAddress(bytes32("benchA"), bytecode, ownersA);
+            address accountA = config.computeAddress(bytes32("benchA"), bytecode, ownersA);
             (uint8 v, bytes32 r, bytes32 s) = vm.sign(pkA, testHash);
             delegateData = abi.encodePacked(accountA, uint8(0x01), abi.encodePacked(r, s, v));
         }
