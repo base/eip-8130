@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {DefaultAccount, Call} from "../../../src/accounts/DefaultAccount.sol";
+import {DefaultAccount, Call, EXTERNAL_CALLER_VERIFIER} from "../../../src/accounts/DefaultAccount.sol";
+import {InitialOwner} from "../../../src/AccountDeployer.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 contract MockTarget {
@@ -30,42 +31,46 @@ contract DefaultAccountTest is AccountConfigurationTest {
         calls[0] = Call(t, v, d);
     }
 
-    // ── Caller management ──
+    /// @dev Creates account with a K1 owner + an external caller authorized via EXTERNAL_CALLER_VERIFIER.
+    function _createK1AccountWithExternalCaller(uint256 pk, address caller)
+        internal
+        returns (address account, bytes32 ownerId)
+    {
+        address signer = vm.addr(pk);
+        ownerId = bytes32(bytes20(signer));
+        bytes32 callerOwnerId = bytes32(bytes20(caller));
+        address ecv = EXTERNAL_CALLER_VERIFIER;
+
+        InitialOwner[] memory owners = new InitialOwner[](2);
+
+        if (ownerId < callerOwnerId) {
+            owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
+            owners[1] = InitialOwner({verifier: ecv, ownerId: callerOwnerId, scope: 0x00});
+        } else {
+            owners[0] = InitialOwner({verifier: ecv, ownerId: callerOwnerId, scope: 0x00});
+            owners[1] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
+        }
+
+        bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
+        account = accountConfiguration.createAccount(bytes32(uint256(0xaa)), bytecode, owners);
+    }
+
+    // ── Caller authorization ──
 
     function test_selfIsAlwaysAuthorized() public {
         (address account,) = _createK1Account(OWNER_PK);
         assertTrue(DefaultAccount(payable(account)).isAuthorizedCaller(account));
     }
 
-    function test_authorizeCaller_success() public {
-        (address account,) = _createK1Account(OWNER_PK);
+    function test_externalCallerAuthorized() public {
         address policyManager = address(0xBBBB);
-
-        vm.prank(account);
-        DefaultAccount(payable(account)).authorizeCaller(policyManager);
-
+        (address account,) = _createK1AccountWithExternalCaller(OWNER_PK, policyManager);
         assertTrue(DefaultAccount(payable(account)).isAuthorizedCaller(policyManager));
     }
 
-    function test_authorizeCaller_revertsFromNonSelf() public {
+    function test_unregisteredCallerNotAuthorized() public {
         (address account,) = _createK1Account(OWNER_PK);
-
-        vm.prank(address(0xdead));
-        vm.expectRevert();
-        DefaultAccount(payable(account)).authorizeCaller(address(0xBBBB));
-    }
-
-    function test_revokeCaller_success() public {
-        (address account,) = _createK1Account(OWNER_PK);
-        address policyManager = address(0xBBBB);
-
-        vm.prank(account);
-        DefaultAccount(payable(account)).authorizeCaller(policyManager);
-
-        vm.prank(account);
-        DefaultAccount(payable(account)).revokeCaller(policyManager);
-
-        assertFalse(DefaultAccount(payable(account)).isAuthorizedCaller(policyManager));
+        assertFalse(DefaultAccount(payable(account)).isAuthorizedCaller(address(0xdead)));
     }
 
     // ── executeBatch ──
@@ -106,12 +111,9 @@ contract DefaultAccountTest is AccountConfigurationTest {
         assertEq(target2.value(), 20);
     }
 
-    function test_executeBatch_fromAuthorizedCaller() public {
-        (address account,) = _createK1Account(OWNER_PK);
+    function test_executeBatch_fromExternalCaller() public {
         address policyManager = address(0xBBBB);
-
-        vm.prank(account);
-        DefaultAccount(payable(account)).authorizeCaller(policyManager);
+        (address account,) = _createK1AccountWithExternalCaller(OWNER_PK, policyManager);
 
         vm.prank(policyManager);
         DefaultAccount(payable(account))

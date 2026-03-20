@@ -4,7 +4,7 @@ pragma solidity ^0.8.30;
 import {UpgradeableAccount} from "../../../src/accounts/UpgradeableAccount.sol";
 import {UpgradeableProxy} from "../../../src/accounts/UpgradeableProxy.sol";
 import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
-import {Call} from "../../../src/accounts/DefaultAccount.sol";
+import {Call, EXTERNAL_CALLER_VERIFIER} from "../../../src/accounts/DefaultAccount.sol";
 import {InitialOwner} from "../../../src/AccountDeployer.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
@@ -57,6 +57,29 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         account = accountConfiguration.createAccount(bytes32(0), proxyBytecode, owners);
     }
 
+    function _createUpgradeableAccountWithExternalCaller(uint256 pk, address caller)
+        internal
+        returns (address account, bytes32 ownerId)
+    {
+        address signer = vm.addr(pk);
+        ownerId = bytes32(bytes20(signer));
+        bytes32 callerOwnerId = bytes32(bytes20(caller));
+        address ecv = EXTERNAL_CALLER_VERIFIER;
+
+        InitialOwner[] memory owners = new InitialOwner[](2);
+
+        if (ownerId < callerOwnerId) {
+            owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
+            owners[1] = InitialOwner({verifier: ecv, ownerId: callerOwnerId, scope: 0x00});
+        } else {
+            owners[0] = InitialOwner({verifier: ecv, ownerId: callerOwnerId, scope: 0x00});
+            owners[1] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
+        }
+
+        bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
+        account = accountConfiguration.createAccount(bytes32(uint256(0xcc)), proxyBytecode, owners);
+    }
+
     function _singleCall(address t, uint256 v, bytes memory d) internal pure returns (Call[] memory calls) {
         calls = new Call[](1);
         calls[0] = Call(t, v, d);
@@ -94,42 +117,22 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         assertEq(actual, predicted);
     }
 
-    // ── Caller management ──
+    // ── Caller authorization ──
 
     function test_selfIsAlwaysAuthorized() public {
         (address account,) = _createUpgradeableAccount(OWNER_PK);
         assertTrue(UpgradeableAccount(payable(account)).isAuthorizedCaller(account));
     }
 
-    function test_authorizeCaller_success() public {
-        (address account,) = _createUpgradeableAccount(OWNER_PK);
+    function test_externalCallerAuthorized() public {
         address policyManager = address(0xBBBB);
-
-        vm.prank(account);
-        UpgradeableAccount(payable(account)).authorizeCaller(policyManager);
-
+        (address account,) = _createUpgradeableAccountWithExternalCaller(OWNER_PK, policyManager);
         assertTrue(UpgradeableAccount(payable(account)).isAuthorizedCaller(policyManager));
     }
 
-    function test_authorizeCaller_revertsFromNonSelf() public {
+    function test_unregisteredCallerNotAuthorized() public {
         (address account,) = _createUpgradeableAccount(OWNER_PK);
-
-        vm.prank(address(0xdead));
-        vm.expectRevert();
-        UpgradeableAccount(payable(account)).authorizeCaller(address(0xBBBB));
-    }
-
-    function test_revokeCaller_success() public {
-        (address account,) = _createUpgradeableAccount(OWNER_PK);
-        address policyManager = address(0xBBBB);
-
-        vm.prank(account);
-        UpgradeableAccount(payable(account)).authorizeCaller(policyManager);
-
-        vm.prank(account);
-        UpgradeableAccount(payable(account)).revokeCaller(policyManager);
-
-        assertFalse(UpgradeableAccount(payable(account)).isAuthorizedCaller(policyManager));
+        assertFalse(UpgradeableAccount(payable(account)).isAuthorizedCaller(address(0xdead)));
     }
 
     // ── executeBatch ──
@@ -155,12 +158,9 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         assertEq(address(target).balance, 0.5 ether);
     }
 
-    function test_executeBatch_fromAuthorizedCaller() public {
-        (address account,) = _createUpgradeableAccount(OWNER_PK);
+    function test_executeBatch_fromExternalCaller() public {
         address policyManager = address(0xBBBB);
-
-        vm.prank(account);
-        UpgradeableAccount(payable(account)).authorizeCaller(policyManager);
+        (address account,) = _createUpgradeableAccountWithExternalCaller(OWNER_PK, policyManager);
 
         vm.prank(policyManager);
         UpgradeableAccount(payable(account))
@@ -200,12 +200,9 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         assertEq(UpgradeableAccountV2(payable(account)).isValidSignature(bytes32(0), ""), bytes4(0xdeadbeef));
     }
 
-    function test_upgrade_preservesState() public {
-        (address account,) = _createUpgradeableAccount(OWNER_PK);
+    function test_upgrade_preservesCallerAuth() public {
         address policyManager = address(0xBBBB);
-
-        vm.prank(account);
-        UpgradeableAccount(payable(account)).authorizeCaller(policyManager);
+        (address account,) = _createUpgradeableAccountWithExternalCaller(OWNER_PK, policyManager);
 
         UpgradeableAccountV2 v2Impl = new UpgradeableAccountV2(address(accountConfiguration));
 

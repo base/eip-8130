@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {ERC4337Account, Call, PackedUserOperation} from "../../../src/accounts/BackwardCompatibleERC4337Account.sol";
+import {ERC4337Account, PackedUserOperation} from "../../../src/accounts/BackwardCompatibleERC4337Account.sol";
+import {Call} from "../../../src/accounts/DefaultAccount.sol";
 import {InitialOwner} from "../../../src/AccountDeployer.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
-import {IVerifier} from "../../../src/verifiers/IVerifier.sol";
 
 contract MockTarget {
     uint256 public value;
@@ -60,7 +60,7 @@ contract ERC4337AccountTest is AccountConfigurationTest {
         });
     }
 
-    // ── EntryPoint is always authorized ──
+    // ── Caller authorization ──
 
     function test_entryPointIsAlwaysAuthorized() public {
         (address account,) = _create4337Account(OWNER_PK);
@@ -72,37 +72,9 @@ contract ERC4337AccountTest is AccountConfigurationTest {
         assertTrue(ERC4337Account(payable(account)).isAuthorizedCaller(account));
     }
 
-    // ── Caller management ──
-
-    function test_authorizeCaller_success() public {
+    function test_unregisteredCallerNotAuthorized() public {
         (address account,) = _create4337Account(OWNER_PK);
-        address policyManager = address(0xBBBB);
-
-        vm.prank(account);
-        ERC4337Account(payable(account)).authorizeCaller(policyManager);
-
-        assertTrue(ERC4337Account(payable(account)).isAuthorizedCaller(policyManager));
-    }
-
-    function test_authorizeCaller_revertsFromNonSelf() public {
-        (address account,) = _create4337Account(OWNER_PK);
-
-        vm.prank(address(0xdead));
-        vm.expectRevert();
-        ERC4337Account(payable(account)).authorizeCaller(address(0xBBBB));
-    }
-
-    function test_revokeCaller_success() public {
-        (address account,) = _create4337Account(OWNER_PK);
-        address policyManager = address(0xBBBB);
-
-        vm.prank(account);
-        ERC4337Account(payable(account)).authorizeCaller(policyManager);
-
-        vm.prank(account);
-        ERC4337Account(payable(account)).revokeCaller(policyManager);
-
-        assertFalse(ERC4337Account(payable(account)).isAuthorizedCaller(policyManager));
+        assertFalse(ERC4337Account(payable(account)).isAuthorizedCaller(address(0xdead)));
     }
 
     // ── executeBatch ──

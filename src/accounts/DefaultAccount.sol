@@ -11,49 +11,26 @@ struct Call {
     bytes data;
 }
 
+/// @dev Sentinel address for external caller authorization. No contract exists here —
+///      if the protocol ever calls verify() on it, the call naturally fails.
+///      Deterministic across all chains (hash-derived, no deployment needed).
+address constant EXTERNAL_CALLER_VERIFIER = address(uint160(uint256(keccak256("externalCaller"))));
+
 /// @notice Default account implementation for EIP-8130.
 ///         Deployed behind ERC-1167 minimal proxy (45 bytes, deterministic pattern).
 ///
 ///         With direct dispatch, the protocol sends calls to `to` addresses with `msg.sender = from`.
 ///         This contract handles ETH transfers (via self-call) and batched operations.
 ///
-///         Supports Account Policies (https://github.com/base/account-policies) via a caller
-///         allowlist. The PolicyManager is added as an authorized caller, giving it execution
-///         capability on the account while policies define the authorization semantics.
-///
-///         Caller authorization:
+///         Caller authorization via AccountConfiguration:
 ///           - address(this) is always authorized (hardcoded) — covers 8130 direct dispatch
-///           - Additional callers managed via authorizeCaller/revokeCaller (self-call only)
+///           - External callers (EntryPoints, PolicyManagers) are registered as owners
+///             with EXTERNAL_CALLER_VERIFIER as the verifier in AccountConfiguration
 contract DefaultAccount is Receiver {
     AccountConfiguration public immutable ACCOUNT_CONFIGURATION;
 
-    mapping(address => bool) internal _authorizedCallers;
-
-    event CallerAuthorized(address indexed caller);
-    event CallerRevoked(address indexed caller);
-
     constructor(address accountConfiguration) {
         ACCOUNT_CONFIGURATION = AccountConfiguration(accountConfiguration);
-    }
-
-    // ══════════════════════════════════════════════
-    //  CALLER MANAGEMENT (self-call only)
-    // ══════════════════════════════════════════════
-
-    function authorizeCaller(address caller) external {
-        require(msg.sender == address(this));
-        _authorizedCallers[caller] = true;
-        emit CallerAuthorized(caller);
-    }
-
-    function revokeCaller(address caller) external {
-        require(msg.sender == address(this));
-        delete _authorizedCallers[caller];
-        emit CallerRevoked(caller);
-    }
-
-    function isAuthorizedCaller(address caller) external view returns (bool) {
-        return _isAuthorizedCaller(caller);
     }
 
     // ══════════════════════════════════════════════
@@ -83,10 +60,20 @@ contract DefaultAccount is Receiver {
     }
 
     // ══════════════════════════════════════════════
+    //  VIEW
+    // ══════════════════════════════════════════════
+
+    function isAuthorizedCaller(address caller) external view returns (bool) {
+        return _isAuthorizedCaller(caller);
+    }
+
+    // ══════════════════════════════════════════════
     //  INTERNALS
     // ══════════════════════════════════════════════
 
-    function _isAuthorizedCaller(address caller) internal view returns (bool) {
-        return caller == address(this) || _authorizedCallers[caller];
+    function _isAuthorizedCaller(address caller) internal view virtual returns (bool) {
+        if (caller == address(this)) return true;
+        (address verifier,) = ACCOUNT_CONFIGURATION.getOwner(address(this), bytes32(bytes20(caller)));
+        return verifier == EXTERNAL_CALLER_VERIFIER;
     }
 }
