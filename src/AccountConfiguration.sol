@@ -52,14 +52,14 @@ contract AccountConfiguration {
     );
 
     // ----------------------------------------------------------------------------------------------------------------
-    // OPERATIONS
+    // OWNER CHANGE TYPES
     // ----------------------------------------------------------------------------------------------------------------
 
-    uint8 constant OP_AUTHORIZE_OWNER = 0x01;
-    uint8 constant OP_REVOKE_OWNER = 0x02;
+    uint8 constant AUTHORIZE_OWNER = 0x01;
+    uint8 constant REVOKE_OWNER = 0x02;
 
     // ----------------------------------------------------------------------------------------------------------------
-    // SCOPES
+    // OWNER SCOPES
     // ----------------------------------------------------------------------------------------------------------------
 
     uint8 constant SCOPE_SIGNATURE = 0x01;
@@ -90,9 +90,9 @@ contract AccountConfiguration {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     event AccountCreated(address indexed account, bytes32 userSalt, bytes32 codeHash);
-    event OwnerAuthorized(address indexed account, bytes32 indexed ownerId, address verifier, uint8 scope);
+    event OwnerAuthorized(address indexed account, bytes32 indexed ownerId, OwnerConfig config);
     event OwnerRevoked(address indexed account, bytes32 indexed ownerId);
-    event SequenceConsumed(address indexed account, bool isMultichain, uint64 sequence);
+    event SequenceConsumed(address indexed account, bool isCrossChain, uint64 sequence);
     event AccountLocked(address indexed account, uint24 unlockDelay);
     event AccountUnlockInitiated(address indexed account, uint40 unlocksAt);
 
@@ -101,10 +101,7 @@ contract AccountConfiguration {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     modifier onlyUnlocked(address account) {
-        uint40 unlocksAt = _accountConfigs[account].unlocksAt;
-        if (block.timestamp < unlocksAt) revert();
-        // reset lock storage if we have passed unlocksAt
-        _accountConfigs[account].unlocksAt = 0;
+        if (_isLockedSideEffects(account)) revert();
         _;
     }
 
@@ -139,9 +136,9 @@ contract AccountConfiguration {
 
         // Create account
         bytes memory deploymentCode = _buildDeploymentCode(bytecode);
-        bytes32 effectiveSalt = _computeDeploymentSalt(userSalt, initialOwners);
+        bytes32 deploymentSalt = _computeDeploymentSalt(userSalt, initialOwners);
         assembly {
-            pop(create2(0, add(deploymentCode, 0x20), mload(deploymentCode), effectiveSalt))
+            pop(create2(0, add(deploymentCode, 0x20), mload(deploymentCode), deploymentSalt))
         }
         emit AccountCreated(account, userSalt, keccak256(bytecode));
     }
@@ -182,10 +179,10 @@ contract AccountConfiguration {
 
         // Apply ownerChanges
         for (uint256 i; i < ownerChanges.length; i++) {
-            if (ownerChanges[i].changeType == OP_AUTHORIZE_OWNER) {
+            if (ownerChanges[i].changeType == AUTHORIZE_OWNER) {
                 OwnerConfig memory config = abi.decode(ownerChanges[i].configData, (OwnerConfig));
                 _authorizeOwner(account, ownerChanges[i].ownerId, config);
-            } else if (ownerChanges[i].changeType == OP_REVOKE_OWNER) {
+            } else if (ownerChanges[i].changeType == REVOKE_OWNER) {
                 _revokeOwner(account, ownerChanges[i].ownerId);
             } else {
                 revert();
@@ -235,9 +232,9 @@ contract AccountConfiguration {
         view
         returns (address)
     {
-        bytes32 effectiveSalt = _computeDeploymentSalt(userSalt, initialOwners);
+        bytes32 deploymentSalt = _computeDeploymentSalt(userSalt, initialOwners);
         bytes32 codeHash = keccak256(_buildDeploymentCode(bytecode));
-        bytes32 create2Hash = keccak256(abi.encodePacked(bytes1(0xFF), address(this), effectiveSalt, codeHash));
+        bytes32 create2Hash = keccak256(abi.encodePacked(bytes1(0xFF), address(this), deploymentSalt, codeHash));
         return address(uint160(uint256(create2Hash)));
     }
 
@@ -314,6 +311,16 @@ contract AccountConfiguration {
         scope = config.scope;
         if (verifier == REVOKED) return (address(0), 0);
         if (verifier == address(0) && ownerId == bytes32(bytes20(account))) return (K1_VERIFIER, 0x00);
+    }
+
+    /// @notice Returns true if the account is locked and clears storage if unlocked
+    /// @dev Side effects to clear locked state
+    function _isLockedSideEffects(address account) internal returns (bool locked) {
+        uint40 unlocksAt = _accountConfigs[account].unlocksAt;
+        if (block.timestamp < unlocksAt) return true;
+        // Account is unlocked, clear storage
+        if (unlocksAt != 0) _accountConfigs[account].unlocksAt = 0;
+        return false;
     }
 
     // ----------------------------------------------------------------------------------------------------------------
@@ -423,7 +430,7 @@ contract AccountConfiguration {
         address currentVerifier = _ownerConfigs[ownerId][account].verifier;
         require(currentVerifier == address(0) || currentVerifier == REVOKED);
         _ownerConfigs[ownerId][account] = config;
-        emit OwnerAuthorized(account, ownerId, config.verifier, config.scope);
+        emit OwnerAuthorized(account, ownerId, config);
     }
 
     function _revokeOwner(address account, bytes32 ownerId) internal {
