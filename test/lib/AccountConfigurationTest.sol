@@ -4,8 +4,6 @@ pragma solidity ^0.8.30;
 import {Test} from "forge-std/Test.sol";
 
 import {AccountConfiguration} from "../../src/AccountConfiguration.sol";
-import {InitialOwner} from "../../src/AccountDeployer.sol";
-import {ConfigOperation} from "../../src/AccountConfigDigest.sol";
 import {IVerifier} from "../../src/verifiers/IVerifier.sol";
 import {K1Verifier} from "../../src/verifiers/K1Verifier.sol";
 import {P256Verifier} from "../../src/verifiers/P256Verifier.sol";
