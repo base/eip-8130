@@ -10,8 +10,8 @@ contract CreateAccountTest is AccountConfigurationTest {
         address owner = vm.addr(pk);
         bytes32 ownerId = bytes32(bytes20(owner));
 
-        AccountConfiguration.AddOwner[] memory owners = new AccountConfiguration.AddOwner[](1);
-        owners[0] = AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
+        AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
+        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address account = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
@@ -29,13 +29,13 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 ownerId1 = bytes32(bytes20(owner1));
         bytes32 ownerId2 = bytes32(bytes20(owner2));
 
-        AccountConfiguration.AddOwner[] memory owners = new AccountConfiguration.AddOwner[](2);
+        AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](2);
         if (ownerId1 < ownerId2) {
-            owners[0] = AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: ownerId1, scope: 0x00});
-            owners[1] = AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: ownerId2, scope: 0x00});
+            owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId1, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})});
+            owners[1] = AccountConfiguration.InitializeOwner({ownerId: ownerId2, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})});
         } else {
-            owners[0] = AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: ownerId2, scope: 0x00});
-            owners[1] = AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: ownerId1, scope: 0x00});
+            owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId2, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})});
+            owners[1] = AccountConfiguration.InitializeOwner({ownerId: ownerId1, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})});
         }
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
@@ -52,8 +52,8 @@ contract CreateAccountTest is AccountConfigurationTest {
         address owner = vm.addr(1);
         bytes32 ownerId = bytes32(bytes20(owner));
 
-        AccountConfiguration.AddOwner[] memory owners = new AccountConfiguration.AddOwner[](1);
-        owners[0] = AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
+        AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
+        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address predicted = accountConfiguration.computeAddress(bytes32(0), bytecode, owners);
@@ -66,8 +66,8 @@ contract CreateAccountTest is AccountConfigurationTest {
         address owner = vm.addr(1);
         bytes32 ownerId = bytes32(bytes20(owner));
 
-        AccountConfiguration.AddOwner[] memory owners = new AccountConfiguration.AddOwner[](1);
-        owners[0] = AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
+        AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
+        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address first = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
@@ -86,9 +86,9 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 smaller = ownerId1 < ownerId2 ? ownerId1 : ownerId2;
         bytes32 larger = ownerId1 < ownerId2 ? ownerId2 : ownerId1;
 
-        AccountConfiguration.AddOwner[] memory owners = new AccountConfiguration.AddOwner[](2);
-        owners[0] = AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: larger, scope: 0x00});
-        owners[1] = AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: smaller, scope: 0x00});
+        AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](2);
+        owners[0] = AccountConfiguration.InitializeOwner({ownerId: larger, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})});
+        owners[1] = AccountConfiguration.InitializeOwner({ownerId: smaller, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         vm.expectRevert();
@@ -96,7 +96,7 @@ contract CreateAccountTest is AccountConfigurationTest {
     }
 
     function test_createAccount_revertsWithNoOwners() public {
-        AccountConfiguration.AddOwner[] memory owners = new AccountConfiguration.AddOwner[](0);
+        AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](0);
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
 
         vm.expectRevert();
@@ -106,8 +106,8 @@ contract CreateAccountTest is AccountConfigurationTest {
     function test_createAccount_revertsWithZeroVerifier() public {
         bytes32 ownerId = bytes32(uint256(1));
 
-        AccountConfiguration.AddOwner[] memory owners = new AccountConfiguration.AddOwner[](1);
-        owners[0] = AccountConfiguration.AddOwner({verifier: address(0), ownerId: ownerId, scope: 0x00});
+        AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
+        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(0), scope: 0x00})});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         vm.expectRevert();
@@ -118,8 +118,8 @@ contract CreateAccountTest is AccountConfigurationTest {
         address owner = vm.addr(1);
         bytes32 ownerId = bytes32(bytes20(owner));
 
-        AccountConfiguration.AddOwner[] memory owners = new AccountConfiguration.AddOwner[](1);
-        owners[0] = AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x03});
+        AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
+        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x03})});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address account = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
@@ -140,8 +140,8 @@ contract CreateAccountTest is AccountConfigurationTest {
         address owner = vm.addr(1);
         bytes32 ownerId = bytes32(bytes20(owner));
 
-        AccountConfiguration.AddOwner[] memory owners = new AccountConfiguration.AddOwner[](1);
-        owners[0] = AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
+        AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
+        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address addr1 = accountConfiguration.computeAddress(bytes32(uint256(1)), bytecode, owners);

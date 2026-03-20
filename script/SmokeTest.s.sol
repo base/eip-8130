@@ -45,8 +45,8 @@ contract SmokeTest is Script {
         internal
         returns (address)
     {
-        AccountConfiguration.AddOwner[] memory owners = new AccountConfiguration.AddOwner[](1);
-        owners[0] = AccountConfiguration.AddOwner({ownerId: ownerId, verifier: k1Verifier, scope: 0x00});
+        AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
+        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: k1Verifier, scope: 0x00})});
 
         bytes memory bytecode =
             abi.encodePacked(hex"363d3d373d3d3d363d73", defaultImpl, hex"5af43d82803e903d91602b57fd5bf3");

@@ -22,16 +22,15 @@ contract AccountConfiguration {
         uint8 scope; // 0x00 = unrestricted
     }
 
+    struct InitializeOwner {
+        bytes32 ownerId;
+        OwnerConfig config;
+    }
+
     struct OwnerChange {
         bytes32 ownerId;
         uint8 changeType; // 0x01 = authorizeOwner, 0x02 = revokeOwner
         bytes configData; // OwnerConfig for authorize, empty for revoke
-    }
-
-    struct AddOwner {
-        address verifier;
-        bytes32 ownerId;
-        uint8 scope;
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -122,7 +121,7 @@ contract AccountConfiguration {
 
     /// @notice Deploy a new account with initial owners configured using safe defaults.
     ///         Initial owners are always unrestricted (scope = 0x00).
-    function createAccount(bytes32 userSalt, bytes calldata bytecode, AddOwner[] calldata initialOwners)
+    function createAccount(bytes32 userSalt, bytes calldata bytecode, InitializeOwner[] calldata initialOwners)
         external
         returns (address account)
     {
@@ -135,12 +134,12 @@ contract AccountConfiguration {
         for (uint256 i; i < initialOwners.length; i++) {
             require(initialOwners[i].ownerId > previousOwnerId);
             previousOwnerId = initialOwners[i].ownerId;
-            _authorizeOwner(account, initialOwners[i].ownerId, initialOwners[i].verifier, initialOwners[i].scope);
+            _authorizeOwner(account, initialOwners[i].ownerId, initialOwners[i].config);
         }
 
         // Create account
         bytes memory deploymentCode = _buildDeploymentCode(bytecode);
-        bytes32 effectiveSalt = _computeEffectiveSalt(userSalt, initialOwners);
+        bytes32 effectiveSalt = _computeDeploymentSalt(userSalt, initialOwners);
         assembly {
             pop(create2(0, add(deploymentCode, 0x20), mload(deploymentCode), effectiveSalt))
         }
@@ -152,8 +151,8 @@ contract AccountConfiguration {
     // ----------------------------------------------------------------------------------------------------------------
 
     /// @notice Authorize an owner to the account.
-    function authorizeOwner(bytes32 ownerId, address verifier, uint8 scope) external onlyUnlocked(msg.sender) {
-        _authorizeOwner(msg.sender, ownerId, verifier, scope);
+    function authorizeOwner(bytes32 ownerId, OwnerConfig calldata config) external onlyUnlocked(msg.sender) {
+        _authorizeOwner(msg.sender, ownerId, config);
     }
 
     /// @notice Revoke an owner from the account.
@@ -185,7 +184,7 @@ contract AccountConfiguration {
         for (uint256 i; i < ownerChanges.length; i++) {
             if (ownerChanges[i].changeType == OP_AUTHORIZE_OWNER) {
                 OwnerConfig memory config = abi.decode(ownerChanges[i].configData, (OwnerConfig));
-                _authorizeOwner(account, ownerChanges[i].ownerId, config.verifier, config.scope);
+                _authorizeOwner(account, ownerChanges[i].ownerId, config);
             } else if (ownerChanges[i].changeType == OP_REVOKE_OWNER) {
                 _revokeOwner(account, ownerChanges[i].ownerId);
             } else {
@@ -231,12 +230,12 @@ contract AccountConfiguration {
     }
 
     /// @notice Compute the counterfactual address for an account.
-    function computeAddress(bytes32 userSalt, bytes calldata bytecode, AddOwner[] calldata initialOwners)
+    function computeAddress(bytes32 userSalt, bytes calldata bytecode, InitializeOwner[] calldata initialOwners)
         public
         view
         returns (address)
     {
-        bytes32 effectiveSalt = _computeEffectiveSalt(userSalt, initialOwners);
+        bytes32 effectiveSalt = _computeDeploymentSalt(userSalt, initialOwners);
         bytes32 codeHash = keccak256(_buildDeploymentCode(bytecode));
         bytes32 create2Hash = keccak256(abi.encodePacked(bytes1(0xFF), address(this), effectiveSalt, codeHash));
         return address(uint160(uint256(create2Hash)));
@@ -372,15 +371,16 @@ contract AccountConfiguration {
     // ACCOUNT CREATION
     // ----------------------------------------------------------------------------------------------------------------
 
-    function _computeEffectiveSalt(bytes32 userSalt, AddOwner[] calldata initialOwners)
+    function _computeDeploymentSalt(bytes32 userSalt, InitializeOwner[] calldata initialOwners)
         internal
         pure
         returns (bytes32)
     {
         bytes memory ownersPacked;
         for (uint256 i; i < initialOwners.length; i++) {
-            ownersPacked =
-                abi.encodePacked(ownersPacked, initialOwners[i].verifier, initialOwners[i].ownerId, initialOwners[i].scope);
+            ownersPacked = abi.encodePacked(
+                ownersPacked, initialOwners[i].ownerId, initialOwners[i].config.verifier, initialOwners[i].config.scope
+            );
         }
         return keccak256(abi.encodePacked(userSalt, keccak256(ownersPacked)));
     }
@@ -418,12 +418,12 @@ contract AccountConfiguration {
     // OWNER CHANGES
     // ----------------------------------------------------------------------------------------------------------------
 
-    function _authorizeOwner(address account, bytes32 ownerId, address verifier, uint8 scope) internal {
-        require(verifier != address(0) && verifier != REVOKED);
-        address current = _ownerConfigs[ownerId][account].verifier;
-        require(current == address(0) || current == REVOKED);
-        _ownerConfigs[ownerId][account] = OwnerConfig({verifier: verifier, scope: scope});
-        emit OwnerAuthorized(account, ownerId, verifier, scope);
+    function _authorizeOwner(address account, bytes32 ownerId, OwnerConfig memory config) internal {
+        require(config.verifier != address(0) && config.verifier != REVOKED);
+        address currentVerifier = _ownerConfigs[ownerId][account].verifier;
+        require(currentVerifier == address(0) || currentVerifier == REVOKED);
+        _ownerConfigs[ownerId][account] = config;
+        emit OwnerAuthorized(account, ownerId, config.verifier, config.scope);
     }
 
     function _revokeOwner(address account, bytes32 ownerId) internal {

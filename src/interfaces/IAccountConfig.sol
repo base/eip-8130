@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 /// @notice Reference interface for the EIP-8130 Account Configuration system contract.
 interface IAccountConfig {
-    struct AddOwner {
+    struct InitializeOwner {
         address verifier;
         bytes32 ownerId;
         uint8 scope;
@@ -28,10 +28,10 @@ interface IAccountConfig {
     event AccountUnlockInitiated(address indexed account, uint40 unlocksAt);
 
     // Account creation
-    function createAccount(bytes32 userSalt, bytes calldata bytecode, AddOwner[] calldata initialOwners)
+    function createAccount(bytes32 userSalt, bytes calldata bytecode, InitializeOwner[] calldata initialOwners)
         external
         returns (address);
-    function computeAddress(bytes32 userSalt, bytes calldata bytecode, AddOwner[] calldata initialOwners)
+    function computeAddress(bytes32 userSalt, bytes calldata bytecode, InitializeOwner[] calldata initialOwners)
         external
         view
         returns (address);

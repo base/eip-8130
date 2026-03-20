@@ -65,8 +65,8 @@ contract GasBenchmarkTest is Test {
             uint256 pkA = 0xA001;
             address signerA = vm.addr(pkA);
             bytes32 ownerIdA = bytes32(bytes20(signerA));
-            AccountConfiguration.AddOwner[] memory ownersA = new AccountConfiguration.AddOwner[](1);
-            ownersA[0] = AccountConfiguration.AddOwner({verifier: address(k1), ownerId: ownerIdA, scope: 0x00});
+            AccountConfiguration.InitializeOwner[] memory ownersA = new AccountConfiguration.InitializeOwner[](1);
+            ownersA[0] = AccountConfiguration.InitializeOwner({ownerId: ownerIdA, config: AccountConfiguration.OwnerConfig({verifier: address(k1), scope: 0x00})});
             bytes memory bytecode =
                 abi.encodePacked(hex"363d3d373d3d3d363d73", defaultImpl, hex"5af43d82803e903d91602b57fd5bf3");
             config.createAccount(bytes32("benchA"), bytecode, ownersA);

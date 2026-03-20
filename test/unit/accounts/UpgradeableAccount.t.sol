@@ -50,8 +50,8 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         address signer = vm.addr(pk);
         ownerId = bytes32(bytes20(signer));
 
-        AccountConfiguration.AddOwner[] memory owners = new AccountConfiguration.AddOwner[](1);
-        owners[0] = AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
+        AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
+        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})});
 
         bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
         account = accountConfiguration.createAccount(bytes32(0), proxyBytecode, owners);
@@ -84,8 +84,8 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         address signer = vm.addr(OWNER_PK);
         bytes32 ownerId = bytes32(bytes20(signer));
 
-        AccountConfiguration.AddOwner[] memory owners = new AccountConfiguration.AddOwner[](1);
-        owners[0] = AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
+        AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
+        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})});
 
         bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
         address predicted = accountConfiguration.computeAddress(bytes32(0), proxyBytecode, owners);

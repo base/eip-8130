@@ -15,23 +15,25 @@ contract DelegateVerifierTest is AccountConfigurationTest {
         bytes32 delegatorOwnerId = bytes32(bytes20(delegateSigner));
         bytes32 delegateRefOwnerId = bytes32(bytes20(delegateAccount));
 
-        AccountConfiguration.AddOwner[] memory owners = new AccountConfiguration.AddOwner[](2);
+        AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](2);
         if (delegatorOwnerId < delegateRefOwnerId) {
-            owners[0] =
-                AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: delegatorOwnerId, scope: 0x00});
-            owners[1] = AccountConfiguration.AddOwner({
-                verifier: address(delegateVerifier),
+            owners[0] = AccountConfiguration.InitializeOwner({
+                ownerId: delegatorOwnerId,
+                config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})
+            });
+            owners[1] = AccountConfiguration.InitializeOwner({
                 ownerId: delegateRefOwnerId,
-                scope: 0x00
+                config: AccountConfiguration.OwnerConfig({verifier: address(delegateVerifier), scope: 0x00})
             });
         } else {
-            owners[0] = AccountConfiguration.AddOwner({
-                verifier: address(delegateVerifier),
+            owners[0] = AccountConfiguration.InitializeOwner({
                 ownerId: delegateRefOwnerId,
-                scope: 0x00
+                config: AccountConfiguration.OwnerConfig({verifier: address(delegateVerifier), scope: 0x00})
             });
-            owners[1] =
-                AccountConfiguration.AddOwner({verifier: address(k1Verifier), ownerId: delegatorOwnerId, scope: 0x00});
+            owners[1] = AccountConfiguration.InitializeOwner({
+                ownerId: delegatorOwnerId,
+                config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})
+            });
         }
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
@@ -70,16 +72,20 @@ contract DelegateVerifierTest is AccountConfigurationTest {
         (address accountA,) = _createK1Account(DELEGATE_PK);
 
         bytes32 delegateRefA = bytes32(bytes20(accountA));
-        AccountConfiguration.AddOwner[] memory ownersB = new AccountConfiguration.AddOwner[](1);
-        ownersB[0] =
-            AccountConfiguration.AddOwner({verifier: address(delegateVerifier), ownerId: delegateRefA, scope: 0x00});
+        AccountConfiguration.InitializeOwner[] memory ownersB = new AccountConfiguration.InitializeOwner[](1);
+        ownersB[0] = AccountConfiguration.InitializeOwner({
+            ownerId: delegateRefA,
+            config: AccountConfiguration.OwnerConfig({verifier: address(delegateVerifier), scope: 0x00})
+        });
         bytes memory bytecodeB = _computeERC1167Bytecode(defaultAccountImplementation);
         address accountB = accountConfiguration.createAccount(bytes32(uint256(10)), bytecodeB, ownersB);
 
         bytes32 delegateRefB = bytes32(bytes20(accountB));
-        AccountConfiguration.AddOwner[] memory ownersC = new AccountConfiguration.AddOwner[](1);
-        ownersC[0] =
-            AccountConfiguration.AddOwner({verifier: address(delegateVerifier), ownerId: delegateRefB, scope: 0x00});
+        AccountConfiguration.InitializeOwner[] memory ownersC = new AccountConfiguration.InitializeOwner[](1);
+        ownersC[0] = AccountConfiguration.InitializeOwner({
+            ownerId: delegateRefB,
+            config: AccountConfiguration.OwnerConfig({verifier: address(delegateVerifier), scope: 0x00})
+        });
         bytes memory bytecodeC = _computeERC1167Bytecode(defaultAccountImplementation);
         accountConfiguration.createAccount(bytes32(uint256(20)), bytecodeC, ownersC);
 
