@@ -8,15 +8,13 @@ import {InitialOwner} from "../../../src/AccountDeployer.sol";
 import {DefaultAccount} from "../../../src/accounts/DefaultAccount.sol";
 import {IVerifier} from "../../../src/verifiers/IVerifier.sol";
 import {K1Verifier} from "../../../src/verifiers/K1Verifier.sol";
-import {K1Sandbox} from "../../../src/verifiers/sandbox/K1Verifier.sol";
 import {P256Verifier} from "../../../src/verifiers/P256Verifier.sol";
-import {P256Sandbox} from "../../../src/verifiers/sandbox/P256Verifier.sol";
 import {WebAuthnVerifier} from "../../../src/verifiers/WebAuthnVerifier.sol";
 import {DelegateVerifier} from "../../../src/verifiers/DelegateVerifier.sol";
 
 /// @dev Measures verifier gas under two conditions:
 ///      - Cold: first call (includes 2600 cold account access)
-///      - Warm: second call (100 warm access — closer to sandbox execution)
+///      - Warm: second call (100 warm access)
 ///
 ///      Run:  forge test --match-contract GasBenchmarkTest -vv
 ///      Trace: forge test --match-contract GasBenchmarkTest -vvvv
@@ -27,8 +25,6 @@ contract GasBenchmarkTest is Test {
     DelegateVerifier delegate;
     AccountConfiguration config;
     address defaultImpl;
-    address k1Sandbox;
-    address p256Sandbox;
 
     // Pre-built test data
     bytes k1Sig;
@@ -45,8 +41,6 @@ contract GasBenchmarkTest is Test {
         config = new AccountConfiguration(address(k1), address(p256), address(webAuthn), address(0));
         delegate = new DelegateVerifier(address(config));
         defaultImpl = address(new DefaultAccount(address(config)));
-        k1Sandbox = K1Sandbox.deploy(bytes32(0));
-        p256Sandbox = P256Sandbox.deploy(bytes32(uint256(1)));
 
         testHash = keccak256("benchmark");
 
@@ -93,36 +87,12 @@ contract GasBenchmarkTest is Test {
         emit log_named_uint("K1Verifier.verify (warm)", gasUsed);
     }
 
-    function test_gasK1Sandbox() public {
-        bytes memory cd = abi.encodeWithSelector(IVerifier.verify.selector, testHash, k1Sig);
-        k1Sandbox.staticcall(cd); // warm up
-        uint256 gas0 = gasleft();
-        (bool ok, bytes memory ret) = k1Sandbox.staticcall(cd);
-        uint256 gasUsed = gas0 - gasleft();
-        require(ok, "K1Sandbox call failed");
-        bytes32 ownerId = abi.decode(ret, (bytes32));
-        assertEq(ownerId, expectedK1OwnerId, "K1Sandbox ownerId mismatch");
-        emit log_named_uint("K1Sandbox.verify (warm)", gasUsed);
-    }
-
     function test_gasP256Verifier() public {
         p256.verify(testHash, p256Data); // warm up
         uint256 gas0 = gasleft();
         p256.verify(testHash, p256Data);
         uint256 gasUsed = gas0 - gasleft();
         emit log_named_uint("P256Verifier.verify (warm)", gasUsed);
-    }
-
-    function test_gasP256Sandbox() public {
-        bytes memory cd = abi.encodeWithSelector(IVerifier.verify.selector, testHash, p256Data);
-        p256Sandbox.staticcall(cd); // warm up
-        uint256 gas0 = gasleft();
-        (bool ok, bytes memory ret) = p256Sandbox.staticcall(cd);
-        uint256 gasUsed = gas0 - gasleft();
-        require(ok, "P256Sandbox call failed");
-        bytes32 ownerId = abi.decode(ret, (bytes32));
-        assertEq(ownerId, expectedP256OwnerId, "P256Sandbox ownerId mismatch");
-        emit log_named_uint("P256Sandbox.verify (warm)", gasUsed);
     }
 
     function test_gasDelegateVerifier() public {
@@ -142,7 +112,7 @@ contract GasBenchmarkTest is Test {
         console.log("  Verifier                Cold      Warm     Precompile");
         console.log("  ---------------------------------------------------------");
 
-        // K1 Verifier (Solidity)
+        // K1 Verifier
         {
             uint256 g0 = gasleft();
             k1.verify(testHash, k1Sig);
@@ -153,19 +123,7 @@ contract GasBenchmarkTest is Test {
             console.log("  K1Verifier              %s     %s    ecrecover (3000)", _pad(cold), _pad(warm));
         }
 
-        // K1 Sandbox (hand-written)
-        {
-            bytes memory cd = abi.encodeWithSelector(IVerifier.verify.selector, testHash, k1Sig);
-            uint256 g0 = gasleft();
-            k1Sandbox.staticcall(cd);
-            uint256 cold = g0 - gasleft();
-            g0 = gasleft();
-            k1Sandbox.staticcall(cd);
-            uint256 warm = g0 - gasleft();
-            console.log("  K1Sandbox               %s     %s    ecrecover (3000)", _pad(cold), _pad(warm));
-        }
-
-        // P256 Verifier (Solidity)
+        // P256 Verifier
         {
             uint256 g0 = gasleft();
             p256.verify(testHash, p256Data);
@@ -174,18 +132,6 @@ contract GasBenchmarkTest is Test {
             p256.verify(testHash, p256Data);
             uint256 warm = g0 - gasleft();
             console.log("  P256Verifier            %s     %s    P256VERIFY (6900)", _pad(cold), _pad(warm));
-        }
-
-        // P256 Sandbox (hand-written)
-        {
-            bytes memory cd = abi.encodeWithSelector(IVerifier.verify.selector, testHash, p256Data);
-            uint256 g0 = gasleft();
-            p256Sandbox.staticcall(cd);
-            uint256 cold = g0 - gasleft();
-            g0 = gasleft();
-            p256Sandbox.staticcall(cd);
-            uint256 warm = g0 - gasleft();
-            console.log("  P256Sandbox             %s     %s    P256VERIFY (6900)", _pad(cold), _pad(warm));
         }
 
         // Delegate Verifier
@@ -202,8 +148,7 @@ contract GasBenchmarkTest is Test {
         console.log("  ---------------------------------------------------------");
         console.log("");
         console.log("  Cold = first call (includes 2600 cold account access)");
-        console.log("  Warm = second call (100 warm access, closer to sandbox)");
-        console.log("  Sandbox overhead = Warm - STATICCALL base (100) - precompile");
+        console.log("  Warm = second call (100 warm access)");
         console.log("");
     }
 

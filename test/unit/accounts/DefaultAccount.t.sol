@@ -30,6 +30,44 @@ contract DefaultAccountTest is AccountConfigurationTest {
         calls[0] = Call(t, v, d);
     }
 
+    // ── Caller management ──
+
+    function test_selfIsAlwaysAuthorized() public {
+        (address account,) = _createK1Account(OWNER_PK);
+        assertTrue(DefaultAccount(payable(account)).isAuthorizedCaller(account));
+    }
+
+    function test_authorizeCaller_success() public {
+        (address account,) = _createK1Account(OWNER_PK);
+        address policyManager = address(0xBBBB);
+
+        vm.prank(account);
+        DefaultAccount(payable(account)).authorizeCaller(policyManager);
+
+        assertTrue(DefaultAccount(payable(account)).isAuthorizedCaller(policyManager));
+    }
+
+    function test_authorizeCaller_revertsFromNonSelf() public {
+        (address account,) = _createK1Account(OWNER_PK);
+
+        vm.prank(address(0xdead));
+        vm.expectRevert();
+        DefaultAccount(payable(account)).authorizeCaller(address(0xBBBB));
+    }
+
+    function test_revokeCaller_success() public {
+        (address account,) = _createK1Account(OWNER_PK);
+        address policyManager = address(0xBBBB);
+
+        vm.prank(account);
+        DefaultAccount(payable(account)).authorizeCaller(policyManager);
+
+        vm.prank(account);
+        DefaultAccount(payable(account)).revokeCaller(policyManager);
+
+        assertFalse(DefaultAccount(payable(account)).isAuthorizedCaller(policyManager));
+    }
+
     // ── executeBatch ──
 
     function test_executeBatch_success() public {
@@ -68,7 +106,21 @@ contract DefaultAccountTest is AccountConfigurationTest {
         assertEq(target2.value(), 20);
     }
 
-    function test_executeBatch_revertsFromNonSelf() public {
+    function test_executeBatch_fromAuthorizedCaller() public {
+        (address account,) = _createK1Account(OWNER_PK);
+        address policyManager = address(0xBBBB);
+
+        vm.prank(account);
+        DefaultAccount(payable(account)).authorizeCaller(policyManager);
+
+        vm.prank(policyManager);
+        DefaultAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (77))));
+
+        assertEq(target.value(), 77);
+    }
+
+    function test_executeBatch_revertsFromUnauthorizedCaller() public {
         (address account,) = _createK1Account(OWNER_PK);
 
         vm.prank(address(0xdead));

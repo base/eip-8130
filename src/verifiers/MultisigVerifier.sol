@@ -15,7 +15,7 @@ import {IVerifier} from "./IVerifier.sol";
 ///                 || sigs (sigCount × 65, each: r (32) || s (32) || v (1))
 ///                 Signatures MUST be ordered by ascending recovered address.
 ///
-///         Only calls the ecrecover precompile (0x01) — sandbox-compatible.
+///         Only calls the ecrecover precompile (0x01).
 contract MultisigVerifier is IVerifier {
     function verify(bytes32 hash, bytes calldata data) external pure returns (bytes32 ownerId) {
         require(data.length >= 2);

@@ -24,7 +24,7 @@ import {IVerifier} from "./IVerifier.sol";
 ///
 ///         Public inputs for the circuit: [hash, extraInputs[0], …, extraInputs[k-1]]
 ///
-///         Uses ecAdd (0x06), ecMul (0x07), ecPairing (0x08) — sandbox-compatible.
+///         Uses ecAdd (0x06), ecMul (0x07), ecPairing (0x08).
 ///
 ///         NOTE: For production use, deploy per-circuit verifiers with hardcoded
 ///         VKs to avoid the calldata overhead of passing the VK every transaction.
