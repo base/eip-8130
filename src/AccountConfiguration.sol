@@ -37,10 +37,6 @@ contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
     ///      implicit EOA authorization rule. Non-self ownerIds are deleted back to address(0).
     address constant REVOKED = address(1);
 
-    bytes32 constant LOCK_TYPEHASH = keccak256("Lock(address account,uint32 unlockDelay)");
-    bytes32 constant REQUEST_UNLOCK_TYPEHASH = keccak256("RequestUnlock(address account)");
-    bytes32 constant UNLOCK_TYPEHASH = keccak256("Unlock(address account)");
-
     // ──────────────────────────────────────────────
     //  Native Verifier Immutables
     // ──────────────────────────────────────────────
@@ -155,7 +151,7 @@ contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
 
     /// @notice Lock the account to freeze owner configuration. Anyone can call; authorization via signature.
     function lock(address account, uint32 unlockDelay, bytes calldata signature) external {
-        bytes32 digest = keccak256(abi.encode(LOCK_TYPEHASH, account, unlockDelay));
+        bytes32 digest = _computeLockDigest(account, unlockDelay);
         _requireIsValidSignature(account, digest, signature);
 
         AccountLock storage l = _accountLocks[account];
@@ -168,7 +164,7 @@ contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
 
     /// @notice Request to unlock the account. Starts the timelock.
     function requestUnlock(address account, bytes calldata signature) external {
-        bytes32 digest = keccak256(abi.encode(REQUEST_UNLOCK_TYPEHASH, account));
+        bytes32 digest = _computeRequestUnlockDigest(account);
         _requireIsValidSignature(account, digest, signature);
 
         AccountLock storage l = _accountLocks[account];
@@ -179,7 +175,7 @@ contract AccountConfiguration is AccountConfigDigest, AccountDeployer {
 
     /// @notice Complete the unlock after the timelock has elapsed.
     function unlock(address account, bytes calldata signature) external {
-        bytes32 digest = keccak256(abi.encode(UNLOCK_TYPEHASH, account));
+        bytes32 digest = _computeUnlockDigest(account);
         _requireIsValidSignature(account, digest, signature);
 
         AccountLock storage l = _accountLocks[account];
