@@ -195,7 +195,9 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
 
         address newSigner = vm.addr(NEW_OWNER_PK);
         bytes32 secondOwnerId = bytes32(bytes20(newSigner));
-        _authorizeOwnerWithScope(account, OWNER_PK, secondOwnerId, address(k1Verifier), 0x04);
+        _authorizeOwnerWithScope(
+            account, OWNER_PK, secondOwnerId, address(k1Verifier), accountConfiguration.SCOPE_CHANGE_OWNERS()
+        );
 
         bytes32 thirdOwnerId = bytes32(bytes20(vm.addr(302)));
         AccountConfiguration.OwnerChange[] memory changes = new AccountConfiguration.OwnerChange[](1);

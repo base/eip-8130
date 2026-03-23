@@ -14,7 +14,7 @@ contract AccountConfiguration {
     struct AccountState {
         uint64 ownerChangeSequence;
         uint40 unlocksAt;
-        uint24 unlockDelay;
+        uint16 unlockDelay;
     }
 
     struct OwnerConfig {
@@ -42,15 +42,12 @@ contract AccountConfiguration {
     // CONSTANTS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    INativeVerifiers constant NATIVE_VERIFIERS_PRECOMPILE =
-        INativeVerifiers(0x0000000000000000000000000000000000008130);
-
     /// @dev Sentinel for the self-ownerId (ownerId == bytes32(bytes20(account))) to distinguish
     ///      "explicitly revoked" from "never registered" (address(0)).
-    address constant REVOKED = address(type(uint160).max);
+    address public constant REVOKED = address(type(uint160).max);
 
     /// @dev Typehash for OwnerChangeBatch, NOT compliant with EIP-712 to mitigate phishing attacks.
-    bytes32 constant OWNER_CHANGE_BATCH_TYPEHASH = keccak256(
+    bytes32 public constant OWNER_CHANGE_BATCH_TYPEHASH = keccak256(
         "OwnerChangeBatch(address account,uint64 chainId,uint64 sequence,OwnerChange[] ownerChanges)"
         "OwnerChange(bytes32 ownerId,uint8 changeType,bytes changeData)"
     );
@@ -60,23 +57,26 @@ contract AccountConfiguration {
     // ----------------------------------------------------------------------------------------------------------------
 
     /// @notice Authorize an owner to the account
-    uint8 constant AUTHORIZE_OWNER = 0x01;
+    uint8 public constant AUTHORIZE_OWNER = 0x01;
 
     /// @notice Revoke an owner from the account
-    uint8 constant REVOKE_OWNER = 0x02;
+    uint8 public constant REVOKE_OWNER = 0x02;
 
     // ----------------------------------------------------------------------------------------------------------------
     // OWNER ELEVATED SCOPES
     // ----------------------------------------------------------------------------------------------------------------
 
+    /// @notice Owner can sign arbitrary messages with account
+    uint8 public constant SCOPE_SIGNER = 0x01;
+
     /// @notice Owner can initiate transactions with account as sender
-    uint8 constant SCOPE_SENDER = 0x01;
+    uint8 public constant SCOPE_SENDER = 0x02;
 
     /// @notice Owner can pay for transactions with account as payer
-    uint8 constant SCOPE_PAYER = 0x02;
+    uint8 public constant SCOPE_PAYER = 0x04;
 
     /// @notice Owner can change account owners
-    uint8 constant SCOPE_CHANGE_OWNERS = 0x04;
+    uint8 public constant SCOPE_CHANGE_OWNERS = 0x08;
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // STORAGE
@@ -97,7 +97,7 @@ contract AccountConfiguration {
     event OwnerAuthorized(address indexed account, bytes32 indexed ownerId, OwnerConfig config);
     event OwnerRevoked(address indexed account, bytes32 indexed ownerId);
     event AppliedSignedOwnerChanges(address indexed account, uint64 sequence);
-    event AccountLocked(address indexed account, uint24 unlockDelay);
+    event AccountLocked(address indexed account, uint16 unlockDelay);
     event AccountUnlockInitiated(address indexed account, uint40 unlocksAt);
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -106,6 +106,11 @@ contract AccountConfiguration {
 
     modifier onlyUnlocked(address account) {
         if (_isLockedSideEffects(account)) revert();
+        _;
+    }
+
+    modifier nonZero(address account) {
+        require(account != address(0));
         _;
     }
 
@@ -151,16 +156,6 @@ contract AccountConfiguration {
     // OWNER CHANGES
     // ----------------------------------------------------------------------------------------------------------------
 
-    /// @notice Authorize an owner to the account.
-    function authorizeOwner(bytes32 ownerId, OwnerConfig calldata config) external onlyUnlocked(msg.sender) {
-        _authorizeOwner(msg.sender, ownerId, config);
-    }
-
-    /// @notice Revoke an owner from the account.
-    function revokeOwner(bytes32 ownerId) external onlyUnlocked(msg.sender) {
-        _revokeOwner(msg.sender, ownerId);
-    }
-
     /// @notice Apply owner changes (owner management only).
     ///         Direct verification via verifier + owner_config, isValidSignature fallback for migration.
     function applySignedOwnerChanges(
@@ -201,7 +196,8 @@ contract AccountConfiguration {
     // ----------------------------------------------------------------------------------------------------------------
 
     /// @notice Lock the account to freeze owner configuration.
-    function lock(uint24 unlockDelay) external onlyUnlocked(msg.sender) {
+    /// @param unlockDelay The delay in seconds before the account can be unlocked (capped at ~18 hours).
+    function lock(uint16 unlockDelay) external onlyUnlocked(msg.sender) {
         // Require non-zero unlock delay
         require(unlockDelay > 0);
 
@@ -236,8 +232,8 @@ contract AccountConfiguration {
         view
         returns (bool verified)
     {
-        verify(account, hash, abi.decode(signature, (Verification)));
-        return true;
+        uint8 scopes = verify(account, hash, abi.decode(signature, (Verification)));
+        return scopes & SCOPE_SIGNER != 0;
     }
 
     /// @notice Verify an account approved a hash using a verification.
@@ -296,7 +292,7 @@ contract AccountConfiguration {
     function getLockStatus(address account)
         external
         view
-        returns (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint24 unlockDelay)
+        returns (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 unlockDelay)
     {
         AccountState storage config = _accountState[account];
         return (
@@ -327,7 +323,7 @@ contract AccountConfiguration {
     // OWNER CHANGES
     // ----------------------------------------------------------------------------------------------------------------
 
-    function _authorizeOwner(address account, bytes32 ownerId, OwnerConfig memory config) internal {
+    function _authorizeOwner(address account, bytes32 ownerId, OwnerConfig memory config) internal nonZero(account) {
         // Must be legitimate verifier
         require(config.verifier != address(0) && config.verifier != REVOKED);
 
@@ -338,7 +334,7 @@ contract AccountConfiguration {
         emit OwnerAuthorized(account, ownerId, config);
     }
 
-    function _revokeOwner(address account, bytes32 ownerId) internal {
+    function _revokeOwner(address account, bytes32 ownerId) internal nonZero(account) {
         // Must be an owner
         require(isOwner(account, ownerId));
 

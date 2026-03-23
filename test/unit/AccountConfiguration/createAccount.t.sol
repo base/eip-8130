@@ -11,7 +11,9 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 ownerId = bytes32(bytes20(owner));
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
+        owners[0] = AccountConfiguration.InitializeOwner({
+            ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+        });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address account = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
@@ -30,11 +32,23 @@ contract CreateAccountTest is AccountConfigurationTest {
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](2);
         if (ownerId1 < ownerId2) {
-            owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId1, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
-            owners[1] = AccountConfiguration.InitializeOwner({ownerId: ownerId2, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
+            owners[0] = AccountConfiguration.InitializeOwner({
+                ownerId: ownerId1,
+                config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+            });
+            owners[1] = AccountConfiguration.InitializeOwner({
+                ownerId: ownerId2,
+                config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+            });
         } else {
-            owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId2, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
-            owners[1] = AccountConfiguration.InitializeOwner({ownerId: ownerId1, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
+            owners[0] = AccountConfiguration.InitializeOwner({
+                ownerId: ownerId2,
+                config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+            });
+            owners[1] = AccountConfiguration.InitializeOwner({
+                ownerId: ownerId1,
+                config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+            });
         }
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
@@ -50,7 +64,9 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 ownerId = bytes32(bytes20(owner));
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
+        owners[0] = AccountConfiguration.InitializeOwner({
+            ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+        });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address predicted = accountConfiguration.computeAddress(bytes32(0), bytecode, owners);
@@ -64,7 +80,9 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 ownerId = bytes32(bytes20(owner));
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
+        owners[0] = AccountConfiguration.InitializeOwner({
+            ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+        });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address first = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
@@ -84,8 +102,12 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 larger = ownerId1 < ownerId2 ? ownerId2 : ownerId1;
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](2);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: larger, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
-        owners[1] = AccountConfiguration.InitializeOwner({ownerId: smaller, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
+        owners[0] = AccountConfiguration.InitializeOwner({
+            ownerId: larger, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+        });
+        owners[1] = AccountConfiguration.InitializeOwner({
+            ownerId: smaller, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+        });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         vm.expectRevert();
@@ -104,7 +126,9 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 ownerId = bytes32(uint256(1));
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(0), scopes: 0x00})});
+        owners[0] = AccountConfiguration.InitializeOwner({
+            ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(0), scopes: 0x00})
+        });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         vm.expectRevert();
@@ -116,7 +140,9 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 ownerId = bytes32(bytes20(owner));
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x03})});
+        owners[0] = AccountConfiguration.InitializeOwner({
+            ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x03})
+        });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address account = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
@@ -125,7 +151,7 @@ contract CreateAccountTest is AccountConfigurationTest {
         assertEq(cfg.verifier, address(k1Verifier));
         assertEq(cfg.scopes, 0x03);
 
-        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint24 unlockDelay) =
+        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 unlockDelay) =
             accountConfiguration.getLockStatus(account);
         assertFalse(locked);
         assertFalse(hasInitiatedUnlock);
@@ -138,7 +164,9 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 ownerId = bytes32(bytes20(owner));
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
+        owners[0] = AccountConfiguration.InitializeOwner({
+            ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+        });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address addr1 = accountConfiguration.computeAddress(bytes32(uint256(1)), bytecode, owners);

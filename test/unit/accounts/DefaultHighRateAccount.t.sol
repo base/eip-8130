@@ -34,13 +34,15 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
         ownerId = bytes32(bytes20(signer));
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
+        owners[0] = AccountConfiguration.InitializeOwner({
+            ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+        });
 
         bytes memory bytecode = _computeERC1167Bytecode(highRateImplementation);
         account = accountConfiguration.createAccount(bytes32(uint256(0xbeef)), bytecode, owners);
     }
 
-    function _lockAccount(address account, uint24 unlockDelay) internal {
+    function _lockAccount(address account, uint16 unlockDelay) internal {
         vm.prank(account);
         accountConfiguration.lock(unlockDelay);
     }
@@ -159,7 +161,8 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
 
         bytes32 hash = keccak256("validate me");
         bytes memory wrongSig = _signDigest(999, hash);
-        bytes memory authData = abi.encode(AccountConfiguration.Verification({ownerId: ownerId, verifierData: wrongSig}));
+        bytes memory authData =
+            abi.encode(AccountConfiguration.Verification({ownerId: ownerId, verifierData: wrongSig}));
 
         bytes4 result = DefaultHighRateAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0xFFFFFFFF));

@@ -7,7 +7,7 @@ import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 contract AccountLockTest is AccountConfigurationTest {
     uint256 constant OWNER_PK = 300;
 
-    function _lockAccount(address account, uint24 unlockDelay) internal {
+    function _lockAccount(address account, uint16 unlockDelay) internal {
         vm.prank(account);
         accountConfiguration.lock(unlockDelay);
     }
@@ -24,7 +24,7 @@ contract AccountLockTest is AccountConfigurationTest {
 
         _lockAccount(account, 1 hours);
 
-        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint24 unlockDelay) =
+        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 unlockDelay) =
             accountConfiguration.getLockStatus(account);
         assertTrue(locked);
         assertFalse(hasInitiatedUnlock);
