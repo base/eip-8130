@@ -70,11 +70,9 @@ contract AccountConfigurationTest is Test {
         return abi.encodePacked(r, s, v);
     }
 
-    /// @dev Build authorizerAuth using custom verifier type (0x00) with embedded address.
-    ///      Uses type 0x00 so tests work without the native verifier precompile at 0x8130.
-    function _buildK1Auth(uint256 pk, bytes32 digest) internal view returns (bytes memory) {
+    function _buildK1Verification(uint256 pk, bytes32 digest) internal view returns (AccountConfiguration.Verification memory) {
         bytes memory sig = _signDigest(pk, digest);
-        return abi.encodePacked(uint8(0x00), address(k1Verifier), sig);
+        return AccountConfiguration.Verification({ownerId: bytes32(bytes20(vm.addr(pk))), verifierData: sig});
     }
 
     // ── Canonical digest computation ──

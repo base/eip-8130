@@ -24,7 +24,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bool isCrossChain = false;
         uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(OWNER_PK, digest);
+        AccountConfiguration.Verification memory auth = _buildK1Verification(OWNER_PK, digest);
 
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
 
@@ -50,7 +50,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bool isCrossChain = false;
         uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(OWNER_PK, digest);
+        AccountConfiguration.Verification memory auth = _buildK1Verification(OWNER_PK, digest);
 
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
 
@@ -74,7 +74,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bool isCrossChain = false;
         uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(OWNER_PK, digest);
+        AccountConfiguration.Verification memory auth = _buildK1Verification(OWNER_PK, digest);
 
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
 
@@ -102,7 +102,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bool isCrossChain = false;
         uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(OWNER_PK, digest);
+        AccountConfiguration.Verification memory auth = _buildK1Verification(OWNER_PK, digest);
 
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
 
@@ -137,7 +137,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bool isCrossChain = false;
         uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(OWNER_PK, digest);
+        AccountConfiguration.Verification memory auth = _buildK1Verification(OWNER_PK, digest);
 
         vm.expectRevert();
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
@@ -160,7 +160,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bool isCrossChain = false;
         uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(NEW_OWNER_PK, digest);
+        AccountConfiguration.Verification memory auth = _buildK1Verification(NEW_OWNER_PK, digest);
 
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
         assertTrue(accountConfiguration.isOwner(account, thirdOwnerId));
@@ -184,7 +184,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bool isCrossChain = false;
         uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(NEW_OWNER_PK, digest);
+        AccountConfiguration.Verification memory auth = _buildK1Verification(NEW_OWNER_PK, digest);
 
         vm.expectRevert();
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
@@ -208,7 +208,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bool isCrossChain = false;
         uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(NEW_OWNER_PK, digest);
+        AccountConfiguration.Verification memory auth = _buildK1Verification(NEW_OWNER_PK, digest);
 
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
         assertTrue(accountConfiguration.isOwner(account, thirdOwnerId));
@@ -227,7 +227,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bool isCrossChain = false;
         uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(OWNER_PK, digest);
+        AccountConfiguration.Verification memory auth = _buildK1Verification(OWNER_PK, digest);
 
         vm.expectRevert();
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
@@ -244,7 +244,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bool isCrossChain = false;
         uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(OWNER_PK, digest);
+        AccountConfiguration.Verification memory auth = _buildK1Verification(OWNER_PK, digest);
 
         vm.expectRevert();
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
@@ -264,7 +264,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
 
-        bytes memory badAuth = _buildK1Auth(999, digest);
+        AccountConfiguration.Verification memory badAuth = _buildK1Verification(999, digest);
 
         vm.expectRevert();
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, badAuth);
@@ -289,7 +289,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bool isCrossChain = false;
         uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(pk, digest);
+        AccountConfiguration.Verification memory auth = _buildK1Verification(pk, digest);
 
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
     }

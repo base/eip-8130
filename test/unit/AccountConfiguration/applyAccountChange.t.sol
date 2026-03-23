@@ -113,7 +113,7 @@ contract AccountLockTest is AccountConfigurationTest {
         bool isCrossChain = false;
         uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(OWNER_PK, digest);
+        AccountConfiguration.Verification memory auth = _buildK1Verification(OWNER_PK, digest);
 
         vm.expectRevert();
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
@@ -144,7 +144,7 @@ contract AccountLockTest is AccountConfigurationTest {
         bool isCrossChain = false;
         uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(OWNER_PK, digest);
+        AccountConfiguration.Verification memory auth = _buildK1Verification(OWNER_PK, digest);
 
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
         assertTrue(accountConfiguration.isOwner(account, bytes32(bytes20(vm.addr(500)))));

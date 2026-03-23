@@ -159,11 +159,11 @@ contract ERC4337AccountTest is AccountConfigurationTest {
     // ── validateUserOp ──
 
     function test_validateUserOp_validSignature() public {
-        (address account,) = _create4337Account(OWNER_PK);
+        (address account, bytes32 ownerId) = _create4337Account(OWNER_PK);
 
         bytes32 userOpHash = keccak256("user-op");
         bytes memory sig = _signDigest(OWNER_PK, userOpHash);
-        bytes memory authData = abi.encodePacked(uint8(0x00), address(k1Verifier), sig);
+        bytes memory authData = abi.encode(AccountConfiguration.Verification({ownerId: ownerId, verifierData: sig}));
 
         PackedUserOperation memory userOp = _buildUserOp(account, authData);
 
@@ -174,11 +174,11 @@ contract ERC4337AccountTest is AccountConfigurationTest {
     }
 
     function test_validateUserOp_invalidSignature() public {
-        (address account,) = _create4337Account(OWNER_PK);
+        (address account, bytes32 ownerId) = _create4337Account(OWNER_PK);
 
         bytes32 userOpHash = keccak256("user-op");
         bytes memory wrongSig = _signDigest(999, userOpHash);
-        bytes memory authData = abi.encodePacked(uint8(0x00), address(k1Verifier), wrongSig);
+        bytes memory authData = abi.encode(AccountConfiguration.Verification({ownerId: ownerId, verifierData: wrongSig}));
 
         PackedUserOperation memory userOp = _buildUserOp(account, authData);
 
@@ -189,11 +189,11 @@ contract ERC4337AccountTest is AccountConfigurationTest {
     }
 
     function test_validateUserOp_revertsFromUnauthorizedCaller() public {
-        (address account,) = _create4337Account(OWNER_PK);
+        (address account, bytes32 ownerId) = _create4337Account(OWNER_PK);
 
         bytes32 userOpHash = keccak256("user-op");
         bytes memory sig = _signDigest(OWNER_PK, userOpHash);
-        bytes memory authData = abi.encodePacked(uint8(0x00), address(k1Verifier), sig);
+        bytes memory authData = abi.encode(AccountConfiguration.Verification({ownerId: ownerId, verifierData: sig}));
 
         PackedUserOperation memory userOp = _buildUserOp(account, authData);
 
@@ -203,12 +203,12 @@ contract ERC4337AccountTest is AccountConfigurationTest {
     }
 
     function test_validateUserOp_paysPrefund() public {
-        (address account,) = _create4337Account(OWNER_PK);
+        (address account, bytes32 ownerId) = _create4337Account(OWNER_PK);
         vm.deal(account, 1 ether);
 
         bytes32 userOpHash = keccak256("user-op");
         bytes memory sig = _signDigest(OWNER_PK, userOpHash);
-        bytes memory authData = abi.encodePacked(uint8(0x00), address(k1Verifier), sig);
+        bytes memory authData = abi.encode(AccountConfiguration.Verification({ownerId: ownerId, verifierData: sig}));
 
         PackedUserOperation memory userOp = _buildUserOp(account, authData);
 
@@ -224,22 +224,22 @@ contract ERC4337AccountTest is AccountConfigurationTest {
     // ── isValidSignature ──
 
     function test_isValidSignature_validK1() public {
-        (address account,) = _create4337Account(OWNER_PK);
+        (address account, bytes32 ownerId) = _create4337Account(OWNER_PK);
 
         bytes32 hash = keccak256("validate me");
         bytes memory sig = _signDigest(OWNER_PK, hash);
-        bytes memory authData = abi.encodePacked(uint8(0x00), address(k1Verifier), sig);
+        bytes memory authData = abi.encode(AccountConfiguration.Verification({ownerId: ownerId, verifierData: sig}));
 
         bytes4 result = ERC4337Account(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0x1626ba7e));
     }
 
     function test_isValidSignature_invalidSignature() public {
-        (address account,) = _create4337Account(OWNER_PK);
+        (address account, bytes32 ownerId) = _create4337Account(OWNER_PK);
 
         bytes32 hash = keccak256("validate me");
         bytes memory wrongSig = _signDigest(999, hash);
-        bytes memory authData = abi.encodePacked(uint8(0x00), address(k1Verifier), wrongSig);
+        bytes memory authData = abi.encode(AccountConfiguration.Verification({ownerId: ownerId, verifierData: wrongSig}));
 
         bytes4 result = ERC4337Account(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0xFFFFFFFF));

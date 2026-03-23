@@ -11,22 +11,25 @@ contract VerifyTest is AccountConfigurationTest {
         (address account, bytes32 ownerId) = _createK1Account(OWNER_PK);
 
         bytes32 hash = keccak256("verify me");
-        bytes memory auth = _buildK1Auth(OWNER_PK, hash);
+        AccountConfiguration.Verification memory v = _buildK1Verification(OWNER_PK, hash);
 
-        (bytes32 returnedOwnerId, AccountConfiguration.OwnerConfig memory cfg) =
-            accountConfiguration.verify(account, hash, auth);
-        assertEq(returnedOwnerId, ownerId);
-        assertEq(cfg.verifier, address(k1Verifier));
+        bytes1 scopes = accountConfiguration.verify(account, hash, v);
+        assertEq(scopes, bytes1(0x00));
+        assertEq(v.ownerId, ownerId);
     }
 
     function test_verify_wrongSignature() public {
-        (address account,) = _createK1Account(OWNER_PK);
+        (address account, bytes32 ownerId) = _createK1Account(OWNER_PK);
 
         bytes32 hash = keccak256("verify me");
-        bytes memory auth = _buildK1Auth(999, hash);
+        // Sign with pk 999 but claim OWNER_PK's ownerId — verifier returns wrong ownerId
+        AccountConfiguration.Verification memory v = AccountConfiguration.Verification({
+            ownerId: ownerId,
+            verifierData: _signDigest(999, hash)
+        });
 
         vm.expectRevert();
-        accountConfiguration.verify(account, hash, auth);
+        accountConfiguration.verify(account, hash, v);
     }
 
     function test_verify_unregisteredOwner() public {
@@ -34,10 +37,10 @@ contract VerifyTest is AccountConfigurationTest {
 
         bytes32 hash = keccak256("verify me");
         // Sign with pk 999 (not registered on this account)
-        bytes memory auth = _buildK1Auth(999, hash);
+        AccountConfiguration.Verification memory v = _buildK1Verification(999, hash);
 
         vm.expectRevert();
-        accountConfiguration.verify(account, hash, auth);
+        accountConfiguration.verify(account, hash, v);
     }
 
     function test_verify_revokedOwner() public {
@@ -50,15 +53,13 @@ contract VerifyTest is AccountConfigurationTest {
         _revokeOwner(account, OWNER_PK, newOwnerId);
 
         bytes32 hash = keccak256("after revoke");
-        bytes memory revokedAuth = _buildK1Auth(401, hash);
+        AccountConfiguration.Verification memory revokedV = _buildK1Verification(401, hash);
 
         vm.expectRevert();
-        accountConfiguration.verify(account, hash, revokedAuth);
+        accountConfiguration.verify(account, hash, revokedV);
 
         // Original owner should still work
-        bytes memory ownerAuth = _buildK1Auth(OWNER_PK, hash);
-        (bytes32 returnedId,) = accountConfiguration.verify(account, hash, ownerAuth);
-        assertEq(returnedId, bytes32(bytes20(vm.addr(OWNER_PK))));
+        accountConfiguration.verify(account, hash, _buildK1Verification(OWNER_PK, hash));
     }
 
     function test_verify_differentAccounts() public {
@@ -66,13 +67,10 @@ contract VerifyTest is AccountConfigurationTest {
         (address account2,) = _createK1AccountWithSalt(OWNER_PK, bytes32(uint256(2)));
 
         bytes32 hash = keccak256("cross-account test");
-        bytes memory auth = _buildK1Auth(OWNER_PK, hash);
+        AccountConfiguration.Verification memory v = _buildK1Verification(OWNER_PK, hash);
 
-        (bytes32 ownerId1,) = accountConfiguration.verify(account1, hash, auth);
-        (bytes32 ownerId2,) = accountConfiguration.verify(account2, hash, auth);
-
-        assertEq(ownerId1, bytes32(bytes20(vm.addr(OWNER_PK))));
-        assertEq(ownerId2, bytes32(bytes20(vm.addr(OWNER_PK))));
+        accountConfiguration.verify(account1, hash, v);
+        accountConfiguration.verify(account2, hash, v);
     }
 
     function test_getOwnerConfig_returnsVerifierAndScopes() public {
@@ -100,12 +98,11 @@ contract VerifyTest is AccountConfigurationTest {
         _authorizeOwnerWithScope(account, OWNER_PK, newOwnerId, address(k1Verifier), 0x01);
 
         bytes32 hash = keccak256("scoped verify");
-        bytes memory auth = _buildK1Auth(401, hash);
+        AccountConfiguration.Verification memory v = _buildK1Verification(401, hash);
 
-        (bytes32 returnedId, AccountConfiguration.OwnerConfig memory cfg) =
-            accountConfiguration.verify(account, hash, auth);
-        assertEq(returnedId, newOwnerId);
-        assertEq(cfg.scopes, 0x01);
+        bytes1 scopes = accountConfiguration.verify(account, hash, v);
+        assertEq(v.ownerId, newOwnerId);
+        assertEq(scopes, bytes1(0x01));
     }
 
     function test_verify_unrestrictedScope() public {
@@ -116,10 +113,10 @@ contract VerifyTest is AccountConfigurationTest {
         _authorizeOwnerWithScope(account, OWNER_PK, newOwnerId, address(k1Verifier), 0x00);
 
         bytes32 hash = keccak256("unrestricted");
-        bytes memory auth = _buildK1Auth(401, hash);
+        AccountConfiguration.Verification memory v = _buildK1Verification(401, hash);
 
-        (bytes32 returnedId,) = accountConfiguration.verify(account, hash, auth);
-        assertEq(returnedId, newOwnerId);
+        bytes1 scopes = accountConfiguration.verify(account, hash, v);
+        assertEq(scopes, bytes1(0x00));
     }
 
     // ── Helpers ──
@@ -141,9 +138,9 @@ contract VerifyTest is AccountConfigurationTest {
         bool isCrossChain = false;
         uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(pk, digest);
+        AccountConfiguration.Verification memory v = _buildK1Verification(pk, digest);
 
-        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
+        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, v);
     }
 
     function _revokeOwner(address account, uint256 pk, bytes32 ownerId) internal {
@@ -153,8 +150,8 @@ contract VerifyTest is AccountConfigurationTest {
         bool isCrossChain = false;
         uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(pk, digest);
+        AccountConfiguration.Verification memory v = _buildK1Verification(pk, digest);
 
-        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
+        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, v);
     }
 }

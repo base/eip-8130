@@ -20,14 +20,17 @@ contract DelegateVerifier is IVerifier {
     }
 
     function verify(bytes32 hash, bytes calldata data) external view returns (bytes32 ownerId) {
-        require(data.length >= 21);
+        require(data.length >= 20);
         address delegate = address(bytes20(data[:20]));
-        bytes calldata nestedAuth = data[20:];
+        bytes calldata nestedData = data[20:];
 
         ownerId = bytes32(bytes20(delegate));
 
-        require(uint8(nestedAuth[0]) != 0x04);
+        AccountConfiguration.Verification memory v = abi.decode(nestedData, (AccountConfiguration.Verification));
 
-        ACCOUNT_CONFIGURATION.verify(delegate, hash, nestedAuth);
+        // Prevent recursive delegation (only 1 hop permitted)
+        require(ACCOUNT_CONFIGURATION.getOwnerConfig(delegate, v.ownerId).verifier != address(this));
+
+        ACCOUNT_CONFIGURATION.verify(delegate, hash, v);
     }
 }

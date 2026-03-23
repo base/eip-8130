@@ -2,6 +2,7 @@
 pragma solidity ^0.8.30;
 
 import {DefaultAccount, Call} from "../../../src/accounts/DefaultAccount.sol";
+import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 contract MockTarget {
@@ -141,22 +142,23 @@ contract DefaultAccountTest is AccountConfigurationTest {
     // ── isValidSignature ──
 
     function test_isValidSignature_validK1() public {
-        (address account,) = _createK1Account(OWNER_PK);
+        (address account, bytes32 ownerId) = _createK1Account(OWNER_PK);
 
         bytes32 hash = keccak256("validate me");
         bytes memory sig = _signDigest(OWNER_PK, hash);
-        bytes memory authData = abi.encodePacked(uint8(0x00), address(k1Verifier), sig);
+        bytes memory authData = abi.encode(AccountConfiguration.Verification({ownerId: ownerId, verifierData: sig}));
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0x1626ba7e));
     }
 
     function test_isValidSignature_invalidSignature() public {
-        (address account,) = _createK1Account(OWNER_PK);
+        (address account, bytes32 ownerId) = _createK1Account(OWNER_PK);
 
         bytes32 hash = keccak256("validate me");
         bytes memory wrongSig = _signDigest(999, hash);
-        bytes memory authData = abi.encodePacked(uint8(0x00), address(k1Verifier), wrongSig);
+        // Correct ownerId but wrong sig — verifier returns wrong ownerId, mismatch fails
+        bytes memory authData = abi.encode(AccountConfiguration.Verification({ownerId: ownerId, verifierData: wrongSig}));
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0xFFFFFFFF));
@@ -167,7 +169,8 @@ contract DefaultAccountTest is AccountConfigurationTest {
 
         bytes32 hash = keccak256("validate me");
         bytes memory sig = _signDigest(999, hash);
-        bytes memory authData = abi.encodePacked(uint8(0x00), address(k1Verifier), sig);
+        // ownerId for key 999 — not registered on account
+        bytes memory authData = abi.encode(AccountConfiguration.Verification({ownerId: bytes32(bytes20(vm.addr(999))), verifierData: sig}));
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0xFFFFFFFF));

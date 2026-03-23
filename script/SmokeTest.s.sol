@@ -70,7 +70,10 @@ contract SmokeTest is Script {
         bytes32 testHash = keccak256("hello EIP-8130");
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(SIGNER_PK, testHash);
 
-        bytes memory auth = abi.encodePacked(uint8(0x01), r, s, v);
-        config.verify(account, testHash, auth);
+        AccountConfiguration.Verification memory verification = AccountConfiguration.Verification({
+            ownerId: bytes32(bytes20(vm.addr(SIGNER_PK))),
+            verifierData: abi.encodePacked(r, s, v)
+        });
+        config.verify(account, testHash, verification);
     }
 }

@@ -33,6 +33,11 @@ contract AccountConfiguration {
         bytes configData; // OwnerConfig for authorize, empty for revoke
     }
 
+    struct Verification {
+        bytes32 ownerId;
+        bytes verifierData;
+    }
+
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // CONSTANTS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -41,8 +46,7 @@ contract AccountConfiguration {
         INativeVerifiers(0x0000000000000000000000000000000000008130);
 
     /// @dev Sentinel for the self-ownerId (ownerId == bytes32(bytes20(account))) to distinguish
-    ///      "explicitly revoked" from "never registered" (address(0)), which would re-trigger the
-    ///      implicit EOA authorization rule. Non-self ownerIds are deleted back to address(0).
+    ///      "explicitly revoked" from "never registered" (address(0)).
     address constant REVOKED = address(type(uint160).max);
 
     /// @dev Typehash for OwnerChangeBatch, NOT compliant with EIP-712 to mitigate phishing attacks.
@@ -163,7 +167,7 @@ contract AccountConfiguration {
         address account,
         bool isCrossChain,
         OwnerChange[] calldata ownerChanges,
-        bytes calldata authorization
+        Verification calldata verification
     ) external onlyUnlocked(account) {
         // Use zero chain id for cross-chain owner changes else just current chain
         uint64 chainId = isCrossChain ? 0 : uint64(block.chainid);
@@ -171,12 +175,12 @@ contract AccountConfiguration {
         // Increment sequence
         uint64 sequence = _accountState[account].ownerChangeSequence++;
 
-        // Compute digest and verify authorization
+        // Compute digest and verify verification
         bytes32 digest = _computeOwnerChangeBatchDigest(account, chainId, sequence, ownerChanges);
-        (, OwnerConfig memory config) = verify(account, digest, authorization);
+        bytes1 scopes = verify(account, digest, verification);
 
         // Require owner has scope to change owners
-        require(config.scopes & SCOPE_CHANGE_OWNERS != 0 || config.scopes == 0);
+        require(uint8(scopes) & SCOPE_CHANGE_OWNERS != 0 || scopes == 0);
 
         // Apply ownerChanges
         for (uint256 i; i < ownerChanges.length; i++) {
@@ -196,7 +200,7 @@ contract AccountConfiguration {
     // ACCOUNT LOCKS
     // ----------------------------------------------------------------------------------------------------------------
 
-    /// @notice Lock the account to freeze owner configuration. Anyone can call; authorization via signature.
+    /// @notice Lock the account to freeze owner configuration.
     function lock(uint24 unlockDelay) external onlyUnlocked(msg.sender) {
         // Require non-zero unlock delay
         require(unlockDelay > 0);
@@ -208,7 +212,7 @@ contract AccountConfiguration {
         emit AccountLocked(msg.sender, unlockDelay);
     }
 
-    /// @notice Request to unlock the account. Starts the timelock.
+    /// @notice Initiate unlock of the account after delay has passed.
     function initiateUnlock() external {
         AccountState storage config = _accountState[msg.sender];
 
@@ -225,43 +229,22 @@ contract AccountConfiguration {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     /// @dev Core verification with scope context checking.
-    ///      Parses verifier type, calls verifier, checks owner_config, and validates scope.
-    function verify(address account, bytes32 hash, bytes calldata authorization)
+    function verify(address account, bytes32 hash, Verification calldata verification)
         public
         view
-        returns (bytes32 ownerId, OwnerConfig memory config)
+        returns (bytes1 scopes)
     {
-        // Authorization must be non-zero
-        require(authorization.length >= 1);
-
-        // Parse verifier type and data
-        uint8 verifierType = uint8(authorization[0]);
-        address verifier;
-        bytes calldata verifierData;
-        if (verifierType == 0) {
-            // Custom verifier type declares verifier address in next 20 bytes of authorization
-            require(authorization.length >= 21);
-            verifier = address(bytes20(authorization[1:21]));
-            verifierData = authorization[21:];
-        } else {
-            // Native verifier type fetches verifier address from precompile
-            verifier = NATIVE_VERIFIERS_PRECOMPILE.getNativeVerifier(verifierType);
-            verifierData = authorization[1:];
-        }
+        OwnerConfig memory config = _ownerConfig[verification.ownerId][account];
 
         // Require verifier is not null
-        require(verifier != address(0));
+        require(config.verifier != address(0));
 
-        // Call verifier and require ownerId is not null (failed authorization)
+        // Call verifier and require ownerId is not null (failed verification)
         // todo: consider where to implement 7739 support
-        ownerId = IVerifier(verifier).verify(hash, verifierData);
-        require(ownerId != bytes32(0));
+        bytes32 ownerId = IVerifier(config.verifier).verify(hash, verification.verifierData);
+        require(ownerId != bytes32(0) && ownerId == verification.ownerId);
 
-        // Require verifier matches owner config
-        config = _ownerConfig[ownerId][account];
-        require(config.verifier == verifier);
-
-        return (ownerId, config);
+        return bytes1(config.scopes);
     }
 
     /// @notice Compute the counterfactual address for an account.

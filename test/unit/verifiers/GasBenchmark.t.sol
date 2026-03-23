@@ -72,7 +72,11 @@ contract GasBenchmarkTest is Test {
             config.createAccount(bytes32("benchA"), bytecode, ownersA);
             address accountA = config.computeAddress(bytes32("benchA"), bytecode, ownersA);
             (uint8 v, bytes32 r, bytes32 s) = vm.sign(pkA, testHash);
-            delegateData = abi.encodePacked(accountA, uint8(0x00), address(k1), abi.encodePacked(r, s, v));
+            AccountConfiguration.Verification memory nestedVerif = AccountConfiguration.Verification({
+                ownerId: ownerIdA,
+                verifierData: abi.encodePacked(r, s, v)
+            });
+            delegateData = abi.encodePacked(accountA, abi.encode(nestedVerif));
         }
     }
 
