@@ -228,8 +228,21 @@ contract AccountConfiguration {
     // VIEW FUNCTIONS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @dev Core verification with scope context checking.
-    function verify(address account, bytes32 hash, Verification calldata verification)
+    /// @notice Verify an account bytes signature.
+    /// @dev Designed for easy account integration with ERC-1271.
+    /// @return verified True if the signature is valid.
+    function verifySignature(address account, bytes32 hash, bytes calldata signature)
+        external
+        view
+        returns (bool verified)
+    {
+        verify(account, hash, abi.decode(signature, (Verification)));
+        return true;
+    }
+
+    /// @notice Verify an account approved a hash using a verification.
+    /// @return scopes The scopes enabled by the verification.
+    function verify(address account, bytes32 hash, Verification memory verification)
         public
         view
         returns (bytes1 scopes)
