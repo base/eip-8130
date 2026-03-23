@@ -26,7 +26,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         AccountConfiguration.Verification memory auth = _buildK1Verification(OWNER_PK, digest);
 
-        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
+        accountConfiguration.applySignedOwnerChanges(account, isCrossChain, changes, auth);
 
         AccountConfiguration.OwnerConfig memory cfg = accountConfiguration.getOwnerConfig(account, newOwnerId);
         assertTrue(cfg.verifier != address(0));
@@ -52,7 +52,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         AccountConfiguration.Verification memory auth = _buildK1Verification(OWNER_PK, digest);
 
-        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
+        accountConfiguration.applySignedOwnerChanges(account, isCrossChain, changes, auth);
 
         AccountConfiguration.OwnerConfig memory cfg = accountConfiguration.getOwnerConfig(account, newOwnerId);
         assertEq(cfg.verifier, address(k1Verifier));
@@ -76,7 +76,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         AccountConfiguration.Verification memory auth = _buildK1Verification(OWNER_PK, digest);
 
-        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
+        accountConfiguration.applySignedOwnerChanges(account, isCrossChain, changes, auth);
 
         assertFalse(accountConfiguration.isOwner(account, newOwnerId));
     }
@@ -104,7 +104,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         AccountConfiguration.Verification memory auth = _buildK1Verification(OWNER_PK, digest);
 
-        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
+        accountConfiguration.applySignedOwnerChanges(account, isCrossChain, changes, auth);
 
         assertTrue(accountConfiguration.isOwner(account, owner1));
         assertTrue(accountConfiguration.isOwner(account, owner2));
@@ -140,7 +140,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         AccountConfiguration.Verification memory auth = _buildK1Verification(OWNER_PK, digest);
 
         vm.expectRevert();
-        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
+        accountConfiguration.applySignedOwnerChanges(account, isCrossChain, changes, auth);
     }
 
     function test_anyOwnerCanAuthorize() public {
@@ -162,7 +162,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         AccountConfiguration.Verification memory auth = _buildK1Verification(NEW_OWNER_PK, digest);
 
-        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
+        accountConfiguration.applySignedOwnerChanges(account, isCrossChain, changes, auth);
         assertTrue(accountConfiguration.isOwner(account, thirdOwnerId));
     }
 
@@ -187,7 +187,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         AccountConfiguration.Verification memory auth = _buildK1Verification(NEW_OWNER_PK, digest);
 
         vm.expectRevert();
-        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
+        accountConfiguration.applySignedOwnerChanges(account, isCrossChain, changes, auth);
     }
 
     function test_scopedOwner_canAuthorizeWithConfigScope() public {
@@ -210,7 +210,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         AccountConfiguration.Verification memory auth = _buildK1Verification(NEW_OWNER_PK, digest);
 
-        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
+        accountConfiguration.applySignedOwnerChanges(account, isCrossChain, changes, auth);
         assertTrue(accountConfiguration.isOwner(account, thirdOwnerId));
     }
 
@@ -230,7 +230,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         AccountConfiguration.Verification memory auth = _buildK1Verification(OWNER_PK, digest);
 
         vm.expectRevert();
-        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
+        accountConfiguration.applySignedOwnerChanges(account, isCrossChain, changes, auth);
     }
 
     function test_revertsOnRevokingNonExistentOwner() public {
@@ -247,7 +247,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         AccountConfiguration.Verification memory auth = _buildK1Verification(OWNER_PK, digest);
 
         vm.expectRevert();
-        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
+        accountConfiguration.applySignedOwnerChanges(account, isCrossChain, changes, auth);
     }
 
     function test_revertsWithInvalidSignature() public {
@@ -267,7 +267,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         AccountConfiguration.Verification memory badAuth = _buildK1Verification(999, digest);
 
         vm.expectRevert();
-        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, badAuth);
+        accountConfiguration.applySignedOwnerChanges(account, isCrossChain, changes, badAuth);
     }
 
     // ── Helpers ──
@@ -291,7 +291,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         AccountConfiguration.Verification memory auth = _buildK1Verification(pk, digest);
 
-        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
+        accountConfiguration.applySignedOwnerChanges(account, isCrossChain, changes, auth);
     }
 
     function _lockAccount(address account) internal {

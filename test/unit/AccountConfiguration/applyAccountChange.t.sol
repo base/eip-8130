@@ -116,7 +116,7 @@ contract AccountLockTest is AccountConfigurationTest {
         AccountConfiguration.Verification memory auth = _buildK1Verification(OWNER_PK, digest);
 
         vm.expectRevert();
-        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
+        accountConfiguration.applySignedOwnerChanges(account, isCrossChain, changes, auth);
     }
 
     // ── Full lifecycle ──
@@ -146,7 +146,7 @@ contract AccountLockTest is AccountConfigurationTest {
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         AccountConfiguration.Verification memory auth = _buildK1Verification(OWNER_PK, digest);
 
-        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
+        accountConfiguration.applySignedOwnerChanges(account, isCrossChain, changes, auth);
         assertTrue(accountConfiguration.isOwner(account, bytes32(bytes20(vm.addr(500)))));
     }
 }

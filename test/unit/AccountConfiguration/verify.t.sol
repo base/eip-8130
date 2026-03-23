@@ -13,8 +13,8 @@ contract VerifyTest is AccountConfigurationTest {
         bytes32 hash = keccak256("verify me");
         AccountConfiguration.Verification memory v = _buildK1Verification(OWNER_PK, hash);
 
-        bytes1 scopes = accountConfiguration.verify(account, hash, v);
-        assertEq(scopes, bytes1(0x00));
+        uint8 scopes = accountConfiguration.verify(account, hash, v);
+        assertEq(scopes, uint8(0x00));
         assertEq(v.ownerId, ownerId);
     }
 
@@ -100,9 +100,9 @@ contract VerifyTest is AccountConfigurationTest {
         bytes32 hash = keccak256("scoped verify");
         AccountConfiguration.Verification memory v = _buildK1Verification(401, hash);
 
-        bytes1 scopes = accountConfiguration.verify(account, hash, v);
+        uint8 scopes = accountConfiguration.verify(account, hash, v);
         assertEq(v.ownerId, newOwnerId);
-        assertEq(scopes, bytes1(0x01));
+        assertEq(scopes, uint8(0x01));
     }
 
     function test_verify_unrestrictedScope() public {
@@ -115,8 +115,8 @@ contract VerifyTest is AccountConfigurationTest {
         bytes32 hash = keccak256("unrestricted");
         AccountConfiguration.Verification memory v = _buildK1Verification(401, hash);
 
-        bytes1 scopes = accountConfiguration.verify(account, hash, v);
-        assertEq(scopes, bytes1(0x00));
+        uint8 scopes = accountConfiguration.verify(account, hash, v);
+        assertEq(scopes, uint8(0x00));
     }
 
     // ── Helpers ──
@@ -140,7 +140,7 @@ contract VerifyTest is AccountConfigurationTest {
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         AccountConfiguration.Verification memory v = _buildK1Verification(pk, digest);
 
-        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, v);
+        accountConfiguration.applySignedOwnerChanges(account, isCrossChain, changes, v);
     }
 
     function _revokeOwner(address account, uint256 pk, bytes32 ownerId) internal {
@@ -152,6 +152,6 @@ contract VerifyTest is AccountConfigurationTest {
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         AccountConfiguration.Verification memory v = _buildK1Verification(pk, digest);
 
-        accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, v);
+        accountConfiguration.applySignedOwnerChanges(account, isCrossChain, changes, v);
     }
 }

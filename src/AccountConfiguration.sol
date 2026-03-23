@@ -163,7 +163,7 @@ contract AccountConfiguration {
 
     /// @notice Apply owner changes (owner management only).
     ///         Direct verification via verifier + owner_config, isValidSignature fallback for migration.
-    function applyOwnerChanges(
+    function applySignedOwnerChanges(
         address account,
         bool isCrossChain,
         OwnerChange[] calldata ownerChanges,
@@ -175,12 +175,12 @@ contract AccountConfiguration {
         // Increment sequence
         uint64 sequence = _accountState[account].ownerChangeSequence++;
 
-        // Compute digest and verify verification
+        // Compute digest and verify
         bytes32 digest = _computeOwnerChangeBatchDigest(account, chainId, sequence, ownerChanges);
-        bytes1 scopes = verify(account, digest, verification);
+        uint8 scopes = verify(account, digest, verification);
 
-        // Require owner has scope to change owners
-        require(uint8(scopes) & SCOPE_CHANGE_OWNERS != 0 || scopes == 0);
+        // Require owner has scope to change owners (scopes == 0 means unrestricted)
+        require(scopes == 0 || scopes & SCOPE_CHANGE_OWNERS != 0);
 
         // Apply ownerChanges
         for (uint256 i; i < ownerChanges.length; i++) {
@@ -245,7 +245,7 @@ contract AccountConfiguration {
     function verify(address account, bytes32 hash, Verification memory verification)
         public
         view
-        returns (bytes1 scopes)
+        returns (uint8 scopes)
     {
         OwnerConfig memory config = _ownerConfig[verification.ownerId][account];
 
@@ -257,7 +257,7 @@ contract AccountConfiguration {
         bytes32 ownerId = IVerifier(config.verifier).verify(hash, verification.verifierData);
         require(ownerId != bytes32(0) && ownerId == verification.ownerId);
 
-        return bytes1(config.scopes);
+        return config.scopes;
     }
 
     /// @notice Compute the counterfactual address for an account.
