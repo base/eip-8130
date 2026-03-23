@@ -5,7 +5,7 @@ import {Test, console} from "forge-std/Test.sol";
 
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {DefaultAccount} from "../../../src/accounts/DefaultAccount.sol";
-import {IVerifier} from "../../../src/verifiers/IVerifier.sol";
+import {IVerifier} from "../../../src/interfaces/IVerifier.sol";
 import {K1Verifier} from "../../../src/verifiers/K1Verifier.sol";
 import {P256Verifier} from "../../../src/verifiers/P256Verifier.sol";
 import {WebAuthnVerifier} from "../../../src/verifiers/WebAuthnVerifier.sol";
@@ -37,7 +37,7 @@ contract GasBenchmarkTest is Test {
         k1 = new K1Verifier();
         p256 = new P256Verifier();
         webAuthn = new WebAuthnVerifier();
-        config = new AccountConfiguration(address(k1), address(p256), address(webAuthn), address(0));
+        config = new AccountConfiguration();
         delegate = new DelegateVerifier(address(config));
         defaultImpl = address(new DefaultAccount(address(config)));
 
@@ -66,13 +66,13 @@ contract GasBenchmarkTest is Test {
             address signerA = vm.addr(pkA);
             bytes32 ownerIdA = bytes32(bytes20(signerA));
             AccountConfiguration.InitializeOwner[] memory ownersA = new AccountConfiguration.InitializeOwner[](1);
-            ownersA[0] = AccountConfiguration.InitializeOwner({ownerId: ownerIdA, config: AccountConfiguration.OwnerConfig({verifier: address(k1), scope: 0x00})});
+            ownersA[0] = AccountConfiguration.InitializeOwner({ownerId: ownerIdA, config: AccountConfiguration.OwnerConfig({verifier: address(k1), scopes: 0x00})});
             bytes memory bytecode =
                 abi.encodePacked(hex"363d3d373d3d3d363d73", defaultImpl, hex"5af43d82803e903d91602b57fd5bf3");
             config.createAccount(bytes32("benchA"), bytecode, ownersA);
             address accountA = config.computeAddress(bytes32("benchA"), bytecode, ownersA);
             (uint8 v, bytes32 r, bytes32 s) = vm.sign(pkA, testHash);
-            delegateData = abi.encodePacked(accountA, uint8(0x01), abi.encodePacked(r, s, v));
+            delegateData = abi.encodePacked(accountA, uint8(0x00), address(k1), abi.encodePacked(r, s, v));
         }
     }
 

@@ -29,7 +29,7 @@ contract Deploy is Script {
 
         // DelegateVerifier needs AccountConfiguration — use address(0) placeholder,
         // deploy AccountConfiguration, then deploy DelegateVerifier
-        AccountConfiguration accountConfig = new AccountConfiguration{salt: 0}(k1, p256Raw, p256WebAuthn, address(0));
+        AccountConfiguration accountConfig = new AccountConfiguration{salt: 0}();
         console.log("AccountConfiguration:", address(accountConfig));
 
         address delegateAddr = address(new DelegateVerifier{salt: 0}(address(accountConfig)));

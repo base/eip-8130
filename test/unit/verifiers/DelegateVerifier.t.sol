@@ -19,20 +19,20 @@ contract DelegateVerifierTest is AccountConfigurationTest {
         if (delegatorOwnerId < delegateRefOwnerId) {
             owners[0] = AccountConfiguration.InitializeOwner({
                 ownerId: delegatorOwnerId,
-                config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})
+                config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
             });
             owners[1] = AccountConfiguration.InitializeOwner({
                 ownerId: delegateRefOwnerId,
-                config: AccountConfiguration.OwnerConfig({verifier: address(delegateVerifier), scope: 0x00})
+                config: AccountConfiguration.OwnerConfig({verifier: address(delegateVerifier), scopes: 0x00})
             });
         } else {
             owners[0] = AccountConfiguration.InitializeOwner({
                 ownerId: delegateRefOwnerId,
-                config: AccountConfiguration.OwnerConfig({verifier: address(delegateVerifier), scope: 0x00})
+                config: AccountConfiguration.OwnerConfig({verifier: address(delegateVerifier), scopes: 0x00})
             });
             owners[1] = AccountConfiguration.InitializeOwner({
                 ownerId: delegatorOwnerId,
-                config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})
+                config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
             });
         }
 
@@ -42,8 +42,8 @@ contract DelegateVerifierTest is AccountConfigurationTest {
         bytes32 hash = keccak256("delegate test");
         bytes memory delegateSig = _signDigest(DELEGATE_PK, hash);
 
-        // delegate data: delegate_address (20) || nested_verifier_type (1) || nested_data
-        bytes memory data = abi.encodePacked(delegateAccount, uint8(0x01), delegateSig);
+        // delegate data: delegate_address (20) || nested_auth (type 0x00 || verifier_address || sig)
+        bytes memory data = abi.encodePacked(delegateAccount, uint8(0x00), address(k1Verifier), delegateSig);
 
         bytes32 ownerId = delegateVerifier.verify(hash, data);
         assertEq(ownerId, delegateRefOwnerId);
@@ -62,7 +62,7 @@ contract DelegateVerifierTest is AccountConfigurationTest {
         bytes32 hash = keccak256("test");
 
         bytes memory fakeSig = _signDigest(999, hash);
-        bytes memory data = abi.encodePacked(delegateAccount, uint8(0x01), fakeSig);
+        bytes memory data = abi.encodePacked(delegateAccount, uint8(0x00), address(k1Verifier), fakeSig);
 
         vm.expectRevert();
         delegateVerifier.verify(hash, data);
@@ -75,7 +75,7 @@ contract DelegateVerifierTest is AccountConfigurationTest {
         AccountConfiguration.InitializeOwner[] memory ownersB = new AccountConfiguration.InitializeOwner[](1);
         ownersB[0] = AccountConfiguration.InitializeOwner({
             ownerId: delegateRefA,
-            config: AccountConfiguration.OwnerConfig({verifier: address(delegateVerifier), scope: 0x00})
+            config: AccountConfiguration.OwnerConfig({verifier: address(delegateVerifier), scopes: 0x00})
         });
         bytes memory bytecodeB = _computeERC1167Bytecode(defaultAccountImplementation);
         address accountB = accountConfiguration.createAccount(bytes32(uint256(10)), bytecodeB, ownersB);
@@ -84,7 +84,7 @@ contract DelegateVerifierTest is AccountConfigurationTest {
         AccountConfiguration.InitializeOwner[] memory ownersC = new AccountConfiguration.InitializeOwner[](1);
         ownersC[0] = AccountConfiguration.InitializeOwner({
             ownerId: delegateRefB,
-            config: AccountConfiguration.OwnerConfig({verifier: address(delegateVerifier), scope: 0x00})
+            config: AccountConfiguration.OwnerConfig({verifier: address(delegateVerifier), scopes: 0x00})
         });
         bytes memory bytecodeC = _computeERC1167Bytecode(defaultAccountImplementation);
         accountConfiguration.createAccount(bytes32(uint256(20)), bytecodeC, ownersC);
@@ -93,7 +93,7 @@ contract DelegateVerifierTest is AccountConfigurationTest {
         bytes memory k1Sig = _signDigest(DELEGATE_PK, hash);
 
         // Single-hop B → A: should work
-        bytes memory singleHopData = abi.encodePacked(accountA, uint8(0x01), k1Sig);
+        bytes memory singleHopData = abi.encodePacked(accountA, uint8(0x00), address(k1Verifier), k1Sig);
         bytes32 ownerId = delegateVerifier.verify(hash, singleHopData);
         assertEq(ownerId, delegateRefA);
 

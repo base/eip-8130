@@ -4,7 +4,7 @@ pragma solidity ^0.8.30;
 import {Test} from "forge-std/Test.sol";
 
 import {AccountConfiguration} from "../../src/AccountConfiguration.sol";
-import {IVerifier} from "../../src/verifiers/IVerifier.sol";
+import {IVerifier} from "../../src/interfaces/IVerifier.sol";
 import {K1Verifier} from "../../src/verifiers/K1Verifier.sol";
 import {P256Verifier} from "../../src/verifiers/P256Verifier.sol";
 import {WebAuthnVerifier} from "../../src/verifiers/WebAuthnVerifier.sol";
@@ -28,8 +28,7 @@ contract AccountConfigurationTest is Test {
         k1Verifier = IVerifier(new K1Verifier());
         p256Verifier = IVerifier(new P256Verifier());
         webAuthnVerifier = IVerifier(new WebAuthnVerifier());
-        accountConfiguration =
-            new AccountConfiguration(address(k1Verifier), address(p256Verifier), address(webAuthnVerifier), address(0));
+        accountConfiguration = new AccountConfiguration();
         delegateVerifier = IVerifier(new DelegateVerifier(address(accountConfiguration)));
         defaultAccountImplementation = address(new DefaultAccount(address(accountConfiguration)));
     }
@@ -47,7 +46,7 @@ contract AccountConfigurationTest is Test {
         ownerId = bytes32(bytes20(signer));
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})});
+        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         account = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
@@ -58,7 +57,7 @@ contract AccountConfigurationTest is Test {
         ownerId = bytes32(bytes20(signer));
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})});
+        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         account = accountConfiguration.createAccount(salt, bytecode, owners);
@@ -71,10 +70,11 @@ contract AccountConfigurationTest is Test {
         return abi.encodePacked(r, s, v);
     }
 
-    /// @dev Build authorizerAuth for verifySignature / isValidSignature: type_byte || ecdsaSig
-    function _buildK1Auth(uint256 pk, bytes32 digest) internal pure returns (bytes memory) {
+    /// @dev Build authorizerAuth using custom verifier type (0x00) with embedded address.
+    ///      Uses type 0x00 so tests work without the native verifier precompile at 0x8130.
+    function _buildK1Auth(uint256 pk, bytes32 digest) internal view returns (bytes memory) {
         bytes memory sig = _signDigest(pk, digest);
-        return abi.encodePacked(uint8(0x01), sig);
+        return abi.encodePacked(uint8(0x00), address(k1Verifier), sig);
     }
 
     // ── Canonical digest computation ──
@@ -87,9 +87,7 @@ contract AccountConfigurationTest is Test {
     ) internal pure returns (bytes32) {
         bytes32[] memory ownerChangeHash = new bytes32[](ownerChanges.length);
         for (uint256 i; i < ownerChanges.length; i++) {
-            ownerChangeHash[i] = keccak256(
-                abi.encode(ownerChanges[i].ownerId, ownerChanges[i].changeType, keccak256(ownerChanges[i].configData))
-            );
+            ownerChangeHash[i] = keccak256(abi.encode(ownerChanges[i]));
         }
         return keccak256(
             abi.encode(

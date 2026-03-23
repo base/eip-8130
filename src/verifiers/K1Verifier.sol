@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import {ECDSA} from "openzeppelin/utils/cryptography/ECDSA.sol";
 
-import {IVerifier} from "./IVerifier.sol";
+import {IVerifier} from "../interfaces/IVerifier.sol";
 
 /// @notice secp256k1 ECDSA verifier. ownerId = bytes32(bytes20(ecrecover(hash, v, r, s))).
 contract K1Verifier is IVerifier {

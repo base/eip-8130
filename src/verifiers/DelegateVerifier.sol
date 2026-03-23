@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {IVerifier} from "./IVerifier.sol";
+import {IVerifier} from "../interfaces/IVerifier.sol";
 import {AccountConfiguration} from "../AccountConfiguration.sol";
 
 /// @notice Delegates verification to another account's owner configuration.
@@ -28,7 +28,6 @@ contract DelegateVerifier is IVerifier {
 
         require(uint8(nestedAuth[0]) != 0x04);
 
-        (bool valid,,) = ACCOUNT_CONFIGURATION.verifySignature(delegate, hash, nestedAuth);
-        require(valid);
+        ACCOUNT_CONFIGURATION.verify(delegate, hash, nestedAuth);
     }
 }

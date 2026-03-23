@@ -51,7 +51,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         ownerId = bytes32(bytes20(signer));
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})});
+        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
 
         bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
         account = accountConfiguration.createAccount(bytes32(0), proxyBytecode, owners);
@@ -69,7 +69,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
 
         bytes32 hash = keccak256("test");
         bytes memory sig = _signDigest(OWNER_PK, hash);
-        bytes memory authData = abi.encodePacked(uint8(0x01), sig);
+        bytes memory authData = abi.encodePacked(uint8(0x00), address(k1Verifier), sig);
 
         bytes4 result = UpgradeableAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0x1626ba7e));
@@ -85,7 +85,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         bytes32 ownerId = bytes32(bytes20(signer));
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})});
+        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
 
         bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
         address predicted = accountConfiguration.computeAddress(bytes32(0), proxyBytecode, owners);
@@ -258,7 +258,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
 
         bytes32 hash = keccak256("validate me");
         bytes memory sig = _signDigest(OWNER_PK, hash);
-        bytes memory authData = abi.encodePacked(uint8(0x01), sig);
+        bytes memory authData = abi.encodePacked(uint8(0x00), address(k1Verifier), sig);
 
         bytes4 result = UpgradeableAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0x1626ba7e));
@@ -269,7 +269,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
 
         bytes32 hash = keccak256("validate me");
         bytes memory wrongSig = _signDigest(999, hash);
-        bytes memory authData = abi.encodePacked(uint8(0x01), wrongSig);
+        bytes memory authData = abi.encodePacked(uint8(0x00), address(k1Verifier), wrongSig);
 
         bytes4 result = UpgradeableAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0xFFFFFFFF));

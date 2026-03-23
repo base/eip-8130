@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {IVerifier} from "./IVerifier.sol";
+import {IVerifier} from "../interfaces/IVerifier.sol";
 
 /// @notice Verifier that always succeeds — no signature data required.
 ///

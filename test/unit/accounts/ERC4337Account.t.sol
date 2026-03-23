@@ -4,7 +4,7 @@ pragma solidity ^0.8.30;
 import {ERC4337Account, Call, PackedUserOperation} from "../../../src/accounts/BackwardCompatibleERC4337Account.sol";
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
-import {IVerifier} from "../../../src/verifiers/IVerifier.sol";
+import {IVerifier} from "../../../src/interfaces/IVerifier.sol";
 
 contract MockTarget {
     uint256 public value;
@@ -35,7 +35,7 @@ contract ERC4337AccountTest is AccountConfigurationTest {
         ownerId = bytes32(bytes20(signer));
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00})});
+        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
 
         bytes memory bytecode = _computeERC1167Bytecode(erc4337Implementation);
         account = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
@@ -163,7 +163,7 @@ contract ERC4337AccountTest is AccountConfigurationTest {
 
         bytes32 userOpHash = keccak256("user-op");
         bytes memory sig = _signDigest(OWNER_PK, userOpHash);
-        bytes memory authData = abi.encodePacked(uint8(0x01), sig);
+        bytes memory authData = abi.encodePacked(uint8(0x00), address(k1Verifier), sig);
 
         PackedUserOperation memory userOp = _buildUserOp(account, authData);
 
@@ -178,7 +178,7 @@ contract ERC4337AccountTest is AccountConfigurationTest {
 
         bytes32 userOpHash = keccak256("user-op");
         bytes memory wrongSig = _signDigest(999, userOpHash);
-        bytes memory authData = abi.encodePacked(uint8(0x01), wrongSig);
+        bytes memory authData = abi.encodePacked(uint8(0x00), address(k1Verifier), wrongSig);
 
         PackedUserOperation memory userOp = _buildUserOp(account, authData);
 
@@ -193,7 +193,7 @@ contract ERC4337AccountTest is AccountConfigurationTest {
 
         bytes32 userOpHash = keccak256("user-op");
         bytes memory sig = _signDigest(OWNER_PK, userOpHash);
-        bytes memory authData = abi.encodePacked(uint8(0x01), sig);
+        bytes memory authData = abi.encodePacked(uint8(0x00), address(k1Verifier), sig);
 
         PackedUserOperation memory userOp = _buildUserOp(account, authData);
 
@@ -208,7 +208,7 @@ contract ERC4337AccountTest is AccountConfigurationTest {
 
         bytes32 userOpHash = keccak256("user-op");
         bytes memory sig = _signDigest(OWNER_PK, userOpHash);
-        bytes memory authData = abi.encodePacked(uint8(0x01), sig);
+        bytes memory authData = abi.encodePacked(uint8(0x00), address(k1Verifier), sig);
 
         PackedUserOperation memory userOp = _buildUserOp(account, authData);
 
@@ -228,7 +228,7 @@ contract ERC4337AccountTest is AccountConfigurationTest {
 
         bytes32 hash = keccak256("validate me");
         bytes memory sig = _signDigest(OWNER_PK, hash);
-        bytes memory authData = abi.encodePacked(uint8(0x01), sig);
+        bytes memory authData = abi.encodePacked(uint8(0x00), address(k1Verifier), sig);
 
         bytes4 result = ERC4337Account(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0x1626ba7e));
@@ -239,7 +239,7 @@ contract ERC4337AccountTest is AccountConfigurationTest {
 
         bytes32 hash = keccak256("validate me");
         bytes memory wrongSig = _signDigest(999, hash);
-        bytes memory authData = abi.encodePacked(uint8(0x01), wrongSig);
+        bytes memory authData = abi.encodePacked(uint8(0x00), address(k1Verifier), wrongSig);
 
         bytes4 result = ERC4337Account(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0xFFFFFFFF));

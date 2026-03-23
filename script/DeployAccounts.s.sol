@@ -27,7 +27,7 @@ contract DeployAccounts is Script {
         // ── Step 1: Deploy system infrastructure (once per chain) ──
 
         address k1 = address(new K1Verifier{salt: 0}());
-        AccountConfiguration accountConfig = new AccountConfiguration{salt: 0}(k1, address(0), address(0), address(0));
+        AccountConfiguration accountConfig = new AccountConfiguration{salt: 0}();
 
         console.log("AccountConfiguration:", address(accountConfig));
         console.log("K1Verifier:          ", k1);
@@ -57,7 +57,7 @@ contract DeployAccounts is Script {
         bytes32 ownerId = bytes32(bytes20(owner));
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: k1, scope: 0x00})});
+        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: k1, scopes: 0x00})});
 
         // ── 3a: DefaultAccount (ERC-1167 proxy, 45 bytes) ──
         //
@@ -109,13 +109,13 @@ contract DeployAccounts is Script {
         console.log("");
         console.log("=== Verification ===");
 
-        (address verifier, uint8 scope) = accountConfig.getOwnerConfig(defaultAccount, ownerId);
-        console.log("DefaultAccount owner verifier:", verifier);
-        console.log("DefaultAccount owner scope:   ", scope);
+        AccountConfiguration.OwnerConfig memory ownerCfg = accountConfig.getOwnerConfig(defaultAccount, ownerId);
+        console.log("DefaultAccount owner verifier:", ownerCfg.verifier);
+        console.log("DefaultAccount owner scopes:  ", ownerCfg.scopes);
 
-        (verifier, scope) = accountConfig.getOwnerConfig(upgradeableAccount, ownerId);
-        console.log("UpgradeableAccount owner verifier:", verifier);
-        console.log("UpgradeableAccount owner scope:   ", scope);
+        ownerCfg = accountConfig.getOwnerConfig(upgradeableAccount, ownerId);
+        console.log("UpgradeableAccount owner verifier:", ownerCfg.verifier);
+        console.log("UpgradeableAccount owner scopes:  ", ownerCfg.scopes);
 
         vm.stopBroadcast();
     }

@@ -3,7 +3,7 @@ pragma solidity ^0.8.30;
 
 import {BLS} from "solady/utils/ext/ithaca/BLS.sol";
 
-import {IVerifier} from "./IVerifier.sol";
+import {IVerifier} from "../interfaces/IVerifier.sol";
 
 /// @notice BLS12-381 signature verifier using EIP-2537 precompiles.
 ///

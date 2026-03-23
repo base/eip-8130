@@ -18,20 +18,20 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = AccountConfiguration.OwnerChange({
             ownerId: newOwnerId,
             changeType: 0x01,
-            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00}))
+            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
         });
 
         bool isCrossChain = false;
-        uint64 seq = accountConfiguration.getChangeSequence(account, isCrossChain);
+        uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(OWNER_PK, digest);
 
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
 
-        (address verifier, uint8 scope) = accountConfiguration.getOwnerConfig(account, newOwnerId);
-        assertTrue(verifier != address(0));
-        assertEq(verifier, address(k1Verifier));
-        assertEq(scope, 0x00);
+        AccountConfiguration.OwnerConfig memory cfg = accountConfiguration.getOwnerConfig(account, newOwnerId);
+        assertTrue(cfg.verifier != address(0));
+        assertEq(cfg.verifier, address(k1Verifier));
+        assertEq(cfg.scopes, 0x00);
     }
 
     function test_authorizeOwner_withScope() public {
@@ -44,19 +44,19 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = AccountConfiguration.OwnerChange({
             ownerId: newOwnerId,
             changeType: 0x01,
-            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x04}))
+            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x04}))
         });
 
         bool isCrossChain = false;
-        uint64 seq = accountConfiguration.getChangeSequence(account, isCrossChain);
+        uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(OWNER_PK, digest);
 
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
 
-        (address verifier, uint8 scope) = accountConfiguration.getOwnerConfig(account, newOwnerId);
-        assertEq(verifier, address(k1Verifier));
-        assertEq(scope, 0x04);
+        AccountConfiguration.OwnerConfig memory cfg = accountConfiguration.getOwnerConfig(account, newOwnerId);
+        assertEq(cfg.verifier, address(k1Verifier));
+        assertEq(cfg.scopes, 0x04);
     }
 
     function test_revokeOwner() public {
@@ -66,21 +66,19 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         bytes32 newOwnerId = bytes32(bytes20(newSigner));
         _authorizeOwner(account, OWNER_PK, newOwnerId, address(k1Verifier));
 
-        (address v,) = accountConfiguration.getOwnerConfig(account, newOwnerId);
-        assertTrue(v != address(0));
+        assertTrue(accountConfiguration.isOwner(account, newOwnerId));
 
         AccountConfiguration.OwnerChange[] memory changes = new AccountConfiguration.OwnerChange[](1);
         changes[0] = AccountConfiguration.OwnerChange({ownerId: newOwnerId, changeType: 0x02, configData: ""});
 
         bool isCrossChain = false;
-        uint64 seq = accountConfiguration.getChangeSequence(account, isCrossChain);
+        uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(OWNER_PK, digest);
 
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
 
-        (address v2,) = accountConfiguration.getOwnerConfig(account, newOwnerId);
-        assertTrue(v2 == address(0));
+        assertFalse(accountConfiguration.isOwner(account, newOwnerId));
     }
 
     function test_multipleOperationsInSingleChange() public {
@@ -93,37 +91,35 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = AccountConfiguration.OwnerChange({
             ownerId: owner1,
             changeType: 0x01,
-            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00}))
+            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
         });
         changes[1] = AccountConfiguration.OwnerChange({
             ownerId: owner2,
             changeType: 0x01,
-            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00}))
+            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
         });
 
         bool isCrossChain = false;
-        uint64 seq = accountConfiguration.getChangeSequence(account, isCrossChain);
+        uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(OWNER_PK, digest);
 
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
 
-        (address v1,) = accountConfiguration.getOwnerConfig(account, owner1);
-        assertTrue(v1 != address(0));
-        (address v2,) = accountConfiguration.getOwnerConfig(account, owner2);
-        assertTrue(v2 != address(0));
+        assertTrue(accountConfiguration.isOwner(account, owner1));
+        assertTrue(accountConfiguration.isOwner(account, owner2));
     }
 
     function test_sequenceIncrements() public {
         (address account,) = _createK1Account(OWNER_PK);
 
-        assertEq(accountConfiguration.getChangeSequence(account, false), 0);
+        assertEq(accountConfiguration.getOwnerChangeSequence(account), 0);
 
         _authorizeOwner(account, OWNER_PK, bytes32(bytes20(vm.addr(300))), address(k1Verifier));
-        assertEq(accountConfiguration.getChangeSequence(account, false), 1);
+        assertEq(accountConfiguration.getOwnerChangeSequence(account), 1);
 
         _authorizeOwner(account, OWNER_PK, bytes32(bytes20(vm.addr(301))), address(k1Verifier));
-        assertEq(accountConfiguration.getChangeSequence(account, false), 2);
+        assertEq(accountConfiguration.getOwnerChangeSequence(account), 2);
     }
 
     function test_revertsWhenLocked() public {
@@ -135,11 +131,11 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = AccountConfiguration.OwnerChange({
             ownerId: bytes32(bytes20(vm.addr(300))),
             changeType: 0x01,
-            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00}))
+            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
         });
 
         bool isCrossChain = false;
-        uint64 seq = accountConfiguration.getChangeSequence(account, isCrossChain);
+        uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(OWNER_PK, digest);
 
@@ -158,17 +154,16 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = AccountConfiguration.OwnerChange({
             ownerId: thirdOwnerId,
             changeType: 0x01,
-            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00}))
+            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
         });
 
         bool isCrossChain = false;
-        uint64 seq = accountConfiguration.getChangeSequence(account, isCrossChain);
+        uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(NEW_OWNER_PK, digest);
 
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
-        (address v,) = accountConfiguration.getOwnerConfig(account, thirdOwnerId);
-        assertTrue(v != address(0));
+        assertTrue(accountConfiguration.isOwner(account, thirdOwnerId));
     }
 
     function test_scopedOwner_cannotAuthorizeWithoutConfigScope() public {
@@ -183,11 +178,11 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = AccountConfiguration.OwnerChange({
             ownerId: thirdOwnerId,
             changeType: 0x01,
-            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00}))
+            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
         });
 
         bool isCrossChain = false;
-        uint64 seq = accountConfiguration.getChangeSequence(account, isCrossChain);
+        uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(NEW_OWNER_PK, digest);
 
@@ -200,24 +195,23 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
 
         address newSigner = vm.addr(NEW_OWNER_PK);
         bytes32 secondOwnerId = bytes32(bytes20(newSigner));
-        _authorizeOwnerWithScope(account, OWNER_PK, secondOwnerId, address(k1Verifier), 0x08);
+        _authorizeOwnerWithScope(account, OWNER_PK, secondOwnerId, address(k1Verifier), 0x04);
 
         bytes32 thirdOwnerId = bytes32(bytes20(vm.addr(302)));
         AccountConfiguration.OwnerChange[] memory changes = new AccountConfiguration.OwnerChange[](1);
         changes[0] = AccountConfiguration.OwnerChange({
             ownerId: thirdOwnerId,
             changeType: 0x01,
-            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00}))
+            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
         });
 
         bool isCrossChain = false;
-        uint64 seq = accountConfiguration.getChangeSequence(account, isCrossChain);
+        uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(NEW_OWNER_PK, digest);
 
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, auth);
-        (address v,) = accountConfiguration.getOwnerConfig(account, thirdOwnerId);
-        assertTrue(v != address(0));
+        assertTrue(accountConfiguration.isOwner(account, thirdOwnerId));
     }
 
     function test_revertsOnDuplicateOwnerAuthorization() public {
@@ -227,11 +221,11 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = AccountConfiguration.OwnerChange({
             ownerId: ownerOwnerId,
             changeType: 0x01,
-            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00}))
+            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
         });
 
         bool isCrossChain = false;
-        uint64 seq = accountConfiguration.getChangeSequence(account, isCrossChain);
+        uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(OWNER_PK, digest);
 
@@ -248,7 +242,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = AccountConfiguration.OwnerChange({ownerId: nonExistentOwnerId, changeType: 0x02, configData: ""});
 
         bool isCrossChain = false;
-        uint64 seq = accountConfiguration.getChangeSequence(account, isCrossChain);
+        uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(OWNER_PK, digest);
 
@@ -263,29 +257,17 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = AccountConfiguration.OwnerChange({
             ownerId: bytes32(bytes20(vm.addr(300))),
             changeType: 0x01,
-            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scope: 0x00}))
+            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
         });
 
         bool isCrossChain = false;
-        uint64 seq = accountConfiguration.getChangeSequence(account, isCrossChain);
+        uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
 
         bytes memory badAuth = _buildK1Auth(999, digest);
 
         vm.expectRevert();
         accountConfiguration.applyOwnerChanges(account, isCrossChain, changes, badAuth);
-    }
-
-    function test_multichainSequenceChannelsAreIndependent() public {
-        (address account,) = _createK1Account(OWNER_PK);
-
-        assertEq(accountConfiguration.getChangeSequence(account, false), 0);
-        assertEq(accountConfiguration.getChangeSequence(account, true), 0);
-
-        _authorizeOwner(account, OWNER_PK, bytes32(bytes20(vm.addr(300))), address(k1Verifier));
-
-        assertEq(accountConfiguration.getChangeSequence(account, false), 1);
-        assertEq(accountConfiguration.getChangeSequence(account, true), 0);
     }
 
     // ── Helpers ──
@@ -301,11 +283,11 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = AccountConfiguration.OwnerChange({
             ownerId: newOwnerId,
             changeType: 0x01,
-            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: verifier, scope: scope}))
+            configData: abi.encode(AccountConfiguration.OwnerConfig({verifier: verifier, scopes: scope}))
         });
 
         bool isCrossChain = false;
-        uint64 seq = accountConfiguration.getChangeSequence(account, isCrossChain);
+        uint64 seq = accountConfiguration.getOwnerChangeSequence(account);
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(pk, digest);
 
