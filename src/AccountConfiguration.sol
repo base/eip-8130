@@ -12,6 +12,7 @@ contract AccountConfiguration {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     struct AccountState {
+        bool initialized;
         uint64 ownerChangeSequence;
         uint40 unlocksAt;
         uint16 unlockDelay;
@@ -42,9 +43,16 @@ contract AccountConfiguration {
     // CONSTANTS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
+    bytes4 constant ERC1271_SELECTOR = bytes4(keccak256("isValidSignature(bytes32,bytes)"));
+
     /// @dev Sentinel for the self-ownerId (ownerId == bytes32(bytes20(account))) to distinguish
     ///      "explicitly revoked" from "never registered" (address(0)).
     address public constant REVOKED = address(type(uint160).max);
+
+    /// @dev Typehash for OwnerChangeBatch, NOT compliant with EIP-712 to mitigate phishing attacks.
+    bytes32 public constant OWNER_INITIALIZATION_TYPEHASH = keccak256(
+        "OwnerInitialization(bytes32 salt,InitializeOwner[] initialOwners)InitializeOwner(bytes32 ownerId,OwnerConfig config)OwnerConfig(address verifier,uint8 scopes)"
+    );
 
     /// @dev Typehash for OwnerChangeBatch, NOT compliant with EIP-712 to mitigate phishing attacks.
     bytes32 public constant OWNER_CHANGE_BATCH_TYPEHASH = keccak256(
@@ -93,9 +101,10 @@ contract AccountConfiguration {
     // EVENTS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    event AccountCreated(address indexed account, bytes32 userSalt, bytes32 codeHash);
     event OwnerAuthorized(address indexed account, bytes32 indexed ownerId, OwnerConfig config);
     event OwnerRevoked(address indexed account, bytes32 indexed ownerId);
+    event AccountCreated(address indexed account, bytes32 userSalt, bytes32 codeHash);
+    event AccountImported(address indexed account);
     event AppliedSignedOwnerChanges(address indexed account, uint64 sequence);
     event AccountLocked(address indexed account, uint16 unlockDelay);
     event AccountUnlockInitiated(address indexed account, uint40 unlocksAt);
@@ -124,37 +133,41 @@ contract AccountConfiguration {
         external
         returns (address account)
     {
-        // Early return if account already exists
         account = computeAddress(userSalt, bytecode, initialOwners);
-        if (account.code.length > 0) return account;
 
-        // Must have at least one initial owner
-        require(initialOwners.length > 0);
+        // Initialize account owners and early return if already initialized
+        bool alreadyInitialized = _initializeAccount(account, initialOwners);
+        if (alreadyInitialized) return account;
 
-        bytes32 previousOwnerId;
-        for (uint256 i; i < initialOwners.length; i++) {
-            // Enforce sorting with relative comparison of sequential owner ids
-            require(initialOwners[i].ownerId > previousOwnerId);
-            previousOwnerId = initialOwners[i].ownerId;
-
-            _authorizeOwner(account, initialOwners[i].ownerId, initialOwners[i].config);
-        }
-
-        // Create account
+        // Create account code
         bytes memory deploymentCode = _buildDeploymentCode(bytecode);
-        bytes32 deploymentSalt = _computeDeploymentSalt(userSalt, initialOwners);
+        bytes32 deploymentSalt = _computeOwnerInitializationDigest(userSalt, initialOwners);
         assembly {
             pop(create2(0, add(deploymentCode, 0x20), mload(deploymentCode), deploymentSalt))
         }
+        emit AccountCreated(account, userSalt, keccak256(bytecode));
 
         // todo: enforce code is initialized to prevent empty implementation uninitialization attacks
-
-        emit AccountCreated(account, userSalt, keccak256(bytecode));
     }
 
-    // ----------------------------------------------------------------------------------------------------------------
-    // OWNER CHANGES
-    // ----------------------------------------------------------------------------------------------------------------
+    /// @notice Import an existing account to AccountConfigruation management.
+    /// @dev Verifies via ERC-1271 implying accounts must have bytecode to be imported.
+    /// @dev Custom hash used to partially mitigate phishing attacks on eth_signTypedData.
+    function importAccount(address account, InitializeOwner[] calldata initialOwners, bytes calldata signature)
+        external
+    {
+        // Verify account signature using ERC-1271
+        bytes32 digest = _computeOwnerInitializationDigest(bytes32(bytes20(account)), initialOwners);
+        (bool success, bytes memory result) =
+            account.staticcall(abi.encodeWithSelector(ERC1271_SELECTOR, digest, signature));
+        require(success && result.length == 32 && abi.decode(result, (bytes4)) == ERC1271_SELECTOR);
+
+        // Initialize account owners and early return if already initialized
+        bool alreadyInitialized = _initializeAccount(account, initialOwners);
+        if (alreadyInitialized) return;
+
+        emit AccountImported(account);
+    }
 
     /// @notice Apply owner changes (owner management only).
     ///         Direct verification via verifier + owner_config, isValidSignature fallback for migration.
@@ -262,7 +275,7 @@ contract AccountConfiguration {
         view
         returns (address)
     {
-        bytes32 deploymentSalt = _computeDeploymentSalt(userSalt, initialOwners);
+        bytes32 deploymentSalt = _computeOwnerInitializationDigest(userSalt, initialOwners);
         bytes32 codeHash = keccak256(_buildDeploymentCode(bytecode));
         bytes32 create2Hash = keccak256(abi.encodePacked(bytes1(0xFF), address(this), deploymentSalt, codeHash));
         return address(uint160(uint256(create2Hash)));
@@ -271,6 +284,10 @@ contract AccountConfiguration {
     // ----------------------------------------------------------------------------------------------------------------
     // STORAGE VIEWS
     // ----------------------------------------------------------------------------------------------------------------
+
+    function isInitialized(address account) public view returns (bool) {
+        return _accountState[account].initialized;
+    }
 
     function isOwner(address account, bytes32 ownerId) public view returns (bool) {
         address verifier = _ownerConfig[ownerId][account].verifier;
@@ -323,6 +340,28 @@ contract AccountConfiguration {
     // OWNER CHANGES
     // ----------------------------------------------------------------------------------------------------------------
 
+    function _initializeAccount(address account, InitializeOwner[] calldata initialOwners)
+        internal
+        nonZero(account)
+        returns (bool alreadyInitialized)
+    {
+        // Must have at least one initial owner
+        require(initialOwners.length > 0);
+
+        // Early return if account already initialized
+        if (_accountState[account].initialized) return true;
+        _accountState[account].initialized = true;
+
+        bytes32 previousOwnerId;
+        for (uint256 i; i < initialOwners.length; i++) {
+            // Enforce sorting with relative comparison of sequential owner ids
+            require(initialOwners[i].ownerId > previousOwnerId);
+            previousOwnerId = initialOwners[i].ownerId;
+
+            _authorizeOwner(account, initialOwners[i].ownerId, initialOwners[i].config);
+        }
+    }
+
     function _authorizeOwner(address account, bytes32 ownerId, OwnerConfig memory config) internal nonZero(account) {
         // Must be legitimate verifier
         require(config.verifier != address(0) && config.verifier != REVOKED);
@@ -340,6 +379,24 @@ contract AccountConfiguration {
 
         _ownerConfig[ownerId][account] = OwnerConfig({verifier: REVOKED, scopes: 0});
         emit OwnerRevoked(account, ownerId);
+    }
+
+    function _computeOwnerInitializationDigest(bytes32 salt, InitializeOwner[] calldata initialOwners)
+        internal
+        pure
+        returns (bytes32)
+    {
+        // Hash each owner
+        bytes32[] memory initializeOwnerHashes = new bytes32[](initialOwners.length);
+        for (uint256 i; i < initialOwners.length; i++) {
+            initializeOwnerHashes[i] = keccak256(abi.encode(initialOwners[i].ownerId, initialOwners[i].config));
+        }
+
+        // Hash cumulative initialization data
+        return
+            keccak256(
+                abi.encode(OWNER_INITIALIZATION_TYPEHASH, salt, keccak256(abi.encodePacked(initializeOwnerHashes)))
+            );
     }
 
     function _computeOwnerChangeBatchDigest(
@@ -365,21 +422,6 @@ contract AccountConfiguration {
     // ----------------------------------------------------------------------------------------------------------------
     // ACCOUNT CREATION
     // ----------------------------------------------------------------------------------------------------------------
-
-    function _computeDeploymentSalt(bytes32 userSalt, InitializeOwner[] calldata initialOwners)
-        internal
-        pure
-        returns (bytes32)
-    {
-        // Hash each initial owner
-        bytes32[] memory initialOwnerHashes = new bytes32[](initialOwners.length);
-        for (uint256 i; i < initialOwners.length; i++) {
-            initialOwnerHashes[i] = keccak256(abi.encode(initialOwners[i]));
-        }
-
-        // Hash the batch of initial owners
-        return keccak256(abi.encode(userSalt, keccak256(abi.encodePacked(initialOwnerHashes))));
-    }
 
     /// @notice Constructs the deployment code for an account in a manner that doesn't immediately run constructor code.
     /// @dev Constructs DEPLOYMENT_HEADER(n) || bytecode. The 14-byte EVM loader
