@@ -46,7 +46,9 @@ contract AccountConfigurationTest is Test {
         ownerId = bytes32(bytes20(signer));
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
+        owners[0] = AccountConfiguration.InitializeOwner({
+            ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+        });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         account = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
@@ -57,7 +59,9 @@ contract AccountConfigurationTest is Test {
         ownerId = bytes32(bytes20(signer));
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
+        owners[0] = AccountConfiguration.InitializeOwner({
+            ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+        });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         account = accountConfiguration.createAccount(salt, bytecode, owners);
@@ -70,7 +74,11 @@ contract AccountConfigurationTest is Test {
         return abi.encodePacked(r, s, v);
     }
 
-    function _buildK1Verification(uint256 pk, bytes32 digest) internal view returns (AccountConfiguration.Verification memory) {
+    function _buildK1Verification(uint256 pk, bytes32 digest)
+        internal
+        view
+        returns (AccountConfiguration.Verification memory)
+    {
         bytes memory sig = _signDigest(pk, digest);
         return AccountConfiguration.Verification({ownerId: bytes32(bytes20(vm.addr(pk))), verifierData: sig});
     }

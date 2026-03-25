@@ -46,7 +46,9 @@ contract SmokeTest is Script {
         returns (address)
     {
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: k1Verifier, scopes: 0x00})});
+        owners[0] = AccountConfiguration.InitializeOwner({
+            ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: k1Verifier, scopes: 0x00})
+        });
 
         bytes memory bytecode =
             abi.encodePacked(hex"363d3d373d3d3d363d73", defaultImpl, hex"5af43d82803e903d91602b57fd5bf3");
@@ -71,8 +73,7 @@ contract SmokeTest is Script {
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(SIGNER_PK, testHash);
 
         AccountConfiguration.Verification memory verification = AccountConfiguration.Verification({
-            ownerId: bytes32(bytes20(vm.addr(SIGNER_PK))),
-            verifierData: abi.encodePacked(r, s, v)
+            ownerId: bytes32(bytes20(vm.addr(SIGNER_PK))), verifierData: abi.encodePacked(r, s, v)
         });
         config.verify(account, testHash, verification);
     }

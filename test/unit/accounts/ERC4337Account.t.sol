@@ -35,7 +35,9 @@ contract ERC4337AccountTest is AccountConfigurationTest {
         ownerId = bytes32(bytes20(signer));
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
+        owners[0] = AccountConfiguration.InitializeOwner({
+            ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+        });
 
         bytes memory bytecode = _computeERC1167Bytecode(erc4337Implementation);
         account = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
@@ -178,7 +180,8 @@ contract ERC4337AccountTest is AccountConfigurationTest {
 
         bytes32 userOpHash = keccak256("user-op");
         bytes memory wrongSig = _signDigest(999, userOpHash);
-        bytes memory authData = abi.encode(AccountConfiguration.Verification({ownerId: ownerId, verifierData: wrongSig}));
+        bytes memory authData =
+            abi.encode(AccountConfiguration.Verification({ownerId: ownerId, verifierData: wrongSig}));
 
         PackedUserOperation memory userOp = _buildUserOp(account, authData);
 
@@ -239,7 +242,8 @@ contract ERC4337AccountTest is AccountConfigurationTest {
 
         bytes32 hash = keccak256("validate me");
         bytes memory wrongSig = _signDigest(999, hash);
-        bytes memory authData = abi.encode(AccountConfiguration.Verification({ownerId: ownerId, verifierData: wrongSig}));
+        bytes memory authData =
+            abi.encode(AccountConfiguration.Verification({ownerId: ownerId, verifierData: wrongSig}));
 
         bytes4 result = ERC4337Account(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0xFFFFFFFF));

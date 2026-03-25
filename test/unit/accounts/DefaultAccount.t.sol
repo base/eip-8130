@@ -158,7 +158,8 @@ contract DefaultAccountTest is AccountConfigurationTest {
         bytes32 hash = keccak256("validate me");
         bytes memory wrongSig = _signDigest(999, hash);
         // Correct ownerId but wrong sig — verifier returns wrong ownerId, mismatch fails
-        bytes memory authData = abi.encode(AccountConfiguration.Verification({ownerId: ownerId, verifierData: wrongSig}));
+        bytes memory authData =
+            abi.encode(AccountConfiguration.Verification({ownerId: ownerId, verifierData: wrongSig}));
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0xFFFFFFFF));
@@ -170,7 +171,8 @@ contract DefaultAccountTest is AccountConfigurationTest {
         bytes32 hash = keccak256("validate me");
         bytes memory sig = _signDigest(999, hash);
         // ownerId for key 999 — not registered on account
-        bytes memory authData = abi.encode(AccountConfiguration.Verification({ownerId: bytes32(bytes20(vm.addr(999))), verifierData: sig}));
+        bytes memory authData =
+            abi.encode(AccountConfiguration.Verification({ownerId: bytes32(bytes20(vm.addr(999))), verifierData: sig}));
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0xFFFFFFFF));

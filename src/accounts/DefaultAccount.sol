@@ -77,7 +77,11 @@ contract DefaultAccount is Receiver {
     /// @param signature Auth data in verifier || data format
     /// @return magicValue 0x1626ba7e if valid, 0xffffffff otherwise
     function isValidSignature(bytes32 hash, bytes calldata signature) external view virtual returns (bytes4) {
-        try ACCOUNT_CONFIGURATION.verify(address(this), hash, abi.decode(signature, (AccountConfiguration.Verification))) returns (uint8) {
+        try ACCOUNT_CONFIGURATION.verify(
+            address(this), hash, abi.decode(signature, (AccountConfiguration.Verification))
+        ) returns (
+            uint8
+        ) {
             return bytes4(0x1626ba7e);
         } catch {
             return bytes4(0xFFFFFFFF);

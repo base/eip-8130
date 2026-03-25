@@ -44,8 +44,7 @@ contract DelegateVerifierTest is AccountConfigurationTest {
 
         // delegate data: delegate_address (20) || abi.encode(Verification)
         AccountConfiguration.Verification memory nestedVerif = AccountConfiguration.Verification({
-            ownerId: bytes32(bytes20(vm.addr(DELEGATE_PK))),
-            verifierData: delegateSig
+            ownerId: bytes32(bytes20(vm.addr(DELEGATE_PK))), verifierData: delegateSig
         });
         bytes memory data = abi.encodePacked(delegateAccount, abi.encode(nestedVerif));
 
@@ -67,10 +66,8 @@ contract DelegateVerifierTest is AccountConfigurationTest {
 
         bytes memory fakeSig = _signDigest(999, hash);
         // Claim DELEGATE_PK's ownerId but supply a wrong sig — verifier returns wrong ownerId
-        AccountConfiguration.Verification memory nestedVerif = AccountConfiguration.Verification({
-            ownerId: bytes32(bytes20(vm.addr(DELEGATE_PK))),
-            verifierData: fakeSig
-        });
+        AccountConfiguration.Verification memory nestedVerif =
+            AccountConfiguration.Verification({ownerId: bytes32(bytes20(vm.addr(DELEGATE_PK))), verifierData: fakeSig});
         bytes memory data = abi.encodePacked(delegateAccount, abi.encode(nestedVerif));
 
         vm.expectRevert();
@@ -95,10 +92,8 @@ contract DelegateVerifierTest is AccountConfigurationTest {
         // Single-hop B → A: should work (accountB's verifier for delegateRefA is k1Verifier... wait)
         // Actually accountB has delegateVerifier for delegateRefA, so this single hop tries
         // to verify with accountA as delegate. accountA has k1Verifier for DELEGATE_PK.
-        AccountConfiguration.Verification memory singleVerif = AccountConfiguration.Verification({
-            ownerId: bytes32(bytes20(vm.addr(DELEGATE_PK))),
-            verifierData: k1Sig
-        });
+        AccountConfiguration.Verification memory singleVerif =
+            AccountConfiguration.Verification({ownerId: bytes32(bytes20(vm.addr(DELEGATE_PK))), verifierData: k1Sig});
         bytes memory singleHopData = abi.encodePacked(accountA, abi.encode(singleVerif));
         bytes32 ownerId = delegateVerifier.verify(hash, singleHopData);
         assertEq(ownerId, delegateRefA);

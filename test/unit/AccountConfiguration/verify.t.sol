@@ -23,10 +23,8 @@ contract VerifyTest is AccountConfigurationTest {
 
         bytes32 hash = keccak256("verify me");
         // Sign with pk 999 but claim OWNER_PK's ownerId — verifier returns wrong ownerId
-        AccountConfiguration.Verification memory v = AccountConfiguration.Verification({
-            ownerId: ownerId,
-            verifierData: _signDigest(999, hash)
-        });
+        AccountConfiguration.Verification memory v =
+            AccountConfiguration.Verification({ownerId: ownerId, verifierData: _signDigest(999, hash)});
 
         vm.expectRevert();
         accountConfiguration.verify(account, hash, v);

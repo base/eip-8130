@@ -57,7 +57,9 @@ contract DeployAccounts is Script {
         bytes32 ownerId = bytes32(bytes20(owner));
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: k1, scopes: 0x00})});
+        owners[0] = AccountConfiguration.InitializeOwner({
+            ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: k1, scopes: 0x00})
+        });
 
         // ── 3a: DefaultAccount (ERC-1167 proxy, 45 bytes) ──
         //

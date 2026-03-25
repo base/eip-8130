@@ -66,16 +66,16 @@ contract GasBenchmarkTest is Test {
             address signerA = vm.addr(pkA);
             bytes32 ownerIdA = bytes32(bytes20(signerA));
             AccountConfiguration.InitializeOwner[] memory ownersA = new AccountConfiguration.InitializeOwner[](1);
-            ownersA[0] = AccountConfiguration.InitializeOwner({ownerId: ownerIdA, config: AccountConfiguration.OwnerConfig({verifier: address(k1), scopes: 0x00})});
+            ownersA[0] = AccountConfiguration.InitializeOwner({
+                ownerId: ownerIdA, config: AccountConfiguration.OwnerConfig({verifier: address(k1), scopes: 0x00})
+            });
             bytes memory bytecode =
                 abi.encodePacked(hex"363d3d373d3d3d363d73", defaultImpl, hex"5af43d82803e903d91602b57fd5bf3");
             config.createAccount(bytes32("benchA"), bytecode, ownersA);
             address accountA = config.computeAddress(bytes32("benchA"), bytecode, ownersA);
             (uint8 v, bytes32 r, bytes32 s) = vm.sign(pkA, testHash);
-            AccountConfiguration.Verification memory nestedVerif = AccountConfiguration.Verification({
-                ownerId: ownerIdA,
-                verifierData: abi.encodePacked(r, s, v)
-            });
+            AccountConfiguration.Verification memory nestedVerif =
+                AccountConfiguration.Verification({ownerId: ownerIdA, verifierData: abi.encodePacked(r, s, v)});
             delegateData = abi.encodePacked(accountA, abi.encode(nestedVerif));
         }
     }

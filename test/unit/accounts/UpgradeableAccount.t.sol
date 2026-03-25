@@ -51,7 +51,9 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         ownerId = bytes32(bytes20(signer));
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
+        owners[0] = AccountConfiguration.InitializeOwner({
+            ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+        });
 
         bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
         account = accountConfiguration.createAccount(bytes32(0), proxyBytecode, owners);
@@ -85,7 +87,9 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         bytes32 ownerId = bytes32(bytes20(signer));
 
         AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})});
+        owners[0] = AccountConfiguration.InitializeOwner({
+            ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+        });
 
         bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
         address predicted = accountConfiguration.computeAddress(bytes32(0), proxyBytecode, owners);
@@ -269,7 +273,8 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
 
         bytes32 hash = keccak256("validate me");
         bytes memory wrongSig = _signDigest(999, hash);
-        bytes memory authData = abi.encode(AccountConfiguration.Verification({ownerId: ownerId, verifierData: wrongSig}));
+        bytes memory authData =
+            abi.encode(AccountConfiguration.Verification({ownerId: ownerId, verifierData: wrongSig}));
 
         bytes4 result = UpgradeableAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0xFFFFFFFF));
