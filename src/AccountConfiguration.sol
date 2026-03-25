@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {INativeVerifiers} from "./interfaces/INativeVerifiers.sol";
 import {IVerifier} from "./interfaces/IVerifier.sol";
 
 /// @notice Account Configuration system contract for EIP-8130.
