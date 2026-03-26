@@ -62,13 +62,6 @@ interface IAccountConfig {
         view
         returns (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint24 unlockDelay);
 
-    // Native verifiers
-    function getNativeVerifiers()
-        external
-        view
-        returns (address k1, address p256Raw, address p256WebAuthn, address delegate);
-    function getVerifierAddress(uint8 verifierType) external view returns (address);
-
     // Signature verification
     function verifySignature(address account, bytes32 hash, bytes calldata auth)
         external
