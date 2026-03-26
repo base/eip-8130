@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
+import {IAccountConfiguration} from "./interfaces/IAccountConfiguration.sol";
 import {IVerifier} from "./interfaces/IVerifier.sol";
 
 /// @notice Account Configuration system contract for EIP-8130.
@@ -46,7 +47,7 @@ contract AccountConfiguration {
 
     /// @dev Sentinel for the self-ownerId (ownerId == bytes32(bytes20(account))) to distinguish
     ///      "explicitly revoked" from "never registered" (address(0)).
-    address public constant REVOKED = address(type(uint160).max);
+    address constant REVOKED = address(type(uint160).max);
 
     /// @dev Typehash for OwnerChangeBatch, NOT compliant with EIP-712 to mitigate phishing attacks.
     bytes32 public constant OWNER_INITIALIZATION_TYPEHASH = keccak256(

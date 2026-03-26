@@ -79,7 +79,8 @@ contract DefaultAccount is Receiver {
 
     function _isAuthorizedCaller(address caller) internal view virtual returns (bool) {
         if (caller == address(this)) return true;
-        (address verifier,) = ACCOUNT_CONFIGURATION.getOwner(address(this), bytes32(bytes20(caller)));
-        return verifier == EXTERNAL_CALLER_VERIFIER;
+        AccountConfiguration.OwnerConfig memory config =
+            ACCOUNT_CONFIGURATION.getOwnerConfig(address(this), bytes32(bytes20(caller)));
+        return config.verifier == EXTERNAL_CALLER_VERIFIER;
     }
 }
