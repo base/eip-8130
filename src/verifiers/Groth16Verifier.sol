@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {IVerifier} from "./IVerifier.sol";
+import {IVerifier} from "../interfaces/IVerifier.sol";
 
 /// @notice Groth16 ZK-SNARK verifier over BN254 using EIP-196/197 precompiles.
 ///

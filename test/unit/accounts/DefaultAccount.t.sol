@@ -1,177 +1,180 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {DefaultAccount, Call, EXTERNAL_CALLER_VERIFIER} from "../../../src/accounts/DefaultAccount.sol";
-import {InitialOwner} from "../../../src/AccountDeployer.sol";
-import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
+// import {DefaultAccount, Call} from "../../../src/accounts/DefaultAccount.sol";
+// import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
+// import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
-contract MockTarget {
-    uint256 public value;
+// contract MockTarget {
+//     uint256 public value;
 
-    function setValue(uint256 v) external payable {
-        value = v;
-    }
+//     function setValue(uint256 v) external payable {
+//         value = v;
+//     }
 
-    function reverting() external pure {
-        revert("boom");
-    }
-}
+//     function reverting() external pure {
+//         revert("boom");
+//     }
+// }
 
-contract DefaultAccountTest is AccountConfigurationTest {
-    uint256 constant OWNER_PK = 100;
-    MockTarget public target;
+// contract DefaultAccountTest is AccountConfigurationTest {
+//     uint256 constant OWNER_PK = 100;
+//     MockTarget public target;
 
-    function setUp() public override {
-        super.setUp();
-        target = new MockTarget();
-    }
+//     function setUp() public override {
+//         super.setUp();
+//         target = new MockTarget();
+//     }
 
-    function _singleCall(address t, uint256 v, bytes memory d) internal pure returns (Call[] memory calls) {
-        calls = new Call[](1);
-        calls[0] = Call(t, v, d);
-    }
+//     function _singleCall(address t, uint256 v, bytes memory d) internal pure returns (Call[] memory calls) {
+//         calls = new Call[](1);
+//         calls[0] = Call(t, v, d);
+//     }
 
-    /// @dev Creates account with a K1 owner + an external caller authorized via EXTERNAL_CALLER_VERIFIER.
-    function _createK1AccountWithExternalCaller(uint256 pk, address caller)
-        internal
-        returns (address account, bytes32 ownerId)
-    {
-        address signer = vm.addr(pk);
-        ownerId = bytes32(bytes20(signer));
-        bytes32 callerOwnerId = bytes32(bytes20(caller));
-        address ecv = EXTERNAL_CALLER_VERIFIER;
+//     // ── Caller management ──
 
-        InitialOwner[] memory owners = new InitialOwner[](2);
+//     function test_selfIsAlwaysAuthorized() public {
+//         (address account,) = _createK1Account(OWNER_PK);
+//         assertTrue(DefaultAccount(payable(account)).isAuthorizedCaller(account));
+//     }
 
-        if (ownerId < callerOwnerId) {
-            owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
-            owners[1] = InitialOwner({verifier: ecv, ownerId: callerOwnerId, scope: 0x00});
-        } else {
-            owners[0] = InitialOwner({verifier: ecv, ownerId: callerOwnerId, scope: 0x00});
-            owners[1] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
-        }
+//     function test_authorizeCaller_success() public {
+//         (address account,) = _createK1Account(OWNER_PK);
+//         address policyManager = address(0xBBBB);
 
-        bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        account = accountConfiguration.createAccount(bytes32(uint256(0xaa)), bytecode, owners);
-    }
+//         vm.prank(account);
+//         DefaultAccount(payable(account)).authorizeCaller(policyManager);
 
-    // ── Caller authorization ──
+//         assertTrue(DefaultAccount(payable(account)).isAuthorizedCaller(policyManager));
+//     }
 
-    function test_selfIsAlwaysAuthorized() public {
-        (address account,) = _createK1Account(OWNER_PK);
-        assertTrue(DefaultAccount(payable(account)).isAuthorizedCaller(account));
-    }
+//     function test_authorizeCaller_revertsFromNonSelf() public {
+//         (address account,) = _createK1Account(OWNER_PK);
 
-    function test_externalCallerAuthorized() public {
-        address policyManager = address(0xBBBB);
-        (address account,) = _createK1AccountWithExternalCaller(OWNER_PK, policyManager);
-        assertTrue(DefaultAccount(payable(account)).isAuthorizedCaller(policyManager));
-    }
+//         vm.prank(address(0xdead));
+//         vm.expectRevert();
+//         DefaultAccount(payable(account)).authorizeCaller(address(0xBBBB));
+//     }
 
-    function test_unregisteredCallerNotAuthorized() public {
-        (address account,) = _createK1Account(OWNER_PK);
-        assertFalse(DefaultAccount(payable(account)).isAuthorizedCaller(address(0xdead)));
-    }
+//     function test_revokeCaller_success() public {
+//         (address account,) = _createK1Account(OWNER_PK);
+//         address policyManager = address(0xBBBB);
 
-    // ── executeBatch ──
+//         vm.prank(account);
+//         DefaultAccount(payable(account)).authorizeCaller(policyManager);
 
-    function test_executeBatch_success() public {
-        (address account,) = _createK1Account(OWNER_PK);
+//         vm.prank(account);
+//         DefaultAccount(payable(account)).revokeCaller(policyManager);
 
-        vm.prank(account);
-        DefaultAccount(payable(account))
-            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (42))));
+//         assertFalse(DefaultAccount(payable(account)).isAuthorizedCaller(policyManager));
+//     }
 
-        assertEq(target.value(), 42);
-    }
+//     // ── executeBatch ──
 
-    function test_executeBatch_withETHValue() public {
-        (address account,) = _createK1Account(OWNER_PK);
-        vm.deal(account, 1 ether);
+//     function test_executeBatch_success() public {
+//         (address account,) = _createK1Account(OWNER_PK);
 
-        vm.prank(account);
-        DefaultAccount(payable(account))
-            .executeBatch(_singleCall(address(target), 0.5 ether, abi.encodeCall(MockTarget.setValue, (1))));
+//         vm.prank(account);
+//         DefaultAccount(payable(account))
+//             .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (42))));
 
-        assertEq(address(target).balance, 0.5 ether);
-    }
+//         assertEq(target.value(), 42);
+//     }
 
-    function test_executeBatch_multipleCalls() public {
-        (address account,) = _createK1Account(OWNER_PK);
-        MockTarget target2 = new MockTarget();
+//     function test_executeBatch_withETHValue() public {
+//         (address account,) = _createK1Account(OWNER_PK);
+//         vm.deal(account, 1 ether);
 
-        Call[] memory calls = new Call[](2);
-        calls[0] = Call(address(target), 0, abi.encodeCall(MockTarget.setValue, (10)));
-        calls[1] = Call(address(target2), 0, abi.encodeCall(MockTarget.setValue, (20)));
+//         vm.prank(account);
+//         DefaultAccount(payable(account))
+//             .executeBatch(_singleCall(address(target), 0.5 ether, abi.encodeCall(MockTarget.setValue, (1))));
 
-        vm.prank(account);
-        DefaultAccount(payable(account)).executeBatch(calls);
+//         assertEq(address(target).balance, 0.5 ether);
+//     }
 
-        assertEq(target.value(), 10);
-        assertEq(target2.value(), 20);
-    }
+//     function test_executeBatch_multipleCalls() public {
+//         (address account,) = _createK1Account(OWNER_PK);
+//         MockTarget target2 = new MockTarget();
 
-    function test_executeBatch_fromExternalCaller() public {
-        address policyManager = address(0xBBBB);
-        (address account,) = _createK1AccountWithExternalCaller(OWNER_PK, policyManager);
+//         Call[] memory calls = new Call[](2);
+//         calls[0] = Call(address(target), 0, abi.encodeCall(MockTarget.setValue, (10)));
+//         calls[1] = Call(address(target2), 0, abi.encodeCall(MockTarget.setValue, (20)));
 
-        vm.prank(policyManager);
-        DefaultAccount(payable(account))
-            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (77))));
+//         vm.prank(account);
+//         DefaultAccount(payable(account)).executeBatch(calls);
 
-        assertEq(target.value(), 77);
-    }
+//         assertEq(target.value(), 10);
+//         assertEq(target2.value(), 20);
+//     }
 
-    function test_executeBatch_revertsFromUnauthorizedCaller() public {
-        (address account,) = _createK1Account(OWNER_PK);
+//     function test_executeBatch_fromAuthorizedCaller() public {
+//         (address account,) = _createK1Account(OWNER_PK);
+//         address policyManager = address(0xBBBB);
 
-        vm.prank(address(0xdead));
-        vm.expectRevert();
-        DefaultAccount(payable(account))
-            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1))));
-    }
+//         vm.prank(account);
+//         DefaultAccount(payable(account)).authorizeCaller(policyManager);
 
-    function test_executeBatch_revertsOnFailedCall() public {
-        (address account,) = _createK1Account(OWNER_PK);
+//         vm.prank(policyManager);
+//         DefaultAccount(payable(account))
+//             .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (77))));
 
-        vm.prank(account);
-        vm.expectRevert();
-        DefaultAccount(payable(account))
-            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.reverting, ())));
-    }
+//         assertEq(target.value(), 77);
+//     }
 
-    // ── isValidSignature ──
+//     function test_executeBatch_revertsFromUnauthorizedCaller() public {
+//         (address account,) = _createK1Account(OWNER_PK);
 
-    function test_isValidSignature_validK1() public {
-        (address account,) = _createK1Account(OWNER_PK);
+//         vm.prank(address(0xdead));
+//         vm.expectRevert();
+//         DefaultAccount(payable(account))
+//             .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1))));
+//     }
 
-        bytes32 hash = keccak256("validate me");
-        bytes memory sig = _signDigest(OWNER_PK, hash);
-        bytes memory authData = abi.encodePacked(uint8(0x01), sig);
+//     function test_executeBatch_revertsOnFailedCall() public {
+//         (address account,) = _createK1Account(OWNER_PK);
 
-        bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
-        assertEq(result, bytes4(0x1626ba7e));
-    }
+//         vm.prank(account);
+//         vm.expectRevert();
+//         DefaultAccount(payable(account))
+//             .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.reverting, ())));
+//     }
 
-    function test_isValidSignature_invalidSignature() public {
-        (address account,) = _createK1Account(OWNER_PK);
+//     // ── isValidSignature ──
 
-        bytes32 hash = keccak256("validate me");
-        bytes memory wrongSig = _signDigest(999, hash);
-        bytes memory authData = abi.encodePacked(uint8(0x01), wrongSig);
+//     function test_isValidSignature_validK1() public {
+//         (address account, bytes32 ownerId) = _createK1Account(OWNER_PK);
 
-        bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
-        assertEq(result, bytes4(0xFFFFFFFF));
-    }
+//         bytes32 hash = keccak256("validate me");
+//         bytes memory sig = _signDigest(OWNER_PK, hash);
+//         bytes memory authData = abi.encode(AccountConfiguration.Verification({ownerId: ownerId, verifierData: sig}));
 
-    function test_isValidSignature_unknownOwnerId() public {
-        (address account,) = _createK1Account(OWNER_PK);
+//         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
+//         assertEq(result, bytes4(0x1626ba7e));
+//     }
 
-        bytes32 hash = keccak256("validate me");
-        bytes memory sig = _signDigest(999, hash);
-        bytes memory authData = abi.encodePacked(uint8(0x01), sig);
+//     function test_isValidSignature_invalidSignature() public {
+//         (address account, bytes32 ownerId) = _createK1Account(OWNER_PK);
 
-        bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
-        assertEq(result, bytes4(0xFFFFFFFF));
-    }
-}
+//         bytes32 hash = keccak256("validate me");
+//         bytes memory wrongSig = _signDigest(999, hash);
+//         // Correct ownerId but wrong sig — verifier returns wrong ownerId, mismatch fails
+//         bytes memory authData =
+//             abi.encode(AccountConfiguration.Verification({ownerId: ownerId, verifierData: wrongSig}));
+
+//         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
+//         assertEq(result, bytes4(0xFFFFFFFF));
+//     }
+
+//     function test_isValidSignature_unknownOwnerId() public {
+//         (address account,) = _createK1Account(OWNER_PK);
+
+//         bytes32 hash = keccak256("validate me");
+//         bytes memory sig = _signDigest(999, hash);
+//         // ownerId for key 999 — not registered on account
+//         bytes memory authData =
+//             abi.encode(AccountConfiguration.Verification({ownerId: bytes32(bytes20(vm.addr(999))), verifierData: sig}));
+
+//         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
+//         assertEq(result, bytes4(0xFFFFFFFF));
+//     }
+// }

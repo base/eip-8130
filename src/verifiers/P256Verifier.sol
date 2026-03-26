@@ -3,7 +3,7 @@ pragma solidity ^0.8.30;
 
 import {P256} from "openzeppelin/utils/cryptography/P256.sol";
 
-import {IVerifier} from "./IVerifier.sol";
+import {IVerifier} from "../interfaces/IVerifier.sol";
 
 /// @notice P-256 raw ECDSA verifier. ownerId = keccak256(pub_key_x || pub_key_y).
 /// @dev Data layout: r (32) || s (32) || pub_key_x (32) || pub_key_y (32) || pre_hash (1)

@@ -3,7 +3,7 @@ pragma solidity ^0.8.30;
 
 import {WebAuthn} from "openzeppelin/utils/cryptography/WebAuthn.sol";
 
-import {IVerifier} from "./IVerifier.sol";
+import {IVerifier} from "../interfaces/IVerifier.sol";
 
 /// @notice P-256 WebAuthn/Passkey verifier. ownerId = keccak256(pub_key_x || pub_key_y).
 contract WebAuthnVerifier is IVerifier {

@@ -4,8 +4,7 @@ pragma solidity ^0.8.30;
 import {Script, console} from "forge-std/Script.sol";
 
 import {AccountConfiguration} from "../src/AccountConfiguration.sol";
-import {InitialOwner} from "../src/AccountDeployer.sol";
-import {IVerifier} from "../src/verifiers/IVerifier.sol";
+import {IVerifier} from "../src/interfaces/IVerifier.sol";
 
 /// @notice End-to-end smoke test against a live deployment.
 ///
@@ -46,10 +45,13 @@ contract SmokeTest is Script {
         internal
         returns (address)
     {
-        InitialOwner[] memory owners = new InitialOwner[](1);
-        owners[0] = InitialOwner({ownerId: ownerId, verifier: k1Verifier, scope: 0x00});
+        AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
+        owners[0] = AccountConfiguration.InitializeOwner({
+            ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: k1Verifier, scopes: 0x00})
+        });
 
-        bytes memory bytecode = config.computeERC1167Bytecode(defaultImpl);
+        bytes memory bytecode =
+            abi.encodePacked(hex"363d3d373d3d3d363d73", defaultImpl, hex"5af43d82803e903d91602b57fd5bf3");
 
         vm.startBroadcast(SIGNER_PK);
         address account = config.createAccount(bytes32(0), bytecode, owners);
@@ -61,17 +63,18 @@ contract SmokeTest is Script {
         internal
         view
     {
-        (address verifier,) = config.getOwner(account, ownerId);
-        require(verifier != address(0), "owner not authorized");
-        require(verifier == k1Verifier, "wrong verifier");
+        AccountConfiguration.OwnerConfig memory ownerCfg = config.getOwnerConfig(account, ownerId);
+        require(ownerCfg.verifier != address(0), "owner not authorized");
+        require(ownerCfg.verifier == k1Verifier, "wrong verifier");
     }
 
     function _checkSignature(AccountConfiguration config, address k1Verifier, address account) internal view {
         bytes32 testHash = keccak256("hello EIP-8130");
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(SIGNER_PK, testHash);
 
-        bytes memory auth = abi.encodePacked(uint8(0x01), r, s, v);
-        (bool valid,,) = config.verifySignature(account, testHash, auth);
-        require(valid, "signature verification failed");
+        AccountConfiguration.Verification memory verification = AccountConfiguration.Verification({
+            ownerId: bytes32(bytes20(vm.addr(SIGNER_PK))), verifierData: abi.encodePacked(r, s, v)
+        });
+        config.verify(account, testHash, verification);
     }
 }

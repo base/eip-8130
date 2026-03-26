@@ -3,7 +3,7 @@ pragma solidity ^0.8.30;
 
 import {ECDSA} from "openzeppelin/utils/cryptography/ECDSA.sol";
 
-import {IVerifier} from "./IVerifier.sol";
+import {IVerifier} from "../interfaces/IVerifier.sol";
 
 /// @notice K1 multisig verifier. Threshold M-of-N using secp256k1 ECDSA.
 ///

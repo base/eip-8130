@@ -4,9 +4,7 @@ pragma solidity ^0.8.30;
 import {Test} from "forge-std/Test.sol";
 
 import {AccountConfiguration} from "../../src/AccountConfiguration.sol";
-import {InitialOwner} from "../../src/AccountDeployer.sol";
-import {ConfigOperation} from "../../src/AccountConfigDigest.sol";
-import {IVerifier} from "../../src/verifiers/IVerifier.sol";
+import {IVerifier} from "../../src/interfaces/IVerifier.sol";
 import {K1Verifier} from "../../src/verifiers/K1Verifier.sol";
 import {P256Verifier} from "../../src/verifiers/P256Verifier.sol";
 import {WebAuthnVerifier} from "../../src/verifiers/WebAuthnVerifier.sol";
@@ -21,17 +19,16 @@ contract AccountConfigurationTest is Test {
     IVerifier public delegateVerifier;
     address public defaultAccountImplementation;
 
-    bytes32 constant CONFIG_CHANGE_TYPEHASH = keccak256(
-        "ConfigChange(address account,uint64 chainId,uint64 sequence,ConfigOperation[] operations)"
-        "ConfigOperation(uint8 opType,address verifier,bytes32 ownerId,uint8 scope)"
+    bytes32 constant OWNER_CHANGE_BATCH_TYPEHASH = keccak256(
+        "OwnerChangeBatch(address account,uint64 chainId,uint64 sequence,OwnerChange[] ownerChanges)"
+        "OwnerChange(bytes32 ownerId,uint8 changeType,bytes changeData)"
     );
 
     function setUp() public virtual {
         k1Verifier = IVerifier(new K1Verifier());
         p256Verifier = IVerifier(new P256Verifier());
         webAuthnVerifier = IVerifier(new WebAuthnVerifier());
-        accountConfiguration =
-            new AccountConfiguration(address(k1Verifier), address(p256Verifier), address(webAuthnVerifier), address(0));
+        accountConfiguration = new AccountConfiguration();
         delegateVerifier = IVerifier(new DelegateVerifier(address(accountConfiguration)));
         defaultAccountImplementation = address(new DefaultAccount(address(accountConfiguration)));
     }
@@ -48,8 +45,10 @@ contract AccountConfigurationTest is Test {
         address signer = vm.addr(pk);
         ownerId = bytes32(bytes20(signer));
 
-        InitialOwner[] memory owners = new InitialOwner[](1);
-        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
+        AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
+        owners[0] = AccountConfiguration.InitializeOwner({
+            ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+        });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         account = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
@@ -59,8 +58,10 @@ contract AccountConfigurationTest is Test {
         address signer = vm.addr(pk);
         ownerId = bytes32(bytes20(signer));
 
-        InitialOwner[] memory owners = new InitialOwner[](1);
-        owners[0] = InitialOwner({verifier: address(k1Verifier), ownerId: ownerId, scope: 0x00});
+        AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
+        owners[0] = AccountConfiguration.InitializeOwner({
+            ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+        });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         account = accountConfiguration.createAccount(salt, bytecode, owners);
@@ -73,28 +74,31 @@ contract AccountConfigurationTest is Test {
         return abi.encodePacked(r, s, v);
     }
 
-    /// @dev Build authorizerAuth for verifySignature / isValidSignature: type_byte || ecdsaSig
-    function _buildK1Auth(uint256 pk, bytes32 digest) internal pure returns (bytes memory) {
+    function _buildK1Verification(uint256 pk, bytes32 digest)
+        internal
+        view
+        returns (AccountConfiguration.Verification memory)
+    {
         bytes memory sig = _signDigest(pk, digest);
-        return abi.encodePacked(uint8(0x01), sig);
+        return AccountConfiguration.Verification({ownerId: bytes32(bytes20(vm.addr(pk))), verifierData: sig});
     }
 
     // ── Canonical digest computation ──
 
-    function _computeConfigChangeDigest(
+    function _computeOwnerChangeBatchDigest(
         address account,
         uint64 chainId,
         uint64 sequence,
-        ConfigOperation[] memory operations
+        AccountConfiguration.OwnerChange[] memory ownerChanges
     ) internal pure returns (bytes32) {
-        bytes32[] memory opHashes = new bytes32[](operations.length);
-        for (uint256 i; i < operations.length; i++) {
-            opHashes[i] = keccak256(
-                abi.encode(operations[i].opType, operations[i].verifier, operations[i].ownerId, operations[i].scope)
-            );
+        bytes32[] memory ownerChangeHash = new bytes32[](ownerChanges.length);
+        for (uint256 i; i < ownerChanges.length; i++) {
+            ownerChangeHash[i] = keccak256(abi.encode(ownerChanges[i]));
         }
         return keccak256(
-            abi.encode(CONFIG_CHANGE_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(opHashes)))
+            abi.encode(
+                OWNER_CHANGE_BATCH_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(ownerChangeHash))
+            )
         );
     }
 }

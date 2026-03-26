@@ -17,7 +17,7 @@ contract DefaultHighRateAccount is DefaultAccount {
         require(_isAuthorizedCaller(msg.sender));
         for (uint256 i; i < calls.length; i++) {
             if (calls[i].value > 0) {
-                (bool locked,,) = ACCOUNT_CONFIGURATION.getLockState(address(this));
+                (bool locked,,,) = ACCOUNT_CONFIGURATION.getLockStatus(address(this));
                 require(!locked);
             }
             (bool success,) = calls[i].target.call{value: calls[i].value}(calls[i].data);

@@ -54,9 +54,15 @@ contract DefaultAccount is Receiver {
     /// @param signature Auth data in verifier || data format
     /// @return magicValue 0x1626ba7e if valid, 0xffffffff otherwise
     function isValidSignature(bytes32 hash, bytes calldata signature) external view virtual returns (bytes4) {
-        (bool valid,,) = ACCOUNT_CONFIGURATION.verifySignature(address(this), hash, signature);
-        if (!valid) return bytes4(0xFFFFFFFF);
-        return bytes4(0x1626ba7e);
+        try ACCOUNT_CONFIGURATION.verify(
+            address(this), hash, abi.decode(signature, (AccountConfiguration.Verification))
+        ) returns (
+            uint8
+        ) {
+            return bytes4(0x1626ba7e);
+        } catch {
+            return bytes4(0xFFFFFFFF);
+        }
     }
 
     // ══════════════════════════════════════════════
@@ -73,7 +79,8 @@ contract DefaultAccount is Receiver {
 
     function _isAuthorizedCaller(address caller) internal view virtual returns (bool) {
         if (caller == address(this)) return true;
-        (address verifier,) = ACCOUNT_CONFIGURATION.getOwner(address(this), bytes32(bytes20(caller)));
-        return verifier == EXTERNAL_CALLER_VERIFIER;
+        AccountConfiguration.OwnerConfig memory config =
+            ACCOUNT_CONFIGURATION.getOwnerConfig(address(this), bytes32(bytes20(caller)));
+        return config.verifier == EXTERNAL_CALLER_VERIFIER;
     }
 }
