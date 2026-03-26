@@ -8,7 +8,7 @@ import {DefaultAccount} from "./DefaultAccount.sol";
 /// @notice UUPS-upgradeable variant of DefaultAccount.
 ///
 ///         Adds upgradeToAndCall from Solady's UUPSUpgradeable. Everything else
-///         (caller management, executeBatch, isValidSignature) is inherited.
+///         (executeBatch, isValidSignature, caller authorization) is inherited.
 ///
 ///         Deploy behind an UpgradeableProxy instead of ERC-1167.
 ///         7702 accounts don't need this — they can re-delegate anytime.
