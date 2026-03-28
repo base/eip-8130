@@ -4,6 +4,7 @@ pragma solidity ^0.8.30;
 import {Script, console} from "forge-std/Script.sol";
 
 import {AccountConfiguration} from "../src/AccountConfiguration.sol";
+import {IAccountConfiguration} from "../src/interfaces/IAccountConfiguration.sol";
 import {DefaultAccount, Call} from "../src/accounts/DefaultAccount.sol";
 import {DefaultHighRateAccount} from "../src/accounts/DefaultHighRateAccount.sol";
 import {UpgradeableAccount} from "../src/accounts/UpgradeableAccount.sol";
@@ -56,9 +57,9 @@ contract DeployAccounts is Script {
         address owner = msg.sender;
         bytes32 ownerId = bytes32(bytes20(owner));
 
-        AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({
-            ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: k1, scopes: 0x00})
+        IAccountConfiguration.InitializeOwner[] memory owners = new IAccountConfiguration.InitializeOwner[](1);
+        owners[0] = IAccountConfiguration.InitializeOwner({
+            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: k1, scopes: 0x00})
         });
 
         // ── 3a: DefaultAccount (ERC-1167 proxy, 45 bytes) ──
@@ -111,7 +112,7 @@ contract DeployAccounts is Script {
         console.log("");
         console.log("=== Verification ===");
 
-        AccountConfiguration.OwnerConfig memory ownerCfg = accountConfig.getOwnerConfig(defaultAccount, ownerId);
+        IAccountConfiguration.OwnerConfig memory ownerCfg = accountConfig.getOwnerConfig(defaultAccount, ownerId);
         console.log("DefaultAccount owner verifier:", ownerCfg.verifier);
         console.log("DefaultAccount owner scopes:  ", ownerCfg.scopes);
 

@@ -4,6 +4,7 @@ pragma solidity ^0.8.30;
 import {Receiver} from "solady/accounts/Receiver.sol";
 
 import {AccountConfiguration} from "../AccountConfiguration.sol";
+import {IAccountConfiguration} from "../interfaces/IAccountConfiguration.sol";
 
 struct Call {
     address target;
@@ -55,7 +56,7 @@ contract DefaultAccount is Receiver {
     /// @return magicValue 0x1626ba7e if valid, 0xffffffff otherwise
     function isValidSignature(bytes32 hash, bytes calldata signature) external view virtual returns (bytes4) {
         try ACCOUNT_CONFIGURATION.verify(
-            address(this), hash, abi.decode(signature, (AccountConfiguration.Verification))
+            address(this), hash, abi.decode(signature, (IAccountConfiguration.Verification))
         ) returns (
             uint8
         ) {
@@ -79,7 +80,7 @@ contract DefaultAccount is Receiver {
 
     function _isAuthorizedCaller(address caller) internal view virtual returns (bool) {
         if (caller == address(this)) return true;
-        AccountConfiguration.OwnerConfig memory config =
+        IAccountConfiguration.OwnerConfig memory config =
             ACCOUNT_CONFIGURATION.getOwnerConfig(address(this), bytes32(bytes20(caller)));
         return config.verifier == EXTERNAL_CALLER_VERIFIER;
     }

@@ -6,37 +6,18 @@ import {IVerifier} from "./interfaces/IVerifier.sol";
 
 /// @notice Account Configuration system contract for EIP-8130.
 ///         Manages owner authorization, account creation, change sequencing, and account lock.
-contract AccountConfiguration {
+contract AccountConfiguration is IAccountConfiguration {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // STRUCTS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
+    /// @dev Packed into a single storage slot (23 bytes).
+    ///      localSequence > 0 doubles as the account initialized flag.
     struct AccountState {
-        bool initialized;
-        uint64 ownerChangeSequence;
-        uint40 unlocksAt;
-        uint16 unlockDelay;
-    }
-
-    struct OwnerConfig {
-        address verifier;
-        uint8 scopes;
-    }
-
-    struct InitializeOwner {
-        bytes32 ownerId;
-        OwnerConfig config;
-    }
-
-    struct OwnerChange {
-        bytes32 ownerId;
-        uint8 changeType; // 0x01 = authorizeOwner, 0x02 = revokeOwner
-        bytes configData; // OwnerConfig for authorize, empty for revoke
-    }
-
-    struct Verification {
-        bytes32 ownerId;
-        bytes verifierData;
+        uint64 multichainSequence; // 8 bytes
+        uint64 localSequence; // 8 bytes – also serves as initialized flag
+        uint40 unlocksAt; // 5 bytes
+        uint16 unlockDelay; // 2 bytes
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -94,20 +75,8 @@ contract AccountConfiguration {
     /// @dev Account must be inner-most mapping key to pass ERC-7562 storage access rules for ERC-4337 compatibility.
     mapping(bytes32 ownerId => mapping(address account => OwnerConfig)) internal _ownerConfig;
 
-    /// @notice Per-account state tracking owner change sequences and lock status
+    /// @notice Per-account state: sequences, lock status (single slot per account)
     mapping(address account => AccountState) internal _accountState;
-
-    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    // EVENTS
-    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-
-    event OwnerAuthorized(address indexed account, bytes32 indexed ownerId, OwnerConfig config);
-    event OwnerRevoked(address indexed account, bytes32 indexed ownerId);
-    event AccountCreated(address indexed account, bytes32 userSalt, bytes32 codeHash);
-    event AccountImported(address indexed account);
-    event AppliedSignedOwnerChanges(address indexed account, uint64 sequence);
-    event AccountLocked(address indexed account, uint16 unlockDelay);
-    event AccountUnlockInitiated(address indexed account, uint40 unlocksAt);
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // MODIFIERS
@@ -135,9 +104,8 @@ contract AccountConfiguration {
     {
         account = computeAddress(userSalt, bytecode, initialOwners);
 
-        // Initialize account owners and early return if already initialized
-        bool alreadyInitialized = _initializeAccount(account, initialOwners);
-        if (alreadyInitialized) return account;
+        // Initialize account owners (reverts naturally on duplicate via _authorizeOwner)
+        _initializeAccount(account, initialOwners);
 
         // Create account code
         bytes memory deploymentCode = _buildDeploymentCode(bytecode);
@@ -156,15 +124,18 @@ contract AccountConfiguration {
     function importAccount(address account, InitializeOwner[] calldata initialOwners, bytes calldata signature)
         external
     {
+        // Prevent re-import (replay of revoked owners)
+        require(_accountState[account].localSequence == 0);
+        _accountState[account].localSequence = 1;
+
         // Verify account signature using ERC-1271
         bytes32 digest = _computeOwnerInitializationDigest(bytes32(bytes20(account)), initialOwners);
         (bool success, bytes memory result) =
             account.staticcall(abi.encodeWithSelector(ERC1271_SELECTOR, digest, signature));
         require(success && result.length == 32 && abi.decode(result, (bytes4)) == ERC1271_SELECTOR);
 
-        // Initialize account owners and early return if already initialized
-        bool alreadyInitialized = _initializeAccount(account, initialOwners);
-        if (alreadyInitialized) return;
+        // Initialize account owners
+        _initializeAccount(account, initialOwners);
 
         emit AccountImported(account);
     }
@@ -173,15 +144,16 @@ contract AccountConfiguration {
     ///         Direct verification via verifier + owner_config, isValidSignature fallback for migration.
     function applySignedOwnerChanges(
         address account,
-        bool isCrossChain,
+        uint64 chainId,
         OwnerChange[] calldata ownerChanges,
         Verification calldata verification
     ) external onlyUnlocked(account) {
-        // Use zero chain id for cross-chain owner changes else just current chain
-        uint64 chainId = isCrossChain ? 0 : uint64(block.chainid);
+        require(chainId == 0 || chainId == block.chainid);
 
-        // Increment sequence
-        uint64 sequence = _accountState[account].ownerChangeSequence++;
+        // Increment the corresponding sequence
+        uint64 sequence = chainId == 0
+            ? _accountState[account].multichainSequence++
+            : _accountState[account].localSequence++;
 
         // Compute digest and verify
         bytes32 digest = _computeOwnerChangeBatchDigest(account, chainId, sequence, ownerChanges);
@@ -286,7 +258,7 @@ contract AccountConfiguration {
     // ----------------------------------------------------------------------------------------------------------------
 
     function isInitialized(address account) public view returns (bool) {
-        return _accountState[account].initialized;
+        return _accountState[account].localSequence > 0;
     }
 
     function isOwner(address account, bytes32 ownerId) public view returns (bool) {
@@ -298,8 +270,9 @@ contract AccountConfiguration {
         return _ownerConfig[ownerId][account];
     }
 
-    function getOwnerChangeSequence(address account) external view returns (uint64) {
-        return _accountState[account].ownerChangeSequence;
+    function getChangeSequences(address account) external view returns (ChangeSequences memory) {
+        AccountState storage state = _accountState[account];
+        return ChangeSequences({multichain: state.multichainSequence, local: state.localSequence});
     }
 
     function isLocked(address account) external view returns (bool) {
@@ -343,14 +316,9 @@ contract AccountConfiguration {
     function _initializeAccount(address account, InitializeOwner[] calldata initialOwners)
         internal
         nonZero(account)
-        returns (bool alreadyInitialized)
     {
         // Must have at least one initial owner
         require(initialOwners.length > 0);
-
-        // Early return if account already initialized
-        if (_accountState[account].initialized) return true;
-        _accountState[account].initialized = true;
 
         bytes32 previousOwnerId;
         for (uint256 i; i < initialOwners.length; i++) {

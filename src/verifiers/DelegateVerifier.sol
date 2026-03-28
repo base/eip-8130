@@ -3,6 +3,7 @@ pragma solidity ^0.8.30;
 
 import {IVerifier} from "../interfaces/IVerifier.sol";
 import {AccountConfiguration} from "../AccountConfiguration.sol";
+import {IAccountConfiguration} from "../interfaces/IAccountConfiguration.sol";
 
 /// @notice Delegates verification to another account's owner configuration.
 ///         ownerId = bytes32(bytes20(delegate_address)). Only 1 hop permitted.
@@ -26,7 +27,7 @@ contract DelegateVerifier is IVerifier {
 
         ownerId = bytes32(bytes20(delegate));
 
-        AccountConfiguration.Verification memory v = abi.decode(nestedData, (AccountConfiguration.Verification));
+        IAccountConfiguration.Verification memory v = abi.decode(nestedData, (IAccountConfiguration.Verification));
 
         // Prevent recursive delegation (only 1 hop permitted)
         require(ACCOUNT_CONFIGURATION.getOwnerConfig(delegate, v.ownerId).verifier != address(this));

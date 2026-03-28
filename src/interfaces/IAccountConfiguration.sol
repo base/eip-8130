@@ -7,6 +7,11 @@ interface IAccountConfiguration {
     // STRUCTS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
+    struct ChangeSequences {
+        uint64 multichain; // chain_id 0
+        uint64 local; // chain_id == block.chainid
+    }
+
     struct OwnerConfig {
         address verifier;
         uint8 scopes;
@@ -58,7 +63,7 @@ interface IAccountConfiguration {
 
     function applySignedOwnerChanges(
         address account,
-        bool isCrossChain,
+        uint64 chainId,
         OwnerChange[] calldata ownerChanges,
         Verification calldata verification
     ) external;
@@ -97,7 +102,7 @@ interface IAccountConfiguration {
 
     function getOwnerConfig(address account, bytes32 ownerId) external view returns (OwnerConfig memory);
 
-    function getOwnerChangeSequence(address account) external view returns (uint64);
+    function getChangeSequences(address account) external view returns (ChangeSequences memory);
 
     function isLocked(address account) external view returns (bool);
 

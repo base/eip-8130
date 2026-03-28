@@ -4,6 +4,7 @@ pragma solidity ^0.8.30;
 import {Script, console} from "forge-std/Script.sol";
 
 import {AccountConfiguration} from "../src/AccountConfiguration.sol";
+import {IAccountConfiguration} from "../src/interfaces/IAccountConfiguration.sol";
 import {IVerifier} from "../src/interfaces/IVerifier.sol";
 
 /// @notice End-to-end smoke test against a live deployment.
@@ -45,9 +46,9 @@ contract SmokeTest is Script {
         internal
         returns (address)
     {
-        AccountConfiguration.InitializeOwner[] memory owners = new AccountConfiguration.InitializeOwner[](1);
-        owners[0] = AccountConfiguration.InitializeOwner({
-            ownerId: ownerId, config: AccountConfiguration.OwnerConfig({verifier: k1Verifier, scopes: 0x00})
+        IAccountConfiguration.InitializeOwner[] memory owners = new IAccountConfiguration.InitializeOwner[](1);
+        owners[0] = IAccountConfiguration.InitializeOwner({
+            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: k1Verifier, scopes: 0x00})
         });
 
         bytes memory bytecode =
@@ -63,7 +64,7 @@ contract SmokeTest is Script {
         internal
         view
     {
-        AccountConfiguration.OwnerConfig memory ownerCfg = config.getOwnerConfig(account, ownerId);
+        IAccountConfiguration.OwnerConfig memory ownerCfg = config.getOwnerConfig(account, ownerId);
         require(ownerCfg.verifier != address(0), "owner not authorized");
         require(ownerCfg.verifier == k1Verifier, "wrong verifier");
     }
@@ -72,7 +73,7 @@ contract SmokeTest is Script {
         bytes32 testHash = keccak256("hello EIP-8130");
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(SIGNER_PK, testHash);
 
-        AccountConfiguration.Verification memory verification = AccountConfiguration.Verification({
+        IAccountConfiguration.Verification memory verification = IAccountConfiguration.Verification({
             ownerId: bytes32(bytes20(vm.addr(SIGNER_PK))), verifierData: abi.encodePacked(r, s, v)
         });
         config.verify(account, testHash, verification);

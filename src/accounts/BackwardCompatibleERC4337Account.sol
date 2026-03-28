@@ -4,6 +4,7 @@ pragma solidity ^0.8.30;
 import {Receiver} from "solady/accounts/Receiver.sol";
 
 import {AccountConfiguration} from "../AccountConfiguration.sol";
+import {IAccountConfiguration} from "../interfaces/IAccountConfiguration.sol";
 
 struct Call {
     address target;
@@ -100,7 +101,7 @@ contract ERC4337Account is Receiver {
 
         bool valid;
         try ACCOUNT_CONFIGURATION.verify(
-            address(this), userOpHash, abi.decode(userOp.signature, (AccountConfiguration.Verification))
+            address(this), userOpHash, abi.decode(userOp.signature, (IAccountConfiguration.Verification))
         ) returns (
             uint8
         ) {
@@ -124,7 +125,7 @@ contract ERC4337Account is Receiver {
     /// @notice Signature validation via AccountConfiguration's verifier infrastructure.
     function isValidSignature(bytes32 hash, bytes calldata signature) external view returns (bytes4) {
         try ACCOUNT_CONFIGURATION.verify(
-            address(this), hash, abi.decode(signature, (AccountConfiguration.Verification))
+            address(this), hash, abi.decode(signature, (IAccountConfiguration.Verification))
         ) returns (
             uint8
         ) {
