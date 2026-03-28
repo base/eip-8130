@@ -151,9 +151,8 @@ contract AccountConfiguration is IAccountConfiguration {
         require(chainId == 0 || chainId == block.chainid);
 
         // Increment the corresponding sequence
-        uint64 sequence = chainId == 0
-            ? _accountState[account].multichainSequence++
-            : _accountState[account].localSequence++;
+        uint64 sequence =
+            chainId == 0 ? _accountState[account].multichainSequence++ : _accountState[account].localSequence++;
 
         // Compute digest and verify
         bytes32 digest = _computeOwnerChangeBatchDigest(account, chainId, sequence, ownerChanges);
@@ -313,10 +312,7 @@ contract AccountConfiguration is IAccountConfiguration {
     // OWNER CHANGES
     // ----------------------------------------------------------------------------------------------------------------
 
-    function _initializeAccount(address account, InitializeOwner[] calldata initialOwners)
-        internal
-        nonZero(account)
-    {
+    function _initializeAccount(address account, InitializeOwner[] calldata initialOwners) internal nonZero(account) {
         // Must have at least one initial owner
         require(initialOwners.length > 0);
 
