@@ -46,8 +46,8 @@ contract SmokeTest is Script {
         internal
         returns (address)
     {
-        IAccountConfiguration.InitializeOwner[] memory owners = new IAccountConfiguration.InitializeOwner[](1);
-        owners[0] = IAccountConfiguration.InitializeOwner({
+        IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
+        owners[0] = IAccountConfiguration.Owner({
             ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: k1Verifier, scopes: 0x00})
         });
 
@@ -73,9 +73,7 @@ contract SmokeTest is Script {
         bytes32 testHash = keccak256("hello EIP-8130");
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(SIGNER_PK, testHash);
 
-        IAccountConfiguration.Verification memory verification = IAccountConfiguration.Verification({
-            ownerId: bytes32(bytes20(vm.addr(SIGNER_PK))), verifierData: abi.encodePacked(r, s, v)
-        });
-        config.verify(account, testHash, verification);
+        bytes memory auth = abi.encodePacked(k1Verifier, r, s, v);
+        config.verify(account, testHash, auth);
     }
 }

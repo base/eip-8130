@@ -57,8 +57,8 @@ contract DeployAccounts is Script {
         address owner = msg.sender;
         bytes32 ownerId = bytes32(bytes20(owner));
 
-        IAccountConfiguration.InitializeOwner[] memory owners = new IAccountConfiguration.InitializeOwner[](1);
-        owners[0] = IAccountConfiguration.InitializeOwner({
+        IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
+        owners[0] = IAccountConfiguration.Owner({
             ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: k1, scopes: 0x00})
         });
 

@@ -26,13 +26,9 @@ contract AccountConfiguration is IAccountConfiguration {
 
     bytes4 constant ERC1271_SELECTOR = bytes4(keccak256("isValidSignature(bytes32,bytes)"));
 
-    /// @dev Sentinel for the self-ownerId (ownerId == bytes32(bytes20(account))) to distinguish
-    ///      "explicitly revoked" from "never registered" (address(0)).
-    address constant REVOKED = address(type(uint160).max);
-
     /// @dev Typehash for OwnerChangeBatch, NOT compliant with EIP-712 to mitigate phishing attacks.
     bytes32 public constant OWNER_INITIALIZATION_TYPEHASH = keccak256(
-        "OwnerInitialization(bytes32 salt,InitializeOwner[] initialOwners)InitializeOwner(bytes32 ownerId,OwnerConfig config)OwnerConfig(address verifier,uint8 scopes)"
+        "OwnerInitialization(bytes32 salt,Owner[] initialOwners)Owner(bytes32 ownerId,OwnerConfig config)OwnerConfig(address verifier,uint8 scopes)"
     );
 
     /// @dev Typehash for OwnerChangeBatch, NOT compliant with EIP-712 to mitigate phishing attacks.
@@ -98,7 +94,7 @@ contract AccountConfiguration is IAccountConfiguration {
 
     /// @notice Deploy a new account with initial owners configured using safe defaults.
     ///         Initial owners are always unrestricted (scope = 0x00).
-    function createAccount(bytes32 userSalt, bytes calldata bytecode, InitializeOwner[] calldata initialOwners)
+    function createAccount(bytes32 userSalt, bytes calldata bytecode, Owner[] calldata initialOwners)
         external
         returns (address account)
     {
@@ -114,29 +110,23 @@ contract AccountConfiguration is IAccountConfiguration {
             pop(create2(0, add(deploymentCode, 0x20), mload(deploymentCode), deploymentSalt))
         }
         emit AccountCreated(account, userSalt, keccak256(bytecode));
-
-        // todo: enforce code is initialized to prevent empty implementation uninitialization attacks
     }
 
-    /// @notice Import an existing account to AccountConfigruation management.
-    /// @dev Verifies via ERC-1271 implying accounts must have bytecode to be imported.
+    /// @notice Import an existing account to AccountConfiguration management.
+    /// @dev Verifies via ERC-1271. Accounts must have bytecode.
     /// @dev Custom hash used to partially mitigate phishing attacks on eth_signTypedData.
-    function importAccount(address account, InitializeOwner[] calldata initialOwners, bytes calldata signature)
+    function importAccount(address account, Owner[] calldata initialOwners, bytes calldata signature)
         external
     {
-        // Prevent re-import (replay of revoked owners)
         require(_accountState[account].localSequence == 0);
         _accountState[account].localSequence = 1;
 
-        // Verify account signature using ERC-1271
         bytes32 digest = _computeOwnerInitializationDigest(bytes32(bytes20(account)), initialOwners);
         (bool success, bytes memory result) =
             account.staticcall(abi.encodeWithSelector(ERC1271_SELECTOR, digest, signature));
         require(success && result.length == 32 && abi.decode(result, (bytes4)) == ERC1271_SELECTOR);
 
-        // Initialize account owners
         _initializeAccount(account, initialOwners);
-
         emit AccountImported(account);
     }
 
@@ -146,7 +136,7 @@ contract AccountConfiguration is IAccountConfiguration {
         address account,
         uint64 chainId,
         OwnerChange[] calldata ownerChanges,
-        Verification calldata verification
+        bytes calldata auth
     ) external onlyUnlocked(account) {
         require(chainId == 0 || chainId == block.chainid);
 
@@ -156,7 +146,7 @@ contract AccountConfiguration is IAccountConfiguration {
 
         // Compute digest and verify
         bytes32 digest = _computeOwnerChangeBatchDigest(account, chainId, sequence, ownerChanges);
-        uint8 scopes = verify(account, digest, verification);
+        uint8 scopes = verify(account, digest, auth);
 
         // Require owner has scope to change owners (scopes == 0 means unrestricted)
         require(scopes == 0 || scopes & SCOPE_CHANGE_OWNERS != 0);
@@ -208,7 +198,7 @@ contract AccountConfiguration is IAccountConfiguration {
     // VIEW FUNCTIONS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice Verify an account bytes signature.
+    /// @notice Verify an account bytes signature in verifier(20) || data format.
     /// @dev Designed for easy account integration with ERC-1271.
     /// @return verified True if the signature is valid.
     function verifySignature(address account, bytes32 hash, bytes calldata signature)
@@ -216,32 +206,19 @@ contract AccountConfiguration is IAccountConfiguration {
         view
         returns (bool verified)
     {
-        uint8 scopes = verify(account, hash, abi.decode(signature, (Verification)));
-        return scopes & SCOPE_SIGNER != 0;
+        uint8 scopes = verify(account, hash, signature);
+        return scopes == 0 || scopes & SCOPE_SIGNER != 0;
     }
 
-    /// @notice Verify an account approved a hash using a verification.
-    /// @return scopes The scopes enabled by the verification.
-    function verify(address account, bytes32 hash, Verification memory verification)
-        public
-        view
-        returns (uint8 scopes)
-    {
-        OwnerConfig memory config = _ownerConfig[verification.ownerId][account];
-
-        // Require verifier is not null
-        require(config.verifier != address(0));
-
-        // Call verifier and require ownerId is not null (failed verification)
-        // todo: consider where to implement 7739 support
-        bytes32 ownerId = IVerifier(config.verifier).verify(hash, verification.verifierData);
-        require(ownerId != bytes32(0) && ownerId == verification.ownerId);
-
-        return config.scopes;
+    /// @notice Verify an account approved a hash using auth in verifier(20) || data format.
+    /// @return scopes The scopes of the verified owner (0x00 = unrestricted).
+    function verify(address account, bytes32 hash, bytes calldata auth) public view returns (uint8 scopes) {
+        require(auth.length >= 20);
+        return _verify(account, hash, address(bytes20(auth[:20])), auth[20:]);
     }
 
     /// @notice Compute the counterfactual address for an account.
-    function computeAddress(bytes32 userSalt, bytes calldata bytecode, InitializeOwner[] calldata initialOwners)
+    function computeAddress(bytes32 userSalt, bytes calldata bytecode, Owner[] calldata initialOwners)
         public
         view
         returns (address)
@@ -261,8 +238,7 @@ contract AccountConfiguration is IAccountConfiguration {
     }
 
     function isOwner(address account, bytes32 ownerId) public view returns (bool) {
-        address verifier = _ownerConfig[ownerId][account].verifier;
-        return verifier != address(0) && verifier != REVOKED;
+        return _ownerConfig[ownerId][account].verifier != address(0);
     }
 
     function getOwnerConfig(address account, bytes32 ownerId) external view returns (OwnerConfig memory) {
@@ -312,7 +288,7 @@ contract AccountConfiguration is IAccountConfiguration {
     // OWNER CHANGES
     // ----------------------------------------------------------------------------------------------------------------
 
-    function _initializeAccount(address account, InitializeOwner[] calldata initialOwners) internal nonZero(account) {
+    function _initializeAccount(address account, Owner[] calldata initialOwners) internal nonZero(account) {
         // Must have at least one initial owner
         require(initialOwners.length > 0);
 
@@ -328,24 +304,27 @@ contract AccountConfiguration is IAccountConfiguration {
 
     function _authorizeOwner(address account, bytes32 ownerId, OwnerConfig memory config) internal nonZero(account) {
         // Must be legitimate verifier
-        require(config.verifier != address(0) && config.verifier != REVOKED);
+        require(config.verifier != address(0));
 
-        // Must not already be an owner
-        require(!isOwner(account, ownerId));
+        // Must not already be registered
+        require(_ownerConfig[ownerId][account].verifier == address(0));
 
         _ownerConfig[ownerId][account] = config;
         emit OwnerAuthorized(account, ownerId, config);
     }
 
     function _revokeOwner(address account, bytes32 ownerId) internal nonZero(account) {
-        // Must be an owner
         require(isOwner(account, ownerId));
-
-        _ownerConfig[ownerId][account] = OwnerConfig({verifier: REVOKED, scopes: 0});
+        if (ownerId == bytes32(bytes20(account))) {
+            // Self-ownerId: sentinel prevents protocol implicit re-authorization on empty slot
+            _ownerConfig[ownerId][account] = OwnerConfig({verifier: address(0), scopes: type(uint8).max});
+        } else {
+            delete _ownerConfig[ownerId][account];
+        }
         emit OwnerRevoked(account, ownerId);
     }
 
-    function _computeOwnerInitializationDigest(bytes32 salt, InitializeOwner[] calldata initialOwners)
+    function _computeOwnerInitializationDigest(bytes32 salt, Owner[] calldata initialOwners)
         internal
         pure
         returns (bytes32)
@@ -381,6 +360,23 @@ contract AccountConfiguration is IAccountConfiguration {
                 OWNER_CHANGE_BATCH_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(ownerChangeHashes))
             )
         );
+    }
+
+    // ----------------------------------------------------------------------------------------------------------------
+    // VERIFICATION
+    // ----------------------------------------------------------------------------------------------------------------
+
+    function _verify(address account, bytes32 hash, address verifier, bytes calldata data)
+        internal
+        view
+        returns (uint8 scopes)
+    {
+        bytes32 ownerId = IVerifier(verifier).verify(hash, data);
+        require(ownerId != bytes32(0));
+
+        OwnerConfig memory config = _ownerConfig[ownerId][account];
+        require(config.verifier == verifier);
+        return config.scopes;
     }
 
     // ----------------------------------------------------------------------------------------------------------------

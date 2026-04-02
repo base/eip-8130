@@ -17,7 +17,7 @@ interface IAccountConfiguration {
         uint8 scopes;
     }
 
-    struct InitializeOwner {
+    struct Owner {
         bytes32 ownerId;
         OwnerConfig config;
     }
@@ -26,11 +26,6 @@ interface IAccountConfiguration {
         bytes32 ownerId;
         uint8 changeType; // 0x01 = authorizeOwner, 0x02 = revokeOwner
         bytes configData; // OwnerConfig for authorize, empty for revoke
-    }
-
-    struct Verification {
-        bytes32 ownerId;
-        bytes verifierData;
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -55,17 +50,17 @@ interface IAccountConfiguration {
     // FUNCTIONS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    function createAccount(bytes32 userSalt, bytes calldata bytecode, InitializeOwner[] calldata initialOwners)
+    function createAccount(bytes32 userSalt, bytes calldata bytecode, Owner[] calldata initialOwners)
         external
         returns (address);
 
-    function importAccount(address account, InitializeOwner[] calldata initialOwners, bytes calldata signature) external;
+    function importAccount(address account, Owner[] calldata initialOwners, bytes calldata signature) external;
 
     function applySignedOwnerChanges(
         address account,
         uint64 chainId,
         OwnerChange[] calldata ownerChanges,
-        Verification calldata verification
+        bytes calldata auth
     ) external;
 
     function lock(uint16 unlockDelay) external;
@@ -81,13 +76,10 @@ interface IAccountConfiguration {
         view
         returns (bool verified);
 
-    function verify(address account, bytes32 hash, Verification memory verification)
-        external
-        view
-        returns (uint8 scopes);
+    function verify(address account, bytes32 hash, bytes calldata auth) external view returns (uint8 scopes);
 
     // Account creation
-    function computeAddress(bytes32 userSalt, bytes calldata bytecode, InitializeOwner[] calldata initialOwners)
+    function computeAddress(bytes32 userSalt, bytes calldata bytecode, Owner[] calldata initialOwners)
         external
         view
         returns (address);
