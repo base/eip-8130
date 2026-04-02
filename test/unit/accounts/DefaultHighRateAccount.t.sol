@@ -36,8 +36,7 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
 
         IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
         owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId,
-            config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
         });
 
         bytes memory bytecode = _computeERC1167Bytecode(highRateImplementation);
@@ -60,9 +59,8 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
         (address account,) = _createHighRateK1Account(OWNER_PK);
 
         vm.prank(account);
-        DefaultHighRateAccount(payable(account)).executeBatch(
-            _singleCall(address(target), 0, abi.encodeCall(HighRateMockTarget.setValue, (42)))
-        );
+        DefaultHighRateAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(HighRateMockTarget.setValue, (42))));
 
         assertEq(target.value(), 42);
     }
@@ -72,9 +70,8 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
         vm.deal(account, 1 ether);
 
         vm.prank(account);
-        DefaultHighRateAccount(payable(account)).executeBatch(
-            _singleCall(address(target), 0.5 ether, abi.encodeCall(HighRateMockTarget.setValue, (1)))
-        );
+        DefaultHighRateAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0.5 ether, abi.encodeCall(HighRateMockTarget.setValue, (1))));
 
         assertEq(address(target).balance, 0.5 ether);
     }
@@ -99,9 +96,8 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
 
         vm.prank(address(0xdead));
         vm.expectRevert();
-        DefaultHighRateAccount(payable(account)).executeBatch(
-            _singleCall(address(target), 0, abi.encodeCall(HighRateMockTarget.setValue, (1)))
-        );
+        DefaultHighRateAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(HighRateMockTarget.setValue, (1))));
     }
 
     function test_executeBatch_revertsOnFailedCall() public {
@@ -109,9 +105,8 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
 
         vm.prank(account);
         vm.expectRevert();
-        DefaultHighRateAccount(payable(account)).executeBatch(
-            _singleCall(address(target), 0, abi.encodeCall(HighRateMockTarget.reverting, ()))
-        );
+        DefaultHighRateAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(HighRateMockTarget.reverting, ())));
     }
 
     function test_executeBatch_blocksETHWhenLocked() public {
@@ -122,9 +117,8 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
 
         vm.prank(account);
         vm.expectRevert();
-        DefaultHighRateAccount(payable(account)).executeBatch(
-            _singleCall(address(target), 0.1 ether, abi.encodeCall(HighRateMockTarget.setValue, (1)))
-        );
+        DefaultHighRateAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0.1 ether, abi.encodeCall(HighRateMockTarget.setValue, (1))));
     }
 
     function test_executeBatch_allowsZeroValueCallsWhenLocked() public {
@@ -133,9 +127,8 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
         _lockAccount(account, 1 hours);
 
         vm.prank(account);
-        DefaultHighRateAccount(payable(account)).executeBatch(
-            _singleCall(address(target), 0, abi.encodeCall(HighRateMockTarget.setValue, (99)))
-        );
+        DefaultHighRateAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(HighRateMockTarget.setValue, (99))));
 
         assertEq(target.value(), 99);
     }
@@ -145,9 +138,8 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
         vm.deal(account, 1 ether);
 
         vm.prank(account);
-        DefaultHighRateAccount(payable(account)).executeBatch(
-            _singleCall(address(target), 0.5 ether, abi.encodeCall(HighRateMockTarget.setValue, (1)))
-        );
+        DefaultHighRateAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0.5 ether, abi.encodeCall(HighRateMockTarget.setValue, (1))));
 
         assertEq(address(target).balance, 0.5 ether);
     }

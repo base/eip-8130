@@ -36,8 +36,7 @@ contract ERC4337AccountTest is AccountConfigurationTest {
 
         IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
         owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId,
-            config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
         });
 
         bytes memory bytecode = _computeERC1167Bytecode(erc4337Implementation);
@@ -114,9 +113,8 @@ contract ERC4337AccountTest is AccountConfigurationTest {
         (address account,) = _create4337Account(OWNER_PK);
 
         vm.prank(account);
-        ERC4337Account(payable(account)).executeBatch(
-            _singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (42)))
-        );
+        ERC4337Account(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (42))));
 
         assertEq(target.value(), 42);
     }
@@ -126,9 +124,8 @@ contract ERC4337AccountTest is AccountConfigurationTest {
         vm.deal(account, 1 ether);
 
         vm.prank(account);
-        ERC4337Account(payable(account)).executeBatch(
-            _singleCall(address(target), 0.5 ether, abi.encodeCall(MockTarget.setValue, (1)))
-        );
+        ERC4337Account(payable(account))
+            .executeBatch(_singleCall(address(target), 0.5 ether, abi.encodeCall(MockTarget.setValue, (1))));
 
         assertEq(address(target).balance, 0.5 ether);
     }
@@ -137,9 +134,8 @@ contract ERC4337AccountTest is AccountConfigurationTest {
         (address account,) = _create4337Account(OWNER_PK);
 
         vm.prank(ENTRY_POINT);
-        ERC4337Account(payable(account)).executeBatch(
-            _singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (77)))
-        );
+        ERC4337Account(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (77))));
 
         assertEq(target.value(), 77);
     }
@@ -149,9 +145,8 @@ contract ERC4337AccountTest is AccountConfigurationTest {
 
         vm.prank(address(0xdead));
         vm.expectRevert();
-        ERC4337Account(payable(account)).executeBatch(
-            _singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1)))
-        );
+        ERC4337Account(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1))));
     }
 
     function test_executeBatch_revertsOnFailedCall() public {
@@ -159,9 +154,8 @@ contract ERC4337AccountTest is AccountConfigurationTest {
 
         vm.prank(account);
         vm.expectRevert();
-        ERC4337Account(payable(account)).executeBatch(
-            _singleCall(address(target), 0, abi.encodeCall(MockTarget.reverting, ()))
-        );
+        ERC4337Account(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.reverting, ())));
     }
 
     // ── validateUserOp ──

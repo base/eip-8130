@@ -115,9 +115,7 @@ contract AccountConfiguration is IAccountConfiguration {
     /// @notice Import an existing account to AccountConfiguration management.
     /// @dev Verifies via ERC-1271. Accounts must have bytecode.
     /// @dev Custom hash used to partially mitigate phishing attacks on eth_signTypedData.
-    function importAccount(address account, Owner[] calldata initialOwners, bytes calldata signature)
-        external
-    {
+    function importAccount(address account, Owner[] calldata initialOwners, bytes calldata signature) external {
         require(_accountState[account].localSequence == 0);
         _accountState[account].localSequence = 1;
 

@@ -45,9 +45,8 @@ contract DefaultAccountTest is AccountConfigurationTest {
         (address account,) = _createK1Account(OWNER_PK);
 
         vm.prank(account);
-        DefaultAccount(payable(account)).executeBatch(
-            _singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (42)))
-        );
+        DefaultAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (42))));
 
         assertEq(target.value(), 42);
     }
@@ -57,9 +56,8 @@ contract DefaultAccountTest is AccountConfigurationTest {
         vm.deal(account, 1 ether);
 
         vm.prank(account);
-        DefaultAccount(payable(account)).executeBatch(
-            _singleCall(address(target), 0.5 ether, abi.encodeCall(MockTarget.setValue, (1)))
-        );
+        DefaultAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0.5 ether, abi.encodeCall(MockTarget.setValue, (1))));
 
         assertEq(address(target).balance, 0.5 ether);
     }
@@ -84,9 +82,8 @@ contract DefaultAccountTest is AccountConfigurationTest {
 
         vm.prank(address(0xdead));
         vm.expectRevert();
-        DefaultAccount(payable(account)).executeBatch(
-            _singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1)))
-        );
+        DefaultAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1))));
     }
 
     function test_executeBatch_revertsOnFailedCall() public {
@@ -94,9 +91,8 @@ contract DefaultAccountTest is AccountConfigurationTest {
 
         vm.prank(account);
         vm.expectRevert();
-        DefaultAccount(payable(account)).executeBatch(
-            _singleCall(address(target), 0, abi.encodeCall(MockTarget.reverting, ()))
-        );
+        DefaultAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.reverting, ())));
     }
 
     // ── isValidSignature ──

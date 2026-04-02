@@ -13,8 +13,7 @@ contract CreateAccountTest is AccountConfigurationTest {
 
         IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
         owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId,
-            config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
         });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
@@ -67,8 +66,7 @@ contract CreateAccountTest is AccountConfigurationTest {
 
         IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
         owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId,
-            config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
         });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
@@ -84,8 +82,7 @@ contract CreateAccountTest is AccountConfigurationTest {
 
         IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
         owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId,
-            config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
         });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
@@ -107,12 +104,10 @@ contract CreateAccountTest is AccountConfigurationTest {
 
         IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](2);
         owners[0] = IAccountConfiguration.Owner({
-            ownerId: larger,
-            config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+            ownerId: larger, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
         });
         owners[1] = IAccountConfiguration.Owner({
-            ownerId: smaller,
-            config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+            ownerId: smaller, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
         });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
@@ -133,8 +128,7 @@ contract CreateAccountTest is AccountConfigurationTest {
 
         IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
         owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId,
-            config: IAccountConfiguration.OwnerConfig({verifier: address(0), scopes: 0x00})
+            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(0), scopes: 0x00})
         });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
@@ -148,8 +142,7 @@ contract CreateAccountTest is AccountConfigurationTest {
 
         IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
         owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId,
-            config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x03})
+            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x03})
         });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
@@ -173,8 +166,7 @@ contract CreateAccountTest is AccountConfigurationTest {
 
         IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
         owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId,
-            config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
         });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);

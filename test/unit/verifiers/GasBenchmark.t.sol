@@ -67,8 +67,7 @@ contract GasBenchmarkTest is Test {
             bytes32 ownerIdA = bytes32(bytes20(signerA));
             IAccountConfiguration.Owner[] memory ownersA = new IAccountConfiguration.Owner[](1);
             ownersA[0] = IAccountConfiguration.Owner({
-                ownerId: ownerIdA,
-                config: IAccountConfiguration.OwnerConfig({verifier: address(k1), scopes: 0x00})
+                ownerId: ownerIdA, config: IAccountConfiguration.OwnerConfig({verifier: address(k1), scopes: 0x00})
             });
             bytes memory bytecode =
                 abi.encodePacked(hex"363d3d373d3d3d363d73", defaultImpl, hex"5af43d82803e903d91602b57fd5bf3");
