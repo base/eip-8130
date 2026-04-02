@@ -262,6 +262,152 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         accountConfiguration.applySignedOwnerChanges(account, uint64(block.chainid), changes, badAuth);
     }
 
+    // ── EOA self-ownerId (default key) revoke/add ──
+    //
+    // The self-ownerId for an account is bytes32(bytes20(account)).
+    // Revoking this ownerId sets a sentinel (verifier=0, scopes=0xff)
+    // instead of deleting, to prevent the 8130 protocol's implicit
+    // re-authorization on an empty slot.
+
+    function test_selfOwnerId_addKey() public {
+        (address account,) = _createK1Account(OWNER_PK);
+        bytes32 selfOwnerId = bytes32(bytes20(account));
+
+        _authorizeOwner(account, OWNER_PK, selfOwnerId, address(k1Verifier));
+        assertTrue(accountConfiguration.isOwner(account, selfOwnerId));
+    }
+
+    function test_selfOwnerId_revokeSetsNonZeroSentinel() public {
+        (address account,) = _createK1Account(OWNER_PK);
+        bytes32 selfOwnerId = bytes32(bytes20(account));
+
+        _authorizeOwner(account, OWNER_PK, selfOwnerId, address(k1Verifier));
+        assertTrue(accountConfiguration.isOwner(account, selfOwnerId));
+
+        _revokeOwner(account, OWNER_PK, selfOwnerId);
+
+        assertFalse(accountConfiguration.isOwner(account, selfOwnerId));
+
+        IAccountConfiguration.OwnerConfig memory cfg = accountConfiguration.getOwnerConfig(account, selfOwnerId);
+        assertEq(cfg.verifier, address(0));
+        assertEq(cfg.scopes, type(uint8).max);
+    }
+
+    function test_selfOwnerId_canReauthorizeAfterSentinel() public {
+        (address account,) = _createK1Account(OWNER_PK);
+        bytes32 selfOwnerId = bytes32(bytes20(account));
+
+        _authorizeOwner(account, OWNER_PK, selfOwnerId, address(k1Verifier));
+        _revokeOwner(account, OWNER_PK, selfOwnerId);
+        assertFalse(accountConfiguration.isOwner(account, selfOwnerId));
+
+        // Sentinel has verifier=0, so _authorizeOwner's `require(verifier == 0)` passes
+        _authorizeOwner(account, OWNER_PK, selfOwnerId, address(k1Verifier));
+        assertTrue(accountConfiguration.isOwner(account, selfOwnerId));
+    }
+
+    function test_selfOwnerId_batchAddAndRevoke() public {
+        (address account,) = _createK1Account(OWNER_PK);
+        bytes32 selfOwnerId = bytes32(bytes20(account));
+
+        // Add self-ownerId and a second key, then revoke self-ownerId — all in two batches
+        _authorizeOwner(account, OWNER_PK, selfOwnerId, address(k1Verifier));
+
+        bytes32 newOwnerId = bytes32(bytes20(vm.addr(NEW_OWNER_PK)));
+
+        IAccountConfiguration.OwnerChange[] memory changes = new IAccountConfiguration.OwnerChange[](2);
+        changes[0] = IAccountConfiguration.OwnerChange({
+            ownerId: newOwnerId,
+            changeType: 0x01,
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+        });
+        changes[1] = IAccountConfiguration.OwnerChange({ownerId: selfOwnerId, changeType: 0x02, configData: ""});
+
+        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
+        bytes memory auth = _buildK1Auth(OWNER_PK, digest);
+
+        accountConfiguration.applySignedOwnerChanges(account, uint64(block.chainid), changes, auth);
+
+        assertFalse(accountConfiguration.isOwner(account, selfOwnerId));
+        assertTrue(accountConfiguration.isOwner(account, newOwnerId));
+
+        // Self-ownerId has sentinel, not zeroed
+        IAccountConfiguration.OwnerConfig memory cfg = accountConfiguration.getOwnerConfig(account, selfOwnerId);
+        assertEq(cfg.verifier, address(0));
+        assertEq(cfg.scopes, type(uint8).max);
+    }
+
+    function test_selfOwnerId_revokedCannotSignOwnerChanges() public {
+        (address account,) = _createK1Account(OWNER_PK);
+        bytes32 selfOwnerId = bytes32(bytes20(account));
+
+        _authorizeOwner(account, OWNER_PK, selfOwnerId, address(k1Verifier));
+
+        // Add a second key so the account isn't bricked, then revoke self-ownerId
+        bytes32 newOwnerId = bytes32(bytes20(vm.addr(NEW_OWNER_PK)));
+        _authorizeOwner(account, OWNER_PK, newOwnerId, address(k1Verifier));
+        _revokeOwner(account, OWNER_PK, selfOwnerId);
+
+        // The initial key (OWNER_PK) is still active — use it to prove it can sign
+        bytes32 thirdOwnerId = bytes32(bytes20(vm.addr(302)));
+        IAccountConfiguration.OwnerChange[] memory changes = new IAccountConfiguration.OwnerChange[](1);
+        changes[0] = IAccountConfiguration.OwnerChange({
+            ownerId: thirdOwnerId,
+            changeType: 0x01,
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+        });
+
+        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
+
+        // Signing with NEW_OWNER_PK still works (owner not revoked)
+        accountConfiguration.applySignedOwnerChanges(
+            account, uint64(block.chainid), changes, _buildK1Auth(NEW_OWNER_PK, digest)
+        );
+        assertTrue(accountConfiguration.isOwner(account, thirdOwnerId));
+    }
+
+    function test_revokedKey_cannotSignOwnerChanges() public {
+        (address account,) = _createK1Account(OWNER_PK);
+
+        bytes32 newOwnerId = bytes32(bytes20(vm.addr(NEW_OWNER_PK)));
+        _authorizeOwner(account, OWNER_PK, newOwnerId, address(k1Verifier));
+
+        // Revoke the initial key
+        _revokeOwner(account, NEW_OWNER_PK, bytes32(bytes20(vm.addr(OWNER_PK))));
+
+        // Attempt to sign an owner change with the revoked key
+        bytes32 thirdOwnerId = bytes32(bytes20(vm.addr(302)));
+        IAccountConfiguration.OwnerChange[] memory changes = new IAccountConfiguration.OwnerChange[](1);
+        changes[0] = IAccountConfiguration.OwnerChange({
+            ownerId: thirdOwnerId,
+            changeType: 0x01,
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+        });
+
+        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
+
+        vm.expectRevert();
+        accountConfiguration.applySignedOwnerChanges(
+            account, uint64(block.chainid), changes, _buildK1Auth(OWNER_PK, digest)
+        );
+    }
+
+    function test_nonSelfOwner_revokeDeletesSlot() public {
+        (address account,) = _createK1Account(OWNER_PK);
+
+        bytes32 newOwnerId = bytes32(bytes20(vm.addr(NEW_OWNER_PK)));
+        _authorizeOwner(account, OWNER_PK, newOwnerId, address(k1Verifier));
+
+        _revokeOwner(account, OWNER_PK, newOwnerId);
+
+        IAccountConfiguration.OwnerConfig memory cfg = accountConfiguration.getOwnerConfig(account, newOwnerId);
+        assertEq(cfg.verifier, address(0));
+        assertEq(cfg.scopes, 0);
+    }
+
     // ── Helpers ──
 
     function _authorizeOwner(address account, uint256 pk, bytes32 newOwnerId, address verifier) internal {
@@ -277,6 +423,17 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
             changeType: 0x01,
             configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: verifier, scopes: scope}))
         });
+
+        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
+        bytes memory auth = _buildK1Auth(pk, digest);
+
+        accountConfiguration.applySignedOwnerChanges(account, uint64(block.chainid), changes, auth);
+    }
+
+    function _revokeOwner(address account, uint256 pk, bytes32 ownerId) internal {
+        IAccountConfiguration.OwnerChange[] memory changes = new IAccountConfiguration.OwnerChange[](1);
+        changes[0] = IAccountConfiguration.OwnerChange({ownerId: ownerId, changeType: 0x02, configData: ""});
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
