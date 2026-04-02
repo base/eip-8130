@@ -262,12 +262,92 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         accountConfiguration.applySignedOwnerChanges(account, uint64(block.chainid), changes, badAuth);
     }
 
-    // ── EOA self-ownerId (default key) revoke/add ──
+    // ── Implicit EOA (registered by default) ──
+    //
+    // Every account has an implicit self-ownerId bytes32(bytes20(account))
+    // that is authorized with unrestricted scopes when the config slot
+    // is empty. No createAccount/importAccount needed.
+
+    function test_implicitEOA_canSignOwnerChanges() public {
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+        bytes32 newOwnerId = bytes32(bytes20(vm.addr(501)));
+
+        IAccountConfiguration.OwnerChange[] memory changes = new IAccountConfiguration.OwnerChange[](1);
+        changes[0] = IAccountConfiguration.OwnerChange({
+            ownerId: newOwnerId,
+            changeType: 0x01,
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+        });
+
+        uint64 seq = accountConfiguration.getChangeSequences(eoa).local;
+        bytes32 digest = _computeOwnerChangeBatchDigest(eoa, uint64(block.chainid), seq, changes);
+        bytes memory auth = _buildImplicitEOAAuth(eoaPk, digest);
+
+        accountConfiguration.applySignedOwnerChanges(eoa, uint64(block.chainid), changes, auth);
+        assertTrue(accountConfiguration.isOwner(eoa, newOwnerId));
+    }
+
+    function test_implicitEOA_canRevokeItselfViaSentinel() public {
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+        bytes32 selfOwnerId = bytes32(bytes20(eoa));
+
+        assertTrue(accountConfiguration.isOwner(eoa, selfOwnerId));
+
+        // Add a second key first using implicit EOA auth
+        bytes32 newOwnerId = bytes32(bytes20(vm.addr(501)));
+        _implicitAuthorizeOwner(eoa, eoaPk, newOwnerId, address(k1Verifier));
+
+        // Revoke self-ownerId using the new explicit key
+        _revokeOwner(eoa, 501, selfOwnerId);
+
+        assertFalse(accountConfiguration.isOwner(eoa, selfOwnerId));
+        assertTrue(accountConfiguration.isOwner(eoa, newOwnerId));
+
+        IAccountConfiguration.OwnerConfig memory cfg = accountConfiguration.getOwnerConfig(eoa, selfOwnerId);
+        assertEq(cfg.verifier, accountConfiguration.REVOKED_VERIFIER());
+        assertEq(cfg.scopes, 0);
+    }
+
+    function test_implicitEOA_canBeExplicitlyRegistered() public {
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+        bytes32 selfOwnerId = bytes32(bytes20(eoa));
+
+        _implicitAuthorizeOwnerWithScope(eoa, eoaPk, selfOwnerId, address(k1Verifier), 0x01);
+
+        IAccountConfiguration.OwnerConfig memory cfg = accountConfiguration.getOwnerConfig(eoa, selfOwnerId);
+        assertEq(cfg.verifier, address(k1Verifier));
+        assertEq(cfg.scopes, 0x01);
+    }
+
+    function test_implicitEOA_crossChainOwnerChange() public {
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+        bytes32 newOwnerId = bytes32(bytes20(vm.addr(501)));
+
+        IAccountConfiguration.OwnerChange[] memory changes = new IAccountConfiguration.OwnerChange[](1);
+        changes[0] = IAccountConfiguration.OwnerChange({
+            ownerId: newOwnerId,
+            changeType: 0x01,
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+        });
+
+        // chainId=0 for multichain
+        uint64 seq = accountConfiguration.getChangeSequences(eoa).multichain;
+        bytes32 digest = _computeOwnerChangeBatchDigest(eoa, 0, seq, changes);
+        bytes memory auth = _buildImplicitEOAAuth(eoaPk, digest);
+
+        accountConfiguration.applySignedOwnerChanges(eoa, 0, changes, auth);
+        assertTrue(accountConfiguration.isOwner(eoa, newOwnerId));
+    }
+
+    // ── EOA self-ownerId revoke/add with explicit registration ──
     //
     // The self-ownerId for an account is bytes32(bytes20(account)).
     // Revoking this ownerId sets a sentinel (verifier=0, scopes=0xff)
-    // instead of deleting, to prevent the 8130 protocol's implicit
-    // re-authorization on an empty slot.
+    // instead of deleting, to block the implicit authorization.
 
     function test_selfOwnerId_addKey() public {
         (address account,) = _createK1Account(OWNER_PK);
@@ -289,8 +369,8 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         assertFalse(accountConfiguration.isOwner(account, selfOwnerId));
 
         IAccountConfiguration.OwnerConfig memory cfg = accountConfiguration.getOwnerConfig(account, selfOwnerId);
-        assertEq(cfg.verifier, address(0));
-        assertEq(cfg.scopes, type(uint8).max);
+        assertEq(cfg.verifier, accountConfiguration.REVOKED_VERIFIER());
+        assertEq(cfg.scopes, 0);
     }
 
     function test_selfOwnerId_canReauthorizeAfterSentinel() public {
@@ -334,8 +414,8 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
 
         // Self-ownerId has sentinel, not zeroed
         IAccountConfiguration.OwnerConfig memory cfg = accountConfiguration.getOwnerConfig(account, selfOwnerId);
-        assertEq(cfg.verifier, address(0));
-        assertEq(cfg.scopes, type(uint8).max);
+        assertEq(cfg.verifier, accountConfiguration.REVOKED_VERIFIER());
+        assertEq(cfg.scopes, 0);
     }
 
     function test_selfOwnerId_revokedCannotSignOwnerChanges() public {
@@ -438,6 +518,31 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(pk, digest);
+
+        accountConfiguration.applySignedOwnerChanges(account, uint64(block.chainid), changes, auth);
+    }
+
+    function _implicitAuthorizeOwner(address account, uint256 pk, bytes32 newOwnerId, address verifier) internal {
+        _implicitAuthorizeOwnerWithScope(account, pk, newOwnerId, verifier, 0x00);
+    }
+
+    function _implicitAuthorizeOwnerWithScope(
+        address account,
+        uint256 pk,
+        bytes32 newOwnerId,
+        address verifier,
+        uint8 scope
+    ) internal {
+        IAccountConfiguration.OwnerChange[] memory changes = new IAccountConfiguration.OwnerChange[](1);
+        changes[0] = IAccountConfiguration.OwnerChange({
+            ownerId: newOwnerId,
+            changeType: 0x01,
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: verifier, scopes: scope}))
+        });
+
+        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
+        bytes memory auth = _buildImplicitEOAAuth(pk, digest);
 
         accountConfiguration.applySignedOwnerChanges(account, uint64(block.chainid), changes, auth);
     }

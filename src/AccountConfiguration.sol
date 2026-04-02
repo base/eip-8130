@@ -63,6 +63,9 @@ contract AccountConfiguration is IAccountConfiguration {
     /// @notice Owner can change account owners
     uint8 public constant SCOPE_CHANGE_OWNERS = 0x08;
 
+    /// @notice Sentinel verifier written on self-ownerId revocation to block implicit re-authorization.
+    address public constant REVOKED_VERIFIER = address(1);
+
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // STORAGE
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -236,7 +239,10 @@ contract AccountConfiguration is IAccountConfiguration {
     }
 
     function isOwner(address account, bytes32 ownerId) public view returns (bool) {
-        return _ownerConfig[ownerId][account].verifier != address(0);
+        address verifier = _ownerConfig[ownerId][account].verifier;
+        if (verifier > REVOKED_VERIFIER) return true;
+        // Implicit EOA: self-ownerId with truly empty slot
+        return verifier == address(0) && ownerId == bytes32(bytes20(account));
     }
 
     function getOwnerConfig(address account, bytes32 ownerId) external view returns (OwnerConfig memory) {
@@ -301,11 +307,9 @@ contract AccountConfiguration is IAccountConfiguration {
     }
 
     function _authorizeOwner(address account, bytes32 ownerId, OwnerConfig memory config) internal nonZero(account) {
-        // Must be legitimate verifier
-        require(config.verifier != address(0));
-
-        // Must not already be registered
-        require(_ownerConfig[ownerId][account].verifier == address(0));
+        require(config.verifier > REVOKED_VERIFIER);
+        address existing = _ownerConfig[ownerId][account].verifier;
+        require(existing == address(0) || existing == REVOKED_VERIFIER);
 
         _ownerConfig[ownerId][account] = config;
         emit OwnerAuthorized(account, ownerId, config);
@@ -314,8 +318,7 @@ contract AccountConfiguration is IAccountConfiguration {
     function _revokeOwner(address account, bytes32 ownerId) internal nonZero(account) {
         require(isOwner(account, ownerId));
         if (ownerId == bytes32(bytes20(account))) {
-            // Self-ownerId: sentinel prevents protocol implicit re-authorization on empty slot
-            _ownerConfig[ownerId][account] = OwnerConfig({verifier: address(0), scopes: type(uint8).max});
+            _ownerConfig[ownerId][account] = OwnerConfig({verifier: REVOKED_VERIFIER, scopes: 0});
         } else {
             delete _ownerConfig[ownerId][account];
         }
@@ -369,12 +372,25 @@ contract AccountConfiguration is IAccountConfiguration {
         view
         returns (uint8 scopes)
     {
+        if (verifier == address(0)) return _verifyImplicitEOA(account, hash, data);
+
         bytes32 ownerId = IVerifier(verifier).verify(hash, data);
         require(ownerId != bytes32(0));
 
         OwnerConfig memory config = _ownerConfig[ownerId][account];
         require(config.verifier == verifier);
         return config.scopes;
+    }
+
+    /// @dev Implicit EOA: native ecrecover, requires self-ownerId slot is empty (not REVOKED_VERIFIER).
+    function _verifyImplicitEOA(address account, bytes32 hash, bytes calldata data) internal view returns (uint8) {
+        require(_ownerConfig[bytes32(bytes20(account))][account].verifier == address(0));
+        require(data.length == 65);
+        bytes32 r = bytes32(data[:32]);
+        bytes32 s = bytes32(data[32:64]);
+        address recovered = ecrecover(hash, uint8(data[64]), r, s);
+        require(recovered == account);
+        return 0;
     }
 
     // ----------------------------------------------------------------------------------------------------------------

@@ -115,6 +115,56 @@ contract VerifyTest is AccountConfigurationTest {
         assertEq(scopes, uint8(0x00));
     }
 
+    // ── Implicit EOA (registered by default) ──
+
+    function test_verify_implicitEOA() public {
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+
+        bytes32 hash = keccak256("implicit eoa verify");
+        bytes memory auth = _buildImplicitEOAAuth(eoaPk, hash);
+
+        // No createAccount or importAccount — the EOA is implicitly authorized
+        uint8 scopes = accountConfiguration.verify(eoa, hash, auth);
+        assertEq(scopes, 0);
+    }
+
+    function test_verify_implicitEOA_isOwnerReturnsTrue() public {
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+
+        assertTrue(accountConfiguration.isOwner(eoa, bytes32(bytes20(eoa))));
+    }
+
+    function test_verify_implicitEOA_nonSelfOwnerIdNotImplicit() public {
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+
+        // A random ownerId that isn't bytes32(bytes20(eoa)) should NOT be implicit
+        bytes32 randomOwnerId = bytes32(bytes20(vm.addr(999)));
+        assertFalse(accountConfiguration.isOwner(eoa, randomOwnerId));
+    }
+
+    function test_verify_implicitEOA_revokedBySentinel() public {
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+        bytes32 selfOwnerId = bytes32(bytes20(eoa));
+
+        // Implicit EOA signs to add a second key
+        bytes32 newOwnerId = bytes32(bytes20(vm.addr(501)));
+        _implicitAuthorizeOwner(eoa, eoaPk, newOwnerId, address(k1Verifier));
+
+        // Revoke the self-ownerId (writes sentinel) using the new explicit key
+        _revokeOwner(eoa, 501, selfOwnerId);
+
+        assertFalse(accountConfiguration.isOwner(eoa, selfOwnerId));
+
+        // Implicit path is now blocked
+        bytes32 hash = keccak256("after sentinel");
+        vm.expectRevert();
+        accountConfiguration.verify(eoa, hash, _buildImplicitEOAAuth(eoaPk, hash));
+    }
+
     // ── Helpers ──
 
     function _authorizeOwner(address account, uint256 pk, bytes32 newOwnerId, address verifier) internal {
@@ -145,6 +195,21 @@ contract VerifyTest is AccountConfigurationTest {
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(pk, digest);
+
+        accountConfiguration.applySignedOwnerChanges(account, uint64(block.chainid), changes, auth);
+    }
+
+    function _implicitAuthorizeOwner(address account, uint256 pk, bytes32 newOwnerId, address verifier) internal {
+        IAccountConfiguration.OwnerChange[] memory changes = new IAccountConfiguration.OwnerChange[](1);
+        changes[0] = IAccountConfiguration.OwnerChange({
+            ownerId: newOwnerId,
+            changeType: 0x01,
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: verifier, scopes: 0x00}))
+        });
+
+        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
+        bytes memory auth = _buildImplicitEOAAuth(pk, digest);
 
         accountConfiguration.applySignedOwnerChanges(account, uint64(block.chainid), changes, auth);
     }

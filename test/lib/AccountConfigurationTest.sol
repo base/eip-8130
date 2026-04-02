@@ -78,6 +78,12 @@ contract AccountConfigurationTest is Test {
         return abi.encodePacked(address(k1Verifier), sig);
     }
 
+    /// @dev Build auth bytes for implicit EOA path: address(0) || ecdsa signature.
+    function _buildImplicitEOAAuth(uint256 pk, bytes32 digest) internal pure returns (bytes memory) {
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, digest);
+        return abi.encodePacked(address(0), r, s, v);
+    }
+
     // ── Canonical digest computation ──
 
     function _computeOwnerChangeBatchDigest(
