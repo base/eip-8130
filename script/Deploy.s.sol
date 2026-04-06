@@ -62,13 +62,22 @@ contract Deploy is Script {
         address accountConfig = _addr(type(AccountConfiguration).creationCode);
 
         console.log("AccountConfiguration:  ", accountConfig);
-        console.log("DefaultAccount:        ", _addr(abi.encodePacked(type(DefaultAccount).creationCode, abi.encode(accountConfig))));
-        console.log("DefaultHighRateAccount:", _addr(abi.encodePacked(type(DefaultHighRateAccount).creationCode, abi.encode(accountConfig))));
+        console.log(
+            "DefaultAccount:        ",
+            _addr(abi.encodePacked(type(DefaultAccount).creationCode, abi.encode(accountConfig)))
+        );
+        console.log(
+            "DefaultHighRateAccount:",
+            _addr(abi.encodePacked(type(DefaultHighRateAccount).creationCode, abi.encode(accountConfig)))
+        );
         console.log("");
         console.log("K1Verifier:            ", _addr(type(K1Verifier).creationCode));
         console.log("P256Verifier:          ", _addr(type(P256Verifier).creationCode));
         console.log("WebAuthnVerifier:      ", _addr(type(WebAuthnVerifier).creationCode));
-        console.log("DelegateVerifier:      ", _addr(abi.encodePacked(type(DelegateVerifier).creationCode, abi.encode(accountConfig))));
+        console.log(
+            "DelegateVerifier:      ",
+            _addr(abi.encodePacked(type(DelegateVerifier).creationCode, abi.encode(accountConfig)))
+        );
         console.log("BLSVerifier:           ", _addr(type(BLSVerifier).creationCode));
         console.log("SchnorrVerifier:       ", _addr(type(SchnorrVerifier).creationCode));
         console.log("MultisigVerifier:      ", _addr(type(MultisigVerifier).creationCode));
@@ -85,20 +94,22 @@ contract Deploy is Script {
 
         // ── Core ──
 
-        address accountConfig  = _create2(type(AccountConfiguration).creationCode);
-        address defaultAccount = _create2(abi.encodePacked(type(DefaultAccount).creationCode, abi.encode(accountConfig)));
-        address defaultHighRate = _create2(abi.encodePacked(type(DefaultHighRateAccount).creationCode, abi.encode(accountConfig)));
+        address accountConfig = _create2(type(AccountConfiguration).creationCode);
+        address defaultAccount =
+            _create2(abi.encodePacked(type(DefaultAccount).creationCode, abi.encode(accountConfig)));
+        address defaultHighRate =
+            _create2(abi.encodePacked(type(DefaultHighRateAccount).creationCode, abi.encode(accountConfig)));
 
         // ── Verifiers ──
 
-        address k1          = _create2(type(K1Verifier).creationCode);
-        address p256        = _create2(type(P256Verifier).creationCode);
-        address webAuthn    = _create2(type(WebAuthnVerifier).creationCode);
-        address delegate    = _create2(abi.encodePacked(type(DelegateVerifier).creationCode, abi.encode(accountConfig)));
-        address bls         = _create2(type(BLSVerifier).creationCode);
-        address schnorr     = _create2(type(SchnorrVerifier).creationCode);
-        address multisig    = _create2(type(MultisigVerifier).creationCode);
-        address groth16     = _create2(type(Groth16Verifier).creationCode);
+        address k1 = _create2(type(K1Verifier).creationCode);
+        address p256 = _create2(type(P256Verifier).creationCode);
+        address webAuthn = _create2(type(WebAuthnVerifier).creationCode);
+        address delegate = _create2(abi.encodePacked(type(DelegateVerifier).creationCode, abi.encode(accountConfig)));
+        address bls = _create2(type(BLSVerifier).creationCode);
+        address schnorr = _create2(type(SchnorrVerifier).creationCode);
+        address multisig = _create2(type(MultisigVerifier).creationCode);
+        address groth16 = _create2(type(Groth16Verifier).creationCode);
         address alwaysValid = _create2(type(AlwaysValidVerifier).creationCode);
 
         console.log("AccountConfiguration:  ", accountConfig);
