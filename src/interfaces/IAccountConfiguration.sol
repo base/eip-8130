@@ -40,7 +40,8 @@ interface IAccountConfiguration {
 
     event AccountImported(address indexed account);
 
-    event AppliedSignedOwnerChanges(address indexed account, uint64 sequence);
+    /// @notice Protocol-injected receipt log for successful EIP-8130 delegation updates (not emitted in EVM).
+    event DelegationApplied(address indexed account, address target);
 
     event AccountLocked(address indexed account, uint16 unlockDelay);
 

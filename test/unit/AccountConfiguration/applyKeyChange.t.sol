@@ -346,7 +346,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
     // ── EOA self-ownerId revoke/add with explicit registration ──
     //
     // The self-ownerId for an account is bytes32(bytes20(account)).
-    // Revoking this ownerId sets a sentinel (verifier=0, scopes=0xff)
+    // Revoking this ownerId sets a sentinel (verifier=REVOKED_VERIFIER, scopes=0)
     // instead of deleting, to block the implicit authorization.
 
     function test_selfOwnerId_addKey() public {
@@ -381,7 +381,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         _revokeOwner(account, OWNER_PK, selfOwnerId);
         assertFalse(accountConfiguration.isOwner(account, selfOwnerId));
 
-        // Sentinel has verifier=0, so _authorizeOwner's `require(verifier == 0)` passes
+        // Re-authorization is allowed from the revoked sentinel state.
         _authorizeOwner(account, OWNER_PK, selfOwnerId, address(k1Verifier));
         assertTrue(accountConfiguration.isOwner(account, selfOwnerId));
     }

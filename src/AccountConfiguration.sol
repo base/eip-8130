@@ -63,8 +63,12 @@ contract AccountConfiguration is IAccountConfiguration {
     /// @notice Owner can change account owners
     uint8 public constant SCOPE_CHANGE_OWNERS = 0x08;
 
+    /// @dev Verifier namespace: 0=implicit EOA, 1=ecrecover EOA, 2..max-1=custom, max=revoked.
+    /// @notice Explicit verifier for native EOA signatures via ecrecover.
+    address public constant ECRECOVER_VERIFIER = address(1);
+
     /// @notice Sentinel verifier written on self-ownerId revocation to block implicit re-authorization.
-    address public constant REVOKED_VERIFIER = address(1);
+    address public constant REVOKED_VERIFIER = address(type(uint160).max);
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // STORAGE
@@ -163,7 +167,6 @@ contract AccountConfiguration is IAccountConfiguration {
                 revert();
             }
         }
-        emit AppliedSignedOwnerChanges(account, sequence);
     }
 
     // ----------------------------------------------------------------------------------------------------------------
@@ -240,7 +243,7 @@ contract AccountConfiguration is IAccountConfiguration {
 
     function isOwner(address account, bytes32 ownerId) public view returns (bool) {
         address verifier = _ownerConfig[ownerId][account].verifier;
-        if (verifier > REVOKED_VERIFIER) return true;
+        if (verifier >= ECRECOVER_VERIFIER && verifier != REVOKED_VERIFIER) return true;
         // Implicit EOA: self-ownerId with truly empty slot
         return verifier == address(0) && ownerId == bytes32(bytes20(account));
     }
@@ -307,7 +310,7 @@ contract AccountConfiguration is IAccountConfiguration {
     }
 
     function _authorizeOwner(address account, bytes32 ownerId, OwnerConfig memory config) internal nonZero(account) {
-        require(config.verifier > REVOKED_VERIFIER);
+        require(config.verifier >= ECRECOVER_VERIFIER && config.verifier != REVOKED_VERIFIER);
         address existing = _ownerConfig[ownerId][account].verifier;
         require(existing == address(0) || existing == REVOKED_VERIFIER);
 
@@ -373,6 +376,8 @@ contract AccountConfiguration is IAccountConfiguration {
         returns (uint8 scopes)
     {
         if (verifier == address(0)) return _verifyImplicitEOA(account, hash, data);
+        if (verifier == ECRECOVER_VERIFIER) return _verifyEcrecover(account, hash, data);
+        require(verifier != REVOKED_VERIFIER);
 
         bytes32 ownerId = IVerifier(verifier).verify(hash, data);
         require(ownerId != bytes32(0));
@@ -382,15 +387,30 @@ contract AccountConfiguration is IAccountConfiguration {
         return config.scopes;
     }
 
-    /// @dev Implicit EOA: native ecrecover, requires self-ownerId slot is empty (not REVOKED_VERIFIER).
+    /// @dev Implicit EOA: native ecrecover, requires self-ownerId slot to be empty.
     function _verifyImplicitEOA(address account, bytes32 hash, bytes calldata data) internal view returns (uint8) {
         require(_ownerConfig[bytes32(bytes20(account))][account].verifier == address(0));
+        address recovered = _recoverSigner(hash, data);
+        require(recovered == account);
+        return 0;
+    }
+
+    /// @dev Explicit EOA owner via native ecrecover verifier (address(1)).
+    function _verifyEcrecover(address account, bytes32 hash, bytes calldata data) internal view returns (uint8) {
+        address recovered = _recoverSigner(hash, data);
+        require(recovered != address(0));
+
+        bytes32 ownerId = bytes32(bytes20(recovered));
+        OwnerConfig memory config = _ownerConfig[ownerId][account];
+        require(config.verifier == ECRECOVER_VERIFIER);
+        return config.scopes;
+    }
+
+    function _recoverSigner(bytes32 hash, bytes calldata data) internal pure returns (address recovered) {
         require(data.length == 65);
         bytes32 r = bytes32(data[:32]);
         bytes32 s = bytes32(data[32:64]);
-        address recovered = ecrecover(hash, uint8(data[64]), r, s);
-        require(recovered == account);
-        return 0;
+        return ecrecover(hash, uint8(data[64]), r, s);
     }
 
     // ----------------------------------------------------------------------------------------------------------------

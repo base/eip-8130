@@ -165,6 +165,55 @@ contract VerifyTest is AccountConfigurationTest {
         accountConfiguration.verify(eoa, hash, _buildImplicitEOAAuth(eoaPk, hash));
     }
 
+    function test_verify_explicitEOA_selfOwner() public {
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+        bytes32 selfOwnerId = bytes32(bytes20(eoa));
+
+        _implicitAuthorizeOwner(eoa, eoaPk, selfOwnerId, accountConfiguration.ECRECOVER_VERIFIER());
+
+        bytes32 hash = keccak256("explicit self-owner");
+        uint8 scopes = accountConfiguration.verify(eoa, hash, _buildExplicitEOAAuth(eoaPk, hash));
+        assertEq(scopes, 0);
+
+        // Explicit self-owner registration disables implicit auth path.
+        vm.expectRevert();
+        accountConfiguration.verify(eoa, hash, _buildImplicitEOAAuth(eoaPk, hash));
+    }
+
+    function test_verify_explicitEOA_nonSelfOwner() public {
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+
+        uint256 bobPk = 501;
+        bytes32 bobOwnerId = bytes32(bytes20(vm.addr(bobPk)));
+        _implicitAuthorizeOwner(eoa, eoaPk, bobOwnerId, accountConfiguration.ECRECOVER_VERIFIER());
+
+        bytes32 hash = keccak256("explicit non-self owner");
+        uint8 scopes = accountConfiguration.verify(eoa, hash, _buildExplicitEOAAuth(bobPk, hash));
+        assertEq(scopes, 0);
+    }
+
+    function test_verify_explicitEOA_unregisteredFails() public {
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+
+        bytes32 hash = keccak256("explicit unregistered");
+        vm.expectRevert();
+        accountConfiguration.verify(eoa, hash, _buildExplicitEOAAuth(eoaPk, hash));
+    }
+
+    function test_verify_revokedVerifierPrefixReverts() public {
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+
+        bytes32 hash = keccak256("revoked verifier prefix");
+        bytes memory auth = abi.encodePacked(accountConfiguration.REVOKED_VERIFIER());
+
+        vm.expectRevert();
+        accountConfiguration.verify(eoa, hash, auth);
+    }
+
     // ── Helpers ──
 
     function _authorizeOwner(address account, uint256 pk, bytes32 newOwnerId, address verifier) internal {
