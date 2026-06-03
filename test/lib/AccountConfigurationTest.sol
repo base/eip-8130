@@ -45,7 +45,9 @@ contract AccountConfigurationTest is Test {
 
         IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
         owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+            ownerId: ownerId,
+            config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}),
+            policyData: ""
         });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
@@ -58,7 +60,9 @@ contract AccountConfigurationTest is Test {
 
         IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
         owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
+            ownerId: ownerId,
+            config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}),
+            policyData: ""
         });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);

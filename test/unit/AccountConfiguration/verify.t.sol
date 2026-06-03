@@ -227,7 +227,7 @@ contract VerifyTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.OwnerChange({
             ownerId: newOwnerId,
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: verifier, scopes: scope}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: verifier, scopes: scope, policyType: 0x00}), bytes(""))
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -253,7 +253,7 @@ contract VerifyTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.OwnerChange({
             ownerId: newOwnerId,
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: verifier, scopes: 0x00}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: verifier, scopes: 0x00, policyType: 0x00}), bytes(""))
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;

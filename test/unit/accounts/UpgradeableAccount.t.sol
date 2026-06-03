@@ -51,8 +51,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
 
         IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
         owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
-        });
+            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), policyData: ""});
 
         bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
         account = accountConfiguration.createAccount(bytes32(0), proxyBytecode, owners);
@@ -86,8 +85,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
 
         IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
         owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
-        });
+            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), policyData: ""});
 
         bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
         address predicted = accountConfiguration.computeAddress(bytes32(0), proxyBytecode, owners);

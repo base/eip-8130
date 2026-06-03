@@ -15,11 +15,14 @@ interface IAccountConfiguration {
     struct OwnerConfig {
         address verifier;
         uint8 scopes;
+        uint8 policyType; // 0x00 = none, 0x01 = self, 0x02 = custom manager
     }
 
     struct Owner {
         bytes32 ownerId;
         OwnerConfig config;
+        // Sliced by policyType: empty (0x00); commitment[32] (0x01); manager[20] || commitment[32] (0x02).
+        bytes policyData;
     }
 
     struct OwnerChange {
@@ -32,7 +35,13 @@ interface IAccountConfiguration {
     // EVENTS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    event OwnerAuthorized(address indexed account, bytes32 indexed ownerId, OwnerConfig config);
+    event OwnerAuthorized(
+        address indexed account,
+        bytes32 indexed ownerId,
+        OwnerConfig config,
+        address policyManager,
+        bytes32 policyCommitment
+    );
 
     event OwnerRevoked(address indexed account, bytes32 indexed ownerId);
 
@@ -94,6 +103,10 @@ interface IAccountConfiguration {
     function isOwner(address account, bytes32 ownerId) external view returns (bool);
 
     function getOwnerConfig(address account, bytes32 ownerId) external view returns (OwnerConfig memory);
+
+    /// @notice Resolves the policy gate target and signed commitment for an owner, by policyType:
+    ///         0x00 -> (address(0), bytes32(0)); 0x01 -> (account, commitment); 0x02 -> (manager, commitment).
+    function getPolicy(address account, bytes32 ownerId) external view returns (address target, bytes32 commitment);
 
     function getChangeSequences(address account) external view returns (ChangeSequences memory);
 

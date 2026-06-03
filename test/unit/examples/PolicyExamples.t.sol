@@ -51,19 +51,25 @@ contract PolicyExamplesTest is AccountConfigurationTest {
     address internal bob = address(0xB0B);
     address internal stranger = address(0xBAD);
 
+    uint256 internal constant ROOT_PK = 0xA11CE;
+
+    uint8 internal constant SCOPE_SENDER = 0x02;
+    uint8 internal constant POLICY_CUSTOM = 0x02;
+    uint8 internal constant AUTHORIZE_OWNER = 0x01;
+
     uint40 internal constant WEEK = 7 days;
 
     function setUp() public override {
         super.setUp();
         vm.warp(1_700_000_000);
 
-        manager = new PolicyManager();
+        manager = new PolicyManager(address(accountConfiguration));
         spendPolicy = new ERC20SpendLimitPolicy(address(manager));
         gatePolicy = new SelectorGatingPolicy(address(manager));
         token = new MockERC20();
         target = new MockTarget();
 
-        account = _createAccountWithManagerOwner(address(manager));
+        account = _createAccountWithRootAndManager();
         token.mint(account, 1000e18);
     }
 
@@ -144,19 +150,83 @@ contract PolicyExamplesTest is AccountConfigurationTest {
         PolicyManager.PolicyBinding memory binding = _spendBinding(500e18, 1);
         vm.expectRevert(abi.encodeWithSelector(PolicyManager.UnauthorizedAccount.selector, stranger, account));
         vm.prank(stranger);
-        manager.install(binding);
+        manager.install(bytes32(0), binding);
+    }
+
+    function test_install_revertsWhenCommitmentNotAuthorized() public {
+        // Binding is well-formed, but the account never authorized an owner committing to it.
+        PolicyManager.PolicyBinding memory binding = _spendBinding(500e18, 7);
+        bytes32 ownerId = _sessionOwnerId(7);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(PolicyManager.CommitmentNotAuthorized.selector, ownerId, address(0), bytes32(0))
+        );
+        vm.prank(account);
+        manager.install(ownerId, binding);
+    }
+
+    function test_getPolicy_resolvesManagerAndCommitment() public {
+        PolicyManager.PolicyBinding memory binding = _spendBinding(500e18, 9);
+        bytes32 commitment = manager.commitmentOf(binding);
+        bytes32 ownerId = _sessionOwnerId(9);
+        _authorizeCustomPolicyOwner(ownerId, commitment);
+
+        (address target_, bytes32 signed) = accountConfiguration.getPolicy(account, ownerId);
+        assertEq(target_, address(manager));
+        assertEq(signed, commitment);
     }
 
     // ── Helpers ──
 
-    function _createAccountWithManagerOwner(address policyManager) internal returns (address) {
-        IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
-        owners[0] = IAccountConfiguration.Owner({
-            ownerId: bytes32(bytes20(policyManager)),
-            config: IAccountConfiguration.OwnerConfig({verifier: EXTERNAL_CALLER_VERIFIER, scopes: 0x00})
+    /// @dev Account with a K1 root owner (can authorize owners) and the manager as an execution-enabled owner.
+    function _createAccountWithRootAndManager() internal returns (address) {
+        IAccountConfiguration.Owner memory root = IAccountConfiguration.Owner({
+            ownerId: bytes32(bytes20(vm.addr(ROOT_PK))),
+            config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}),
+            policyData: ""
         });
+        IAccountConfiguration.Owner memory mgr = IAccountConfiguration.Owner({
+            ownerId: bytes32(bytes20(address(manager))),
+            config: IAccountConfiguration.OwnerConfig({
+                verifier: EXTERNAL_CALLER_VERIFIER,
+                scopes: 0x00,
+                policyType: 0x00
+            }),
+            policyData: ""
+        });
+
+        IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](2);
+        (owners[0], owners[1]) = root.ownerId < mgr.ownerId ? (root, mgr) : (mgr, root);
+
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         return accountConfiguration.createAccount(bytes32(0), bytecode, owners);
+    }
+
+    /// @dev Root owner authorizes `ownerId` as a session key gated to the manager (policyType 0x02), committing to
+    ///      `commitment`. This writes `policy_manager`/`policy_commitment` that the manager reads back at install.
+    function _authorizeCustomPolicyOwner(bytes32 ownerId, bytes32 commitment) internal {
+        IAccountConfiguration.OwnerConfig memory cfg = IAccountConfiguration.OwnerConfig({
+            verifier: address(k1Verifier),
+            scopes: SCOPE_SENDER,
+            policyType: POLICY_CUSTOM
+        });
+        bytes memory policyData = abi.encodePacked(address(manager), commitment);
+
+        IAccountConfiguration.OwnerChange[] memory changes = new IAccountConfiguration.OwnerChange[](1);
+        changes[0] = IAccountConfiguration.OwnerChange({
+            ownerId: ownerId,
+            changeType: AUTHORIZE_OWNER,
+            configData: abi.encode(cfg, policyData)
+        });
+
+        uint64 chainId = uint64(block.chainid);
+        uint64 sequence = accountConfiguration.getChangeSequences(account).local;
+        bytes32 digest = _computeOwnerChangeBatchDigest(account, chainId, sequence, changes);
+        accountConfiguration.applySignedOwnerChanges(account, chainId, changes, _buildK1Auth(ROOT_PK, digest));
+    }
+
+    function _sessionOwnerId(uint256 salt) internal pure returns (bytes32) {
+        return keccak256(abi.encode("session-key", salt));
     }
 
     function _spendBinding(uint160 allowance, uint256 salt) internal view returns (PolicyManager.PolicyBinding memory) {
@@ -179,8 +249,10 @@ contract PolicyExamplesTest is AccountConfigurationTest {
 
     function _installSpendLimit(uint160 allowance, uint256 salt) internal returns (bytes32 commitment) {
         PolicyManager.PolicyBinding memory binding = _spendBinding(allowance, salt);
+        commitment = manager.commitmentOf(binding);
+        _authorizeCustomPolicyOwner(_sessionOwnerId(salt), commitment);
         vm.prank(account);
-        commitment = manager.install(binding);
+        manager.install(_sessionOwnerId(salt), binding);
     }
 
     function _installSelectorGate() internal returns (bytes32 commitment) {
@@ -196,7 +268,9 @@ contract PolicyExamplesTest is AccountConfigurationTest {
             validUntil: 0,
             salt: 2
         });
+        commitment = manager.commitmentOf(binding);
+        _authorizeCustomPolicyOwner(_sessionOwnerId(2), commitment);
         vm.prank(account);
-        commitment = manager.install(binding);
+        manager.install(_sessionOwnerId(2), binding);
     }
 }

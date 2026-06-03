@@ -48,8 +48,7 @@ contract SmokeTest is Script {
     {
         IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
         owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: k1Verifier, scopes: 0x00})
-        });
+            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: k1Verifier, scopes: 0x00, policyType: 0x00}), policyData: ""});
 
         bytes memory bytecode =
             abi.encodePacked(hex"363d3d373d3d3d363d73", defaultImpl, hex"5af43d82803e903d91602b57fd5bf3");

@@ -4,6 +4,7 @@ pragma solidity ^0.8.30;
 import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
 import {Address} from "openzeppelin/utils/Address.sol";
 
+import {IAccountConfiguration} from "../../interfaces/IAccountConfiguration.sol";
 import {Policy} from "./Policy.sol";
 
 /// @title PolicyManager
@@ -19,15 +20,23 @@ import {Policy} from "./Policy.sol";
 ///        here is the account itself. That is the authorization boundary: only a gated session-key transaction
 ///        (routed through the account) can invoke {execute}.
 ///
-///      Commitment binding: the account authorizes a {PolicyBinding}; its `keccak256` is the `commitment`. This is
-///      the example analogue of the signed, opaque commitment stored per-owner by the protocol. (This reference
-///      keeps the commitment in the manager; a future version can instead verify it against the account's
-///      protocol-stored `policy_commitment` once the system contract exposes it.)
+///      Commitment binding: the account authorizes a {PolicyBinding}; its `keccak256` is the `commitment`. When the
+///      account authorizes the session-key owner it stores `policyType = 0x02`, `policy_manager = address(this)`, and
+///      `policy_commitment = commitment` in the Account Configuration contract. At {install} the manager reads that
+///      binding back via {IAccountConfiguration.getPolicy} and requires the target and commitment to match, so an
+///      install can only succeed for a policy the account actually signed for this manager.
 ///
 ///      Scope: install-by-direct-account-call and execute only. Signature-based install, replacement, and
 ///      uninstall are intentionally omitted from this reference.
 contract PolicyManager is ReentrancyGuard {
     using Address for address;
+
+    /// @notice The EIP-8130 Account Configuration system contract used to resolve signed policy commitments.
+    IAccountConfiguration public immutable ACCOUNT_CONFIGURATION;
+
+    constructor(address accountConfiguration) {
+        ACCOUNT_CONFIGURATION = IAccountConfiguration(accountConfiguration);
+    }
 
     /// @notice Policy binding authorized by the account. Its hash is the policy commitment.
     struct PolicyBinding {
@@ -63,6 +72,7 @@ contract PolicyManager is ReentrancyGuard {
     error PolicyAlreadyInstalled(bytes32 commitment);
     error UnauthorizedAccount(address caller, address account);
     error OutsideValidityWindow(uint40 validAfter, uint40 validUntil, uint256 timestamp);
+    error CommitmentNotAuthorized(bytes32 ownerId, address target, bytes32 commitment);
 
     /// @notice Computes the commitment (binding identifier) for a binding.
     ///
@@ -77,18 +87,28 @@ contract PolicyManager is ReentrancyGuard {
         return _policies[policy][commitment];
     }
 
-    /// @notice Installs a policy binding. MUST be called by `binding.account`.
+    /// @notice Installs a policy binding the account has authorized for a specific owner.
     ///
-    /// @dev In EIP-8130 this is performed by the account (e.g. authorized by the account's root owner). The
-    ///      committed `policyConfig` is handed to the policy's install hook, which stores it keyed by commitment.
+    /// @dev MUST be called by `binding.account`. The manager re-derives the binding's `commitment` and confirms the
+    ///      account signed it for this manager by reading {IAccountConfiguration.getPolicy} for `ownerId`: the
+    ///      resolved target must be this manager and the resolved commitment must equal the binding's. The committed
+    ///      `policyConfig` is then handed to the policy's install hook, which stores it keyed by commitment.
     ///
+    /// @param ownerId The session-key owner the account configured with this policy (policyType 0x02).
     /// @param binding The account-authorized binding.
     ///
     /// @return commitment The binding's commitment.
-    function install(PolicyBinding calldata binding) external returns (bytes32 commitment) {
+    function install(bytes32 ownerId, PolicyBinding calldata binding) external returns (bytes32 commitment) {
         if (msg.sender != binding.account) revert UnauthorizedAccount(msg.sender, binding.account);
 
         commitment = _commitment(binding);
+
+        // The account must have signed this exact commitment for this manager when authorizing `ownerId`.
+        (address target, bytes32 signedCommitment) = ACCOUNT_CONFIGURATION.getPolicy(binding.account, ownerId);
+        if (target != address(this) || signedCommitment != commitment) {
+            revert CommitmentNotAuthorized(ownerId, target, signedCommitment);
+        }
+
         PolicyRecord storage record = _policies[binding.policy][commitment];
         if (record.installed) revert PolicyAlreadyInstalled(commitment);
 

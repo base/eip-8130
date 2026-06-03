@@ -28,7 +28,7 @@ contract AccountConfiguration is IAccountConfiguration {
 
     /// @dev Typehash for OwnerChangeBatch, NOT compliant with EIP-712 to mitigate phishing attacks.
     bytes32 public constant OWNER_INITIALIZATION_TYPEHASH = keccak256(
-        "OwnerInitialization(bytes32 salt,Owner[] initialOwners)Owner(bytes32 ownerId,OwnerConfig config)OwnerConfig(address verifier,uint8 scopes)"
+        "OwnerInitialization(bytes32 salt,Owner[] initialOwners)Owner(bytes32 ownerId,OwnerConfig config,bytes policyData)OwnerConfig(address verifier,uint8 scopes,uint8 policyType)"
     );
 
     /// @dev Typehash for OwnerChangeBatch, NOT compliant with EIP-712 to mitigate phishing attacks.
@@ -46,6 +46,19 @@ contract AccountConfiguration is IAccountConfiguration {
 
     /// @notice Revoke an owner from the account
     uint8 public constant REVOKE_OWNER = 0x02;
+
+    // ----------------------------------------------------------------------------------------------------------------
+    // OWNER POLICY TYPES
+    // ----------------------------------------------------------------------------------------------------------------
+
+    /// @notice No execution policy; owner is ungated.
+    uint8 public constant POLICY_NONE = 0x00;
+
+    /// @notice Self-enforced policy: the only call target is the account itself; carries a commitment.
+    uint8 public constant POLICY_SELF = 0x01;
+
+    /// @notice Custom-manager policy: the only call target is the configured manager; carries manager + commitment.
+    uint8 public constant POLICY_CUSTOM = 0x02;
 
     // ----------------------------------------------------------------------------------------------------------------
     // OWNER ELEVATED SCOPES
@@ -77,6 +90,13 @@ contract AccountConfiguration is IAccountConfiguration {
     /// @notice Per-owner configuration
     /// @dev Account must be inner-most mapping key to pass ERC-7562 storage access rules for ERC-4337 compatibility.
     mapping(bytes32 ownerId => mapping(address account => OwnerConfig)) internal _ownerConfig;
+
+    /// @notice Per-owner signed policy commitment. Set for policyType 0x01 and 0x02.
+    /// @dev Read only during execution (via getPolicy), never during signature validity checks.
+    mapping(bytes32 ownerId => mapping(address account => bytes32)) internal _policyCommitment;
+
+    /// @notice Per-owner custom policy manager address. Set for policyType 0x02 only.
+    mapping(bytes32 ownerId => mapping(address account => address)) internal _policyManager;
 
     /// @notice Per-account state: sequences, lock status (single slot per account)
     mapping(address account => AccountState) internal _accountState;
@@ -159,8 +179,9 @@ contract AccountConfiguration is IAccountConfiguration {
         // Apply ownerChanges
         for (uint256 i; i < ownerChanges.length; i++) {
             if (ownerChanges[i].changeType == AUTHORIZE_OWNER) {
-                OwnerConfig memory newOwnerConfig = abi.decode(ownerChanges[i].configData, (OwnerConfig));
-                _authorizeOwner(account, ownerChanges[i].ownerId, newOwnerConfig);
+                (OwnerConfig memory newOwnerConfig, bytes memory policyData) =
+                    abi.decode(ownerChanges[i].configData, (OwnerConfig, bytes));
+                _authorizeOwner(account, ownerChanges[i].ownerId, newOwnerConfig, policyData);
             } else if (ownerChanges[i].changeType == REVOKE_OWNER) {
                 _revokeOwner(account, ownerChanges[i].ownerId);
             } else {
@@ -252,6 +273,20 @@ contract AccountConfiguration is IAccountConfiguration {
         return _ownerConfig[ownerId][account];
     }
 
+    /// @notice Resolves the policy gate target and signed commitment for an owner.
+    /// @dev Enforcement is at execution: this resolves where a policy-bearing owner may call and the commitment a
+    ///      target validates presented parameters against. 0x00 -> (0, 0); 0x01 -> (account, commitment);
+    ///      0x02 -> (manager, commitment).
+    function getPolicy(address account, bytes32 ownerId) external view returns (address target, bytes32 commitment) {
+        uint8 policyType = _ownerConfig[ownerId][account].policyType;
+        if (policyType == POLICY_NONE) return (address(0), bytes32(0));
+
+        commitment = _policyCommitment[ownerId][account];
+        if (policyType == POLICY_SELF) return (account, commitment);
+        if (policyType == POLICY_CUSTOM) return (_policyManager[ownerId][account], commitment);
+        return (address(0), bytes32(0));
+    }
+
     function getChangeSequences(address account) external view returns (ChangeSequences memory) {
         AccountState storage state = _accountState[account];
         return ChangeSequences({multichain: state.multichainSequence, local: state.localSequence});
@@ -305,26 +340,66 @@ contract AccountConfiguration is IAccountConfiguration {
             require(initialOwners[i].ownerId > previousOwnerId);
             previousOwnerId = initialOwners[i].ownerId;
 
-            _authorizeOwner(account, initialOwners[i].ownerId, initialOwners[i].config);
+            _authorizeOwner(account, initialOwners[i].ownerId, initialOwners[i].config, initialOwners[i].policyData);
         }
     }
 
-    function _authorizeOwner(address account, bytes32 ownerId, OwnerConfig memory config) internal nonZero(account) {
+    function _authorizeOwner(address account, bytes32 ownerId, OwnerConfig memory config, bytes memory policyData)
+        internal
+        nonZero(account)
+    {
         require(config.verifier >= ECRECOVER_VERIFIER && config.verifier != REVOKED_VERIFIER);
         address existing = _ownerConfig[ownerId][account].verifier;
         require(existing == address(0) || existing == REVOKED_VERIFIER);
 
         _ownerConfig[ownerId][account] = config;
-        emit OwnerAuthorized(account, ownerId, config);
+
+        // Slice and store the signed policy by policyType. The commitment is opaque to the protocol.
+        (address manager, bytes32 commitment) = _slicePolicy(config.policyType, policyData);
+        if (commitment != bytes32(0)) _policyCommitment[ownerId][account] = commitment;
+        if (manager != address(0)) _policyManager[ownerId][account] = manager;
+
+        emit OwnerAuthorized(account, ownerId, config, manager, commitment);
+    }
+
+    /// @dev Validates `policyData` against `policyType` and returns (manager, commitment).
+    ///      0x00: empty data -> (0, 0). 0x01: commitment[32] -> (0, commitment).
+    ///      0x02: manager[20] || commitment[32] -> (manager, commitment). Reverts otherwise.
+    function _slicePolicy(uint8 policyType, bytes memory policyData)
+        internal
+        pure
+        returns (address manager, bytes32 commitment)
+    {
+        if (policyType == POLICY_NONE) {
+            require(policyData.length == 0);
+        } else if (policyType == POLICY_SELF) {
+            require(policyData.length == 32);
+            assembly ("memory-safe") {
+                commitment := mload(add(policyData, 0x20))
+            }
+            require(commitment != bytes32(0));
+        } else if (policyType == POLICY_CUSTOM) {
+            require(policyData.length == 52);
+            assembly ("memory-safe") {
+                manager := shr(96, mload(add(policyData, 0x20)))
+                commitment := mload(add(policyData, 0x34))
+            }
+            require(manager != address(0) && commitment != bytes32(0));
+        } else {
+            revert();
+        }
     }
 
     function _revokeOwner(address account, bytes32 ownerId) internal nonZero(account) {
         require(isOwner(account, ownerId));
         if (ownerId == bytes32(bytes20(account))) {
-            _ownerConfig[ownerId][account] = OwnerConfig({verifier: REVOKED_VERIFIER, scopes: 0});
+            _ownerConfig[ownerId][account] = OwnerConfig({verifier: REVOKED_VERIFIER, scopes: 0, policyType: POLICY_NONE});
         } else {
             delete _ownerConfig[ownerId][account];
         }
+        // Policy state is keyed by (account, ownerId) and cleared exactly on revoke.
+        delete _policyCommitment[ownerId][account];
+        delete _policyManager[ownerId][account];
         emit OwnerRevoked(account, ownerId);
     }
 
@@ -336,7 +411,9 @@ contract AccountConfiguration is IAccountConfiguration {
         // Hash each owner
         bytes32[] memory initializeOwnerHashes = new bytes32[](initialOwners.length);
         for (uint256 i; i < initialOwners.length; i++) {
-            initializeOwnerHashes[i] = keccak256(abi.encode(initialOwners[i].ownerId, initialOwners[i].config));
+            initializeOwnerHashes[i] = keccak256(
+                abi.encode(initialOwners[i].ownerId, initialOwners[i].config, keccak256(initialOwners[i].policyData))
+            );
         }
 
         // Hash cumulative initialization data

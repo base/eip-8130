@@ -20,21 +20,17 @@ contract DelegateVerifierTest is AccountConfigurationTest {
         if (delegatorOwnerId < delegateRefOwnerId) {
             owners[0] = IAccountConfiguration.Owner({
                 ownerId: delegatorOwnerId,
-                config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
-            });
+                config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), policyData: ""});
             owners[1] = IAccountConfiguration.Owner({
                 ownerId: delegateRefOwnerId,
-                config: IAccountConfiguration.OwnerConfig({verifier: address(delegateVerifier), scopes: 0x00})
-            });
+                config: IAccountConfiguration.OwnerConfig({verifier: address(delegateVerifier), scopes: 0x00, policyType: 0x00}), policyData: ""});
         } else {
             owners[0] = IAccountConfiguration.Owner({
                 ownerId: delegateRefOwnerId,
-                config: IAccountConfiguration.OwnerConfig({verifier: address(delegateVerifier), scopes: 0x00})
-            });
+                config: IAccountConfiguration.OwnerConfig({verifier: address(delegateVerifier), scopes: 0x00, policyType: 0x00}), policyData: ""});
             owners[1] = IAccountConfiguration.Owner({
                 ownerId: delegatorOwnerId,
-                config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00})
-            });
+                config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), policyData: ""});
         }
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
@@ -80,8 +76,7 @@ contract DelegateVerifierTest is AccountConfigurationTest {
         IAccountConfiguration.Owner[] memory ownersB = new IAccountConfiguration.Owner[](1);
         ownersB[0] = IAccountConfiguration.Owner({
             ownerId: delegateRefA,
-            config: IAccountConfiguration.OwnerConfig({verifier: address(delegateVerifier), scopes: 0x00})
-        });
+            config: IAccountConfiguration.OwnerConfig({verifier: address(delegateVerifier), scopes: 0x00, policyType: 0x00}), policyData: ""});
         bytes memory bytecodeB = _computeERC1167Bytecode(defaultAccountImplementation);
         address accountB = accountConfiguration.createAccount(bytes32(uint256(10)), bytecodeB, ownersB);
 

@@ -19,7 +19,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.OwnerChange({
             ownerId: newOwnerId,
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), bytes(""))
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -44,7 +44,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.OwnerChange({
             ownerId: newOwnerId,
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x04}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x04, policyType: 0x00}), bytes(""))
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -89,12 +89,12 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.OwnerChange({
             ownerId: owner1,
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), bytes(""))
         });
         changes[1] = IAccountConfiguration.OwnerChange({
             ownerId: owner2,
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), bytes(""))
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -128,7 +128,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.OwnerChange({
             ownerId: bytes32(bytes20(vm.addr(300))),
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), bytes(""))
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -150,7 +150,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.OwnerChange({
             ownerId: thirdOwnerId,
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), bytes(""))
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -173,7 +173,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.OwnerChange({
             ownerId: thirdOwnerId,
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), bytes(""))
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -198,7 +198,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.OwnerChange({
             ownerId: thirdOwnerId,
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), bytes(""))
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -216,7 +216,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.OwnerChange({
             ownerId: ownerOwnerId,
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), bytes(""))
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -250,7 +250,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.OwnerChange({
             ownerId: bytes32(bytes20(vm.addr(300))),
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), bytes(""))
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -277,7 +277,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.OwnerChange({
             ownerId: newOwnerId,
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), bytes(""))
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(eoa).local;
@@ -331,7 +331,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.OwnerChange({
             ownerId: newOwnerId,
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), bytes(""))
         });
 
         // chainId=0 for multichain
@@ -399,7 +399,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.OwnerChange({
             ownerId: newOwnerId,
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), bytes(""))
         });
         changes[1] = IAccountConfiguration.OwnerChange({ownerId: selfOwnerId, changeType: 0x02, configData: ""});
 
@@ -435,7 +435,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.OwnerChange({
             ownerId: thirdOwnerId,
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), bytes(""))
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -463,7 +463,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.OwnerChange({
             ownerId: thirdOwnerId,
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), bytes(""))
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -501,7 +501,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.OwnerChange({
             ownerId: newOwnerId,
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: verifier, scopes: scope}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: verifier, scopes: scope, policyType: 0x00}), bytes(""))
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -537,7 +537,7 @@ contract ApplyConfigChangeOwnerTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.OwnerChange({
             ownerId: newOwnerId,
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: verifier, scopes: scope}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: verifier, scopes: scope, policyType: 0x00}), bytes(""))
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;

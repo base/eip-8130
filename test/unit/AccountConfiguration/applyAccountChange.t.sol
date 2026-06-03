@@ -107,7 +107,7 @@ contract AccountLockTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.OwnerChange({
             ownerId: bytes32(bytes20(vm.addr(400))),
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), bytes(""))
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -137,7 +137,7 @@ contract AccountLockTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.OwnerChange({
             ownerId: bytes32(bytes20(vm.addr(500))),
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00}))
+            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), bytes(""))
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
