@@ -54,8 +54,10 @@ contract AccountConfiguration is IAccountConfiguration {
     /// @notice No execution policy; owner is ungated.
     uint8 public constant POLICY_NONE = 0x00;
 
-    /// @notice Standard policy: owner is gated to its stored manager + commitment (self-enforcement is manager == account).
-    /// @dev Values 0x02-0xFF are reserved for future protocol-level resolution modes and are rejected.
+    /// @notice Canonical non-zero policy type. Any non-zero `policyType` gates the owner to its stored
+    ///         manager + commitment (self-enforcement is manager == account); the contract does not interpret
+    ///         the specific value, leaving it for the manager to read as a sub-type. `0x01` is the value used
+    ///         when no sub-type is needed.
     uint8 public constant POLICY_GATED = 0x01;
 
     // ----------------------------------------------------------------------------------------------------------------
@@ -89,11 +91,11 @@ contract AccountConfiguration is IAccountConfiguration {
     /// @dev Account must be inner-most mapping key to pass ERC-7562 storage access rules for ERC-4337 compatibility.
     mapping(bytes32 ownerId => mapping(address account => OwnerConfig)) internal _ownerConfig;
 
-    /// @notice Per-owner signed policy commitment. Set for policyType 0x01 and 0x02.
+    /// @notice Per-owner signed policy commitment. Set when policyType != 0x00.
     /// @dev Read only during execution (via getPolicy), never during signature validity checks.
     mapping(bytes32 ownerId => mapping(address account => bytes32)) internal _policyCommitment;
 
-    /// @notice Per-owner custom policy manager address. Set for policyType 0x02 only.
+    /// @notice Per-owner policy manager address. Set when policyType != 0x00.
     mapping(bytes32 ownerId => mapping(address account => address)) internal _policyManager;
 
     /// @notice Per-account state: sequences, lock status (single slot per account)
@@ -273,7 +275,7 @@ contract AccountConfiguration is IAccountConfiguration {
 
     /// @notice Resolves the policy gate target and signed commitment for an owner.
     /// @dev Enforcement is at execution: this resolves where a policy-bearing owner may call and the commitment a
-    ///      target validates presented parameters against. 0x00 -> (0, 0); 0x01 -> (manager, commitment).
+    ///      target validates presented parameters against. 0x00 -> (0, 0); non-zero -> (manager, commitment).
     function getPolicy(address account, bytes32 ownerId) external view returns (address target, bytes32 commitment) {
         if (_ownerConfig[ownerId][account].policyType == POLICY_NONE) return (address(0), bytes32(0));
         return (_policyManager[ownerId][account], _policyCommitment[ownerId][account]);
@@ -355,8 +357,9 @@ contract AccountConfiguration is IAccountConfiguration {
     }
 
     /// @dev Validates `policyData` against `policyType` and returns (manager, commitment).
-    ///      0x00: empty data -> (0, 0). 0x01: manager[20] || commitment[32] -> (manager, commitment).
-    ///      Reserved values (0x02-0xFF) and length mismatches revert. Self-enforcement is expressed as manager == account.
+    ///      0x00: empty data -> (0, 0). Any non-zero value: manager[20] || commitment[32] -> (manager, commitment).
+    ///      Length mismatches revert. The protocol does not interpret the specific non-zero value; self-enforcement
+    ///      is expressed as manager == account.
     function _slicePolicy(uint8 policyType, bytes memory policyData)
         internal
         pure
@@ -364,15 +367,13 @@ contract AccountConfiguration is IAccountConfiguration {
     {
         if (policyType == POLICY_NONE) {
             require(policyData.length == 0);
-        } else if (policyType == POLICY_GATED) {
+        } else {
             require(policyData.length == 52);
             assembly ("memory-safe") {
                 manager := shr(96, mload(add(policyData, 0x20)))
                 commitment := mload(add(policyData, 0x34))
             }
             require(manager != address(0) && commitment != bytes32(0));
-        } else {
-            revert();
         }
     }
 

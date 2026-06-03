@@ -5,8 +5,8 @@ Reference, **unaudited** example of a policy manager for EIP-8130 restricted own
 In EIP-8130, a restricted owner (e.g. a session key) is configured with a non-zero `policyType`, which stores a
 `policy_manager` address and an opaque `policy_commitment` in the Account Configuration contract. The protocol
 gate forces every call that owner makes to land on that single manager. These contracts are an example of what
-that manager can be: one that enforces application-specific limits and then drives the account. (This example
-uses `policyType = 0x01`, the single standard policy type; `0x02`–`0xFF` are reserved.)
+that manager can be: one that enforces application-specific limits and then drives the account. (The protocol
+gates identically on any non-zero `policyType` and does not interpret the value; this example uses `0x01`.)
 
 ## Flow
 

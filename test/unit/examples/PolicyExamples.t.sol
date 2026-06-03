@@ -37,7 +37,7 @@ contract MockTarget {
     }
 }
 
-/// @notice End-to-end example of the EIP-8130 `policyType = 0x02` flow: a session key is gated to a single
+/// @notice End-to-end example of the EIP-8130 policy flow (non-zero `policyType`): a session key is gated to a single
 ///         {PolicyManager} target, which enforces example policies (recurring ERC-20 limit; selector gating)
 ///         and drives the account as an execution-enabled owner.
 contract PolicyExamplesTest is AccountConfigurationTest {
