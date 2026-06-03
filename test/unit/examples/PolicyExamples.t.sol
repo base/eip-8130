@@ -54,8 +54,9 @@ contract PolicyExamplesTest is AccountConfigurationTest {
     uint256 internal constant ROOT_PK = 0xA11CE;
 
     uint8 internal constant SCOPE_SENDER = 0x02;
-    uint8 internal constant POLICY_CUSTOM = 0x02;
+    uint8 internal constant POLICY_GATED = 0x01;
     uint8 internal constant AUTHORIZE_OWNER = 0x01;
+    uint8 internal constant REVOKE_OWNER = 0x02;
 
     uint40 internal constant WEEK = 7 days;
 
@@ -76,36 +77,36 @@ contract PolicyExamplesTest is AccountConfigurationTest {
     // ── ERC-20 recurring spend limit ──
 
     function test_erc20SpendLimit_withinAllowance() public {
-        bytes32 commitment = _installSpendLimit(500e18, 1);
+        bytes32 ownerId = _installSpendLimit(500e18, 1);
 
         vm.prank(account);
-        manager.execute(address(spendPolicy), commitment, abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 300e18)));
+        manager.execute(ownerId, address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 300e18)));
 
         assertEq(token.balanceOf(bob), 300e18);
         assertEq(token.balanceOf(account), 700e18);
     }
 
     function test_erc20SpendLimit_revertsWhenPeriodExceeded() public {
-        bytes32 commitment = _installSpendLimit(500e18, 1);
+        bytes32 ownerId = _installSpendLimit(500e18, 1);
 
         vm.prank(account);
-        manager.execute(address(spendPolicy), commitment, abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 300e18)));
+        manager.execute(ownerId, address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 300e18)));
 
         vm.expectRevert(abi.encodeWithSelector(RecurringAllowance.ExceededAllowance.selector, 600e18, 500e18));
         vm.prank(account);
-        manager.execute(address(spendPolicy), commitment, abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 300e18)));
+        manager.execute(ownerId, address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 300e18)));
     }
 
     function test_erc20SpendLimit_resetsNextPeriod() public {
-        bytes32 commitment = _installSpendLimit(500e18, 1);
+        bytes32 ownerId = _installSpendLimit(500e18, 1);
 
         vm.prank(account);
-        manager.execute(address(spendPolicy), commitment, abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 500e18)));
+        manager.execute(ownerId, address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 500e18)));
 
         // Next period: the budget refreshes.
         vm.warp(block.timestamp + WEEK + 1);
         vm.prank(account);
-        manager.execute(address(spendPolicy), commitment, abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 400e18)));
+        manager.execute(ownerId, address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 400e18)));
 
         assertEq(token.balanceOf(bob), 900e18);
     }
@@ -113,12 +114,12 @@ contract PolicyExamplesTest is AccountConfigurationTest {
     // ── Selector gating ──
 
     function test_selectorGating_allowsCommittedSelector() public {
-        bytes32 commitment = _installSelectorGate();
+        bytes32 ownerId = _installSelectorGate();
 
         vm.prank(account);
         manager.execute(
+            ownerId,
             address(gatePolicy),
-            commitment,
             abi.encode(SelectorGatingPolicy.Action(0, abi.encodeCall(MockTarget.setValue, (42))))
         );
 
@@ -126,24 +127,39 @@ contract PolicyExamplesTest is AccountConfigurationTest {
     }
 
     function test_selectorGating_revertsUncommittedSelector() public {
-        bytes32 commitment = _installSelectorGate();
+        bytes32 ownerId = _installSelectorGate();
 
         bytes memory badCall = abi.encodeCall(MockTarget.forbidden, (99));
         vm.expectRevert(
             abi.encodeWithSelector(SelectorGatingPolicy.SelectorNotAllowed.selector, MockTarget.forbidden.selector)
         );
         vm.prank(account);
-        manager.execute(address(gatePolicy), commitment, abi.encode(SelectorGatingPolicy.Action(0, badCall)));
+        manager.execute(ownerId, address(gatePolicy), abi.encode(SelectorGatingPolicy.Action(0, badCall)));
     }
 
     // ── Authorization boundary ──
 
-    function test_execute_revertsForNonAccountCaller() public {
-        bytes32 commitment = _installSpendLimit(500e18, 1);
+    function test_execute_revertsForUnauthorizedCaller() public {
+        bytes32 ownerId = _installSpendLimit(500e18, 1);
 
-        vm.expectRevert(abi.encodeWithSelector(PolicyManager.UnauthorizedAccount.selector, stranger, account));
+        // A stranger has no policy for this ownerId, so getPolicy resolves to nothing.
+        vm.expectRevert(
+            abi.encodeWithSelector(PolicyManager.CommitmentNotAuthorized.selector, ownerId, address(0), bytes32(0))
+        );
         vm.prank(stranger);
-        manager.execute(address(spendPolicy), commitment, abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 1)));
+        manager.execute(ownerId, address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 1)));
+    }
+
+    function test_execute_revertsAfterRevoke() public {
+        bytes32 ownerId = _installSpendLimit(500e18, 1);
+        _revokePolicyOwner(ownerId);
+
+        // Revoke cleared the policy slots; the per-call getPolicy check now resolves to nothing.
+        vm.expectRevert(
+            abi.encodeWithSelector(PolicyManager.CommitmentNotAuthorized.selector, ownerId, address(0), bytes32(0))
+        );
+        vm.prank(account);
+        manager.execute(ownerId, address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 1)));
     }
 
     function test_install_revertsForNonAccountCaller() public {
@@ -169,7 +185,7 @@ contract PolicyExamplesTest is AccountConfigurationTest {
         PolicyManager.PolicyBinding memory binding = _spendBinding(500e18, 9);
         bytes32 commitment = manager.commitmentOf(binding);
         bytes32 ownerId = _sessionOwnerId(9);
-        _authorizeCustomPolicyOwner(ownerId, commitment);
+        _authorizePolicyOwner(ownerId, commitment);
 
         (address target_, bytes32 signed) = accountConfiguration.getPolicy(account, ownerId);
         assertEq(target_, address(manager));
@@ -202,13 +218,13 @@ contract PolicyExamplesTest is AccountConfigurationTest {
         return accountConfiguration.createAccount(bytes32(0), bytecode, owners);
     }
 
-    /// @dev Root owner authorizes `ownerId` as a session key gated to the manager (policyType 0x02), committing to
-    ///      `commitment`. This writes `policy_manager`/`policy_commitment` that the manager reads back at install.
-    function _authorizeCustomPolicyOwner(bytes32 ownerId, bytes32 commitment) internal {
+    /// @dev Root owner authorizes `ownerId` as a session key gated to the manager (policyType 0x01), committing to
+    ///      `commitment`. This writes `policy_manager`/`policy_commitment` that the manager reads back per call.
+    function _authorizePolicyOwner(bytes32 ownerId, bytes32 commitment) internal {
         IAccountConfiguration.OwnerConfig memory cfg = IAccountConfiguration.OwnerConfig({
             verifier: address(k1Verifier),
             scopes: SCOPE_SENDER,
-            policyType: POLICY_CUSTOM
+            policyType: POLICY_GATED
         });
         bytes memory policyData = abi.encodePacked(address(manager), commitment);
 
@@ -218,6 +234,16 @@ contract PolicyExamplesTest is AccountConfigurationTest {
             changeType: AUTHORIZE_OWNER,
             configData: abi.encode(cfg, policyData)
         });
+
+        uint64 chainId = uint64(block.chainid);
+        uint64 sequence = accountConfiguration.getChangeSequences(account).local;
+        bytes32 digest = _computeOwnerChangeBatchDigest(account, chainId, sequence, changes);
+        accountConfiguration.applySignedOwnerChanges(account, chainId, changes, _buildK1Auth(ROOT_PK, digest));
+    }
+
+    function _revokePolicyOwner(bytes32 ownerId) internal {
+        IAccountConfiguration.OwnerChange[] memory changes = new IAccountConfiguration.OwnerChange[](1);
+        changes[0] = IAccountConfiguration.OwnerChange({ownerId: ownerId, changeType: REVOKE_OWNER, configData: ""});
 
         uint64 chainId = uint64(block.chainid);
         uint64 sequence = accountConfiguration.getChangeSequences(account).local;
@@ -247,15 +273,15 @@ contract PolicyExamplesTest is AccountConfigurationTest {
         });
     }
 
-    function _installSpendLimit(uint160 allowance, uint256 salt) internal returns (bytes32 commitment) {
+    function _installSpendLimit(uint160 allowance, uint256 salt) internal returns (bytes32 ownerId) {
         PolicyManager.PolicyBinding memory binding = _spendBinding(allowance, salt);
-        commitment = manager.commitmentOf(binding);
-        _authorizeCustomPolicyOwner(_sessionOwnerId(salt), commitment);
+        ownerId = _sessionOwnerId(salt);
+        _authorizePolicyOwner(ownerId, manager.commitmentOf(binding));
         vm.prank(account);
-        manager.install(_sessionOwnerId(salt), binding);
+        manager.install(ownerId, binding);
     }
 
-    function _installSelectorGate() internal returns (bytes32 commitment) {
+    function _installSelectorGate() internal returns (bytes32 ownerId) {
         bytes4[] memory selectors = new bytes4[](1);
         selectors[0] = MockTarget.setValue.selector;
         SelectorGatingPolicy.Config memory config =
@@ -268,9 +294,9 @@ contract PolicyExamplesTest is AccountConfigurationTest {
             validUntil: 0,
             salt: 2
         });
-        commitment = manager.commitmentOf(binding);
-        _authorizeCustomPolicyOwner(_sessionOwnerId(2), commitment);
+        ownerId = _sessionOwnerId(2);
+        _authorizePolicyOwner(ownerId, manager.commitmentOf(binding));
         vm.prank(account);
-        manager.install(_sessionOwnerId(2), binding);
+        manager.install(ownerId, binding);
     }
 }

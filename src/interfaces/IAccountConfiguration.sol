@@ -15,13 +15,13 @@ interface IAccountConfiguration {
     struct OwnerConfig {
         address verifier;
         uint8 scopes;
-        uint8 policyType; // 0x00 = none, 0x01 = self, 0x02 = custom manager
+        uint8 policyType; // 0x00 = none, 0x01 = gated to stored manager; 0x02-0xFF reserved
     }
 
     struct Owner {
         bytes32 ownerId;
         OwnerConfig config;
-        // Sliced by policyType: empty (0x00); commitment[32] (0x01); manager[20] || commitment[32] (0x02).
+        // Sliced by policyType: empty (0x00); manager[20] || commitment[32] (0x01).
         bytes policyData;
     }
 
@@ -104,8 +104,8 @@ interface IAccountConfiguration {
 
     function getOwnerConfig(address account, bytes32 ownerId) external view returns (OwnerConfig memory);
 
-    /// @notice Resolves the policy gate target and signed commitment for an owner, by policyType:
-    ///         0x00 -> (address(0), bytes32(0)); 0x01 -> (account, commitment); 0x02 -> (manager, commitment).
+    /// @notice Resolves the policy gate target and signed commitment for an owner:
+    ///         0x00 -> (address(0), bytes32(0)); 0x01 -> (manager, commitment).
     function getPolicy(address account, bytes32 ownerId) external view returns (address target, bytes32 commitment);
 
     function getChangeSequences(address account) external view returns (ChangeSequences memory);

@@ -11,7 +11,7 @@ import {PolicyManager} from "./PolicyManager.sol";
 ///      per-use *action* (`executionData`, supplied when the session key transacts) into an account call plan.
 ///      The plan is ABI-encoded calldata that the manager forwards to the account (e.g. `executeBatch`).
 ///
-///      This is the example/reference shape for EIP-8130 `policyType = 0x02` (custom policy manager): the
+///      This is the example/reference shape for an EIP-8130 owner policy (non-zero `policyType`): the
 ///      manager is the single call target a restricted owner may reach, and policies express *what* that owner
 ///      may do. All hooks are callable only by the configured {PolicyManager}.
 abstract contract Policy {

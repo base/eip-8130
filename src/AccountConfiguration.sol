@@ -54,11 +54,9 @@ contract AccountConfiguration is IAccountConfiguration {
     /// @notice No execution policy; owner is ungated.
     uint8 public constant POLICY_NONE = 0x00;
 
-    /// @notice Self-enforced policy: the only call target is the account itself; carries a commitment.
-    uint8 public constant POLICY_SELF = 0x01;
-
-    /// @notice Custom-manager policy: the only call target is the configured manager; carries manager + commitment.
-    uint8 public constant POLICY_CUSTOM = 0x02;
+    /// @notice Standard policy: owner is gated to its stored manager + commitment (self-enforcement is manager == account).
+    /// @dev Values 0x02-0xFF are reserved for future protocol-level resolution modes and are rejected.
+    uint8 public constant POLICY_GATED = 0x01;
 
     // ----------------------------------------------------------------------------------------------------------------
     // OWNER ELEVATED SCOPES
@@ -275,16 +273,10 @@ contract AccountConfiguration is IAccountConfiguration {
 
     /// @notice Resolves the policy gate target and signed commitment for an owner.
     /// @dev Enforcement is at execution: this resolves where a policy-bearing owner may call and the commitment a
-    ///      target validates presented parameters against. 0x00 -> (0, 0); 0x01 -> (account, commitment);
-    ///      0x02 -> (manager, commitment).
+    ///      target validates presented parameters against. 0x00 -> (0, 0); 0x01 -> (manager, commitment).
     function getPolicy(address account, bytes32 ownerId) external view returns (address target, bytes32 commitment) {
-        uint8 policyType = _ownerConfig[ownerId][account].policyType;
-        if (policyType == POLICY_NONE) return (address(0), bytes32(0));
-
-        commitment = _policyCommitment[ownerId][account];
-        if (policyType == POLICY_SELF) return (account, commitment);
-        if (policyType == POLICY_CUSTOM) return (_policyManager[ownerId][account], commitment);
-        return (address(0), bytes32(0));
+        if (_ownerConfig[ownerId][account].policyType == POLICY_NONE) return (address(0), bytes32(0));
+        return (_policyManager[ownerId][account], _policyCommitment[ownerId][account]);
     }
 
     function getChangeSequences(address account) external view returns (ChangeSequences memory) {
@@ -363,8 +355,8 @@ contract AccountConfiguration is IAccountConfiguration {
     }
 
     /// @dev Validates `policyData` against `policyType` and returns (manager, commitment).
-    ///      0x00: empty data -> (0, 0). 0x01: commitment[32] -> (0, commitment).
-    ///      0x02: manager[20] || commitment[32] -> (manager, commitment). Reverts otherwise.
+    ///      0x00: empty data -> (0, 0). 0x01: manager[20] || commitment[32] -> (manager, commitment).
+    ///      Reserved values (0x02-0xFF) and length mismatches revert. Self-enforcement is expressed as manager == account.
     function _slicePolicy(uint8 policyType, bytes memory policyData)
         internal
         pure
@@ -372,13 +364,7 @@ contract AccountConfiguration is IAccountConfiguration {
     {
         if (policyType == POLICY_NONE) {
             require(policyData.length == 0);
-        } else if (policyType == POLICY_SELF) {
-            require(policyData.length == 32);
-            assembly ("memory-safe") {
-                commitment := mload(add(policyData, 0x20))
-            }
-            require(commitment != bytes32(0));
-        } else if (policyType == POLICY_CUSTOM) {
+        } else if (policyType == POLICY_GATED) {
             require(policyData.length == 52);
             assembly ("memory-safe") {
                 manager := shr(96, mload(add(policyData, 0x20)))

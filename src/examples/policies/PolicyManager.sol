@@ -9,19 +9,19 @@ import {Policy} from "./Policy.sol";
 
 /// @title PolicyManager
 ///
-/// @notice Minimal, self-contained reference policy manager for EIP-8130 `policyType = 0x02`.
+/// @notice Minimal, self-contained reference policy manager for EIP-8130 owner policies.
 ///
 /// @dev Role in the EIP-8130 flow:
 ///      - The manager is registered as an execution-enabled owner on the account (an owner whose verifier is
 ///        `EXTERNAL_CALLER_VERIFIER`), so it may drive the account via `executeBatch`.
-///      - A restricted session-key owner is configured with `policyType = 0x02` and `policyTarget = address(this)`,
-///        so the protocol gate forces every call that owner makes to land on this manager.
+///      - A restricted session-key owner is configured with a non-zero `policyType` and `policy_manager =
+///        address(this)`, so the protocol gate forces every call that owner makes to land on this manager.
 ///      - When the session key transacts, the protocol dispatches its call *as the account*, so `msg.sender`
 ///        here is the account itself. That is the authorization boundary: only a gated session-key transaction
 ///        (routed through the account) can invoke {execute}.
 ///
 ///      Commitment binding: the account authorizes a {PolicyBinding}; its `keccak256` is the `commitment`. When the
-///      account authorizes the session-key owner it stores `policyType = 0x02`, `policy_manager = address(this)`, and
+///      account authorizes the session-key owner it stores a non-zero `policyType`, `policy_manager = address(this)`, and
 ///      `policy_commitment = commitment` in the Account Configuration contract. At {install} the manager reads that
 ///      binding back via {IAccountConfiguration.getPolicy} and requires the target and commitment to match, so an
 ///      install can only succeed for a policy the account actually signed for this manager.
@@ -94,7 +94,7 @@ contract PolicyManager is ReentrancyGuard {
     ///      resolved target must be this manager and the resolved commitment must equal the binding's. The committed
     ///      `policyConfig` is then handed to the policy's install hook, which stores it keyed by commitment.
     ///
-    /// @param ownerId The session-key owner the account configured with this policy (policyType 0x02).
+    /// @param ownerId The session-key owner the account configured with this policy (non-zero policyType).
     /// @param binding The account-authorized binding.
     ///
     /// @return commitment The binding's commitment.
@@ -123,17 +123,27 @@ contract PolicyManager is ReentrancyGuard {
 
     /// @notice Exercises an installed policy and forwards the resulting call plan to the account.
     ///
-    /// @dev Authorization is `msg.sender == account`: in EIP-8130 the protocol dispatches a gated session key's
-    ///      call as the account, so only such a transaction reaches here. The manager then drives the account as
-    ///      an execution-enabled owner via the policy-built `accountCallData`.
+    /// @dev Authorization is resolved per call against the live signed policy: in EIP-8130 the protocol dispatches a
+    ///      gated session key's call as the account (`msg.sender == account`) and the manager identifies the acting
+    ///      key via the transaction-context precompile. Here the caller supplies `ownerId`, and the manager requires
+    ///      `getPolicy(account, ownerId)` to resolve to itself with a non-zero `commitment` — so a revoked or expired
+    ///      owner (whose policy slots are cleared) can no longer execute, without relying on a cached record. The
+    ///      manager then drives the account as an execution-enabled owner via the policy-built `accountCallData`.
     ///
+    /// @param ownerId       The session-key owner whose signed policy authorizes this call.
     /// @param policy        Policy contract for the binding.
-    /// @param commitment    Identifier of the installed binding.
     /// @param executionData Per-use action parameters interpreted by the policy.
-    function execute(address policy, bytes32 commitment, bytes calldata executionData) external nonReentrant {
+    function execute(bytes32 ownerId, address policy, bytes calldata executionData) external nonReentrant {
+        address account = msg.sender;
+
+        // Re-read the live signed policy every call; the key must still be gated to this manager.
+        (address target, bytes32 commitment) = ACCOUNT_CONFIGURATION.getPolicy(account, ownerId);
+        if (target != address(this) || commitment == bytes32(0)) {
+            revert CommitmentNotAuthorized(ownerId, target, commitment);
+        }
+
         PolicyRecord storage record = _policies[policy][commitment];
         if (!record.installed) revert PolicyNotInstalled(commitment);
-        if (msg.sender != record.account) revert UnauthorizedAccount(msg.sender, record.account);
 
         if (
             (record.validAfter != 0 && block.timestamp < record.validAfter)
@@ -142,11 +152,11 @@ contract PolicyManager is ReentrancyGuard {
             revert OutsideValidityWindow(record.validAfter, record.validUntil, block.timestamp);
         }
 
-        bytes memory accountCallData = Policy(policy).onExecute(commitment, record.account, executionData, msg.sender);
+        bytes memory accountCallData = Policy(policy).onExecute(commitment, account, executionData, account);
         if (accountCallData.length == 0) return;
 
-        record.account.functionCall(accountCallData);
-        emit PolicyExecuted(record.account, policy, commitment, msg.sender);
+        account.functionCall(accountCallData);
+        emit PolicyExecuted(account, policy, commitment, account);
     }
 
     function _commitment(PolicyBinding calldata binding) internal pure returns (bytes32) {
