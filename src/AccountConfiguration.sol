@@ -346,6 +346,13 @@ contract AccountConfiguration is IAccountConfiguration {
         address existing = _ownerConfig[ownerId][account].verifier;
         require(existing == address(0) || existing == REVOKED_VERIFIER);
 
+        // A policy-bearing owner must be scope-restricted and may not hold CONFIG scope: the policy gate only
+        // covers SENDER-context calls, so a CONFIG-scoped (or unrestricted) key could authorize new, unrestricted
+        // owners and escape its policy entirely.
+        if (config.policyType != POLICY_NONE) {
+            require(config.scopes != 0 && config.scopes & SCOPE_CHANGE_OWNERS == 0);
+        }
+
         _ownerConfig[ownerId][account] = config;
 
         // Slice and store the signed policy by policyType. The commitment is opaque to the protocol.
