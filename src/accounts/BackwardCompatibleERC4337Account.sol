@@ -28,7 +28,7 @@ struct PackedUserOperation {
 ///
 ///         Designed to be THE permanent wallet — users never upgrade the implementation.
 ///         New capabilities are added by authorizing callers (PolicyManager, etc.)
-///         and registering owners/verifiers via the AccountConfiguration system contract.
+///         and registering actors/verifiers via the AccountConfiguration system contract.
 ///
 ///         Supports:
 ///           - EIP-8130 direct dispatch (msg.sender = from, always authorized as self-call)
@@ -99,7 +99,7 @@ contract ERC4337Account is Receiver {
         require(_isAuthorizedCaller(msg.sender));
 
         bool valid;
-        try ACCOUNT_CONFIGURATION.verify(address(this), userOpHash, userOp.signature) returns (uint8) {
+        try ACCOUNT_CONFIGURATION.verifyActor(address(this), userOpHash, userOp.signature) returns (uint8) {
             valid = true;
         } catch {
             valid = false;
@@ -119,7 +119,7 @@ contract ERC4337Account is Receiver {
 
     /// @notice Signature validation via AccountConfiguration's verifier infrastructure.
     function isValidSignature(bytes32 hash, bytes calldata signature) external view returns (bytes4) {
-        try ACCOUNT_CONFIGURATION.verify(address(this), hash, signature) returns (uint8) {
+        try ACCOUNT_CONFIGURATION.verifyActor(address(this), hash, signature) returns (uint8) {
             return bytes4(0x1626ba7e);
         } catch {
             return bytes4(0xFFFFFFFF);

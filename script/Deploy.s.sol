@@ -10,10 +10,6 @@ import {K1Verifier} from "../src/verifiers/K1Verifier.sol";
 import {P256Verifier} from "../src/verifiers/P256Verifier.sol";
 import {WebAuthnVerifier} from "../src/verifiers/WebAuthnVerifier.sol";
 import {DelegateVerifier} from "../src/verifiers/DelegateVerifier.sol";
-import {BLSVerifier} from "../src/verifiers/BLSVerifier.sol";
-import {SchnorrVerifier} from "../src/verifiers/SchnorrVerifier.sol";
-import {MultisigVerifier} from "../src/verifiers/MultisigVerifier.sol";
-import {Groth16Verifier} from "../src/verifiers/Groth16Verifier.sol";
 import {AlwaysValidVerifier} from "../src/verifiers/AlwaysValidVerifier.sol";
 
 /// @dev Nick's deterministic deployment proxy — same address on every EVM chain.
@@ -78,10 +74,6 @@ contract Deploy is Script {
             "DelegateVerifier:      ",
             _addr(abi.encodePacked(type(DelegateVerifier).creationCode, abi.encode(accountConfig)))
         );
-        console.log("BLSVerifier:           ", _addr(type(BLSVerifier).creationCode));
-        console.log("SchnorrVerifier:       ", _addr(type(SchnorrVerifier).creationCode));
-        console.log("MultisigVerifier:      ", _addr(type(MultisigVerifier).creationCode));
-        console.log("Groth16Verifier:       ", _addr(type(Groth16Verifier).creationCode));
         console.log("AlwaysValidVerifier:   ", _addr(type(AlwaysValidVerifier).creationCode));
     }
 
@@ -106,10 +98,6 @@ contract Deploy is Script {
         address p256 = _create2(type(P256Verifier).creationCode);
         address webAuthn = _create2(type(WebAuthnVerifier).creationCode);
         address delegate = _create2(abi.encodePacked(type(DelegateVerifier).creationCode, abi.encode(accountConfig)));
-        address bls = _create2(type(BLSVerifier).creationCode);
-        address schnorr = _create2(type(SchnorrVerifier).creationCode);
-        address multisig = _create2(type(MultisigVerifier).creationCode);
-        address groth16 = _create2(type(Groth16Verifier).creationCode);
         address alwaysValid = _create2(type(AlwaysValidVerifier).creationCode);
 
         console.log("AccountConfiguration:  ", accountConfig);
@@ -120,10 +108,6 @@ contract Deploy is Script {
         console.log("P256Verifier:          ", p256);
         console.log("WebAuthnVerifier:      ", webAuthn);
         console.log("DelegateVerifier:      ", delegate);
-        console.log("BLSVerifier:           ", bls);
-        console.log("SchnorrVerifier:       ", schnorr);
-        console.log("MultisigVerifier:      ", multisig);
-        console.log("Groth16Verifier:       ", groth16);
         console.log("AlwaysValidVerifier:   ", alwaysValid);
 
         vm.stopBroadcast();

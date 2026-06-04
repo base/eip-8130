@@ -6,140 +6,140 @@ import {IAccountConfiguration} from "../../../src/interfaces/IAccountConfigurati
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 contract CreateAccountTest is AccountConfigurationTest {
-    function test_createAccount_singleK1Owner(uint256 pk) public {
+    function test_createAccount_singleK1Actor(uint256 pk) public {
         pk = bound(pk, 1, 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364140);
-        address owner = vm.addr(pk);
-        bytes32 ownerId = bytes32(bytes20(owner));
+        address actor = vm.addr(pk);
+        bytes32 actorId = bytes32(bytes20(actor));
 
-        IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
-        owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
+        actors[0] = IAccountConfiguration.Actor({
+            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        address account = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
+        address account = accountConfiguration.createAccount(bytes32(0), bytecode, actors);
 
         assertTrue(account != address(0));
         assertTrue(account.code.length > 0);
-        assertTrue(accountConfiguration.isOwner(account, ownerId));
+        assertTrue(accountConfiguration.isActor(account, actorId));
     }
 
-    function test_createAccount_multipleOwners() public {
-        address owner1 = vm.addr(1);
-        address owner2 = vm.addr(2);
+    function test_createAccount_multipleActors() public {
+        address actor1 = vm.addr(1);
+        address actor2 = vm.addr(2);
 
-        bytes32 ownerId1 = bytes32(bytes20(owner1));
-        bytes32 ownerId2 = bytes32(bytes20(owner2));
+        bytes32 actorId1 = bytes32(bytes20(actor1));
+        bytes32 actorId2 = bytes32(bytes20(actor2));
 
-        IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](2);
-        if (ownerId1 < ownerId2) {
-            owners[0] = IAccountConfiguration.Owner({
-                ownerId: ownerId1,
-                config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), policyData: ""});
-            owners[1] = IAccountConfiguration.Owner({
-                ownerId: ownerId2,
-                config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](2);
+        if (actorId1 < actorId2) {
+            actors[0] = IAccountConfiguration.Actor({
+                actorId: actorId1,
+                config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
+            actors[1] = IAccountConfiguration.Actor({
+                actorId: actorId2,
+                config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
         } else {
-            owners[0] = IAccountConfiguration.Owner({
-                ownerId: ownerId2,
-                config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), policyData: ""});
-            owners[1] = IAccountConfiguration.Owner({
-                ownerId: ownerId1,
-                config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), policyData: ""});
+            actors[0] = IAccountConfiguration.Actor({
+                actorId: actorId2,
+                config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
+            actors[1] = IAccountConfiguration.Actor({
+                actorId: actorId1,
+                config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
         }
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        address account = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
+        address account = accountConfiguration.createAccount(bytes32(0), bytecode, actors);
 
         assertTrue(account != address(0));
-        assertTrue(accountConfiguration.isOwner(account, ownerId1));
-        assertTrue(accountConfiguration.isOwner(account, ownerId2));
+        assertTrue(accountConfiguration.isActor(account, actorId1));
+        assertTrue(accountConfiguration.isActor(account, actorId2));
     }
 
     function test_createAccount_deterministicAddress() public {
-        address owner = vm.addr(1);
-        bytes32 ownerId = bytes32(bytes20(owner));
+        address actor = vm.addr(1);
+        bytes32 actorId = bytes32(bytes20(actor));
 
-        IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
-        owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
+        actors[0] = IAccountConfiguration.Actor({
+            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        address predicted = accountConfiguration.computeAddress(bytes32(0), bytecode, owners);
-        address actual = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
+        address predicted = accountConfiguration.computeAddress(bytes32(0), bytecode, actors);
+        address actual = accountConfiguration.createAccount(bytes32(0), bytecode, actors);
 
         assertEq(predicted, actual);
     }
 
     function test_createAccount_revertsOnDuplicate() public {
-        address owner = vm.addr(1);
-        bytes32 ownerId = bytes32(bytes20(owner));
+        address actor = vm.addr(1);
+        bytes32 actorId = bytes32(bytes20(actor));
 
-        IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
-        owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
+        actors[0] = IAccountConfiguration.Actor({
+            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        accountConfiguration.createAccount(bytes32(0), bytecode, owners);
+        accountConfiguration.createAccount(bytes32(0), bytecode, actors);
 
         vm.expectRevert();
-        accountConfiguration.createAccount(bytes32(0), bytecode, owners);
+        accountConfiguration.createAccount(bytes32(0), bytecode, actors);
     }
 
-    function test_createAccount_revertsWithUnsortedOwners() public {
-        address owner1 = vm.addr(1);
-        address owner2 = vm.addr(2);
+    function test_createAccount_revertsWithUnsortedActors() public {
+        address actor1 = vm.addr(1);
+        address actor2 = vm.addr(2);
 
-        bytes32 ownerId1 = bytes32(bytes20(owner1));
-        bytes32 ownerId2 = bytes32(bytes20(owner2));
+        bytes32 actorId1 = bytes32(bytes20(actor1));
+        bytes32 actorId2 = bytes32(bytes20(actor2));
 
-        bytes32 smaller = ownerId1 < ownerId2 ? ownerId1 : ownerId2;
-        bytes32 larger = ownerId1 < ownerId2 ? ownerId2 : ownerId1;
+        bytes32 smaller = actorId1 < actorId2 ? actorId1 : actorId2;
+        bytes32 larger = actorId1 < actorId2 ? actorId2 : actorId1;
 
-        IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](2);
-        owners[0] = IAccountConfiguration.Owner({
-            ownerId: larger, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), policyData: ""});
-        owners[1] = IAccountConfiguration.Owner({
-            ownerId: smaller, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](2);
+        actors[0] = IAccountConfiguration.Actor({
+            actorId: larger, config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
+        actors[1] = IAccountConfiguration.Actor({
+            actorId: smaller, config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         vm.expectRevert();
-        accountConfiguration.createAccount(bytes32(0), bytecode, owners);
+        accountConfiguration.createAccount(bytes32(0), bytecode, actors);
     }
 
-    function test_createAccount_revertsWithNoOwners() public {
-        IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](0);
+    function test_createAccount_revertsWithNoActors() public {
+        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](0);
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
 
         vm.expectRevert();
-        accountConfiguration.createAccount(bytes32(0), bytecode, owners);
+        accountConfiguration.createAccount(bytes32(0), bytecode, actors);
     }
 
     function test_createAccount_revertsWithZeroVerifier() public {
-        bytes32 ownerId = bytes32(uint256(1));
+        bytes32 actorId = bytes32(uint256(1));
 
-        IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
-        owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(0), scopes: 0x00, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
+        actors[0] = IAccountConfiguration.Actor({
+            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: address(0), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         vm.expectRevert();
-        accountConfiguration.createAccount(bytes32(0), bytecode, owners);
+        accountConfiguration.createAccount(bytes32(0), bytecode, actors);
     }
 
-    function test_createAccount_initialOwnersHaveSpecifiedScope() public {
-        address owner = vm.addr(1);
-        bytes32 ownerId = bytes32(bytes20(owner));
+    function test_createAccount_initialActorsHaveSpecifiedScope() public {
+        address actor = vm.addr(1);
+        bytes32 actorId = bytes32(bytes20(actor));
 
-        IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
-        owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x03, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
+        actors[0] = IAccountConfiguration.Actor({
+            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x03, expiry: 0, policyType: 0x00}), policyData: ""});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        address account = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
+        address account = accountConfiguration.createAccount(bytes32(0), bytecode, actors);
 
-        IAccountConfiguration.OwnerConfig memory cfg = accountConfiguration.getOwnerConfig(account, ownerId);
+        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, actorId);
         assertEq(cfg.verifier, address(k1Verifier));
-        assertEq(cfg.scopes, 0x03);
+        assertEq(cfg.scope, 0x03);
 
         (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 unlockDelay) =
             accountConfiguration.getLockStatus(account);
@@ -150,16 +150,16 @@ contract CreateAccountTest is AccountConfigurationTest {
     }
 
     function test_createAccount_differentSaltsProduceDifferentAddresses() public {
-        address owner = vm.addr(1);
-        bytes32 ownerId = bytes32(bytes20(owner));
+        address actor = vm.addr(1);
+        bytes32 actorId = bytes32(bytes20(actor));
 
-        IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
-        owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
+        actors[0] = IAccountConfiguration.Actor({
+            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        address addr1 = accountConfiguration.computeAddress(bytes32(uint256(1)), bytecode, owners);
-        address addr2 = accountConfiguration.computeAddress(bytes32(uint256(2)), bytecode, owners);
+        address addr1 = accountConfiguration.computeAddress(bytes32(uint256(1)), bytecode, actors);
+        address addr2 = accountConfiguration.computeAddress(bytes32(uint256(2)), bytecode, actors);
 
         assertTrue(addr1 != addr2);
     }

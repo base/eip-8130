@@ -11,7 +11,7 @@ import {IVerifier} from "../src/interfaces/IVerifier.sol";
 ///
 ///         Tests:
 ///           1. Account creation via AccountConfiguration
-///           2. Owner authorization + data reads
+///           2. Actor authorization + data reads
 ///           3. K1 signature verification
 ///           4. ERC-1167 proxy bytecode correctness
 contract SmokeTest is Script {
@@ -19,16 +19,16 @@ contract SmokeTest is Script {
 
     function run(address acctConfig, address k1Verifier, address defaultImpl) public {
         address signer = vm.addr(SIGNER_PK);
-        bytes32 ownerId = bytes32(bytes20(signer));
+        bytes32 actorId = bytes32(bytes20(signer));
         AccountConfiguration config = AccountConfiguration(acctConfig);
 
         // 1. Create account
-        address account = _createAccount(config, k1Verifier, defaultImpl, ownerId);
+        address account = _createAccount(config, k1Verifier, defaultImpl, actorId);
         console.log("[PASS] Account created:", account);
 
-        // 2. Owner authorization + data reads
-        _checkOwner(config, account, ownerId, k1Verifier);
-        console.log("[PASS] Owner authorized with correct verifier");
+        // 2. Actor authorization + data reads
+        _checkActor(config, account, actorId, k1Verifier);
+        console.log("[PASS] Actor authorized with correct verifier");
 
         // 3. K1 signature verification
         _checkSignature(config, k1Verifier, account);
@@ -42,30 +42,30 @@ contract SmokeTest is Script {
         console.log("=== ALL SMOKE TESTS PASSED ===");
     }
 
-    function _createAccount(AccountConfiguration config, address k1Verifier, address defaultImpl, bytes32 ownerId)
+    function _createAccount(AccountConfiguration config, address k1Verifier, address defaultImpl, bytes32 actorId)
         internal
         returns (address)
     {
-        IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
-        owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: k1Verifier, scopes: 0x00, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
+        actors[0] = IAccountConfiguration.Actor({
+            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: k1Verifier, scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
 
         bytes memory bytecode =
             abi.encodePacked(hex"363d3d373d3d3d363d73", defaultImpl, hex"5af43d82803e903d91602b57fd5bf3");
 
         vm.startBroadcast(SIGNER_PK);
-        address account = config.createAccount(bytes32(0), bytecode, owners);
+        address account = config.createAccount(bytes32(0), bytecode, actors);
         vm.stopBroadcast();
         return account;
     }
 
-    function _checkOwner(AccountConfiguration config, address account, bytes32 ownerId, address k1Verifier)
+    function _checkActor(AccountConfiguration config, address account, bytes32 actorId, address k1Verifier)
         internal
         view
     {
-        IAccountConfiguration.OwnerConfig memory ownerCfg = config.getOwnerConfig(account, ownerId);
-        require(ownerCfg.verifier != address(0), "owner not authorized");
-        require(ownerCfg.verifier == k1Verifier, "wrong verifier");
+        IAccountConfiguration.ActorConfig memory actorCfg = config.getActorConfig(account, actorId);
+        require(actorCfg.verifier != address(0), "actor not authorized");
+        require(actorCfg.verifier == k1Verifier, "wrong verifier");
     }
 
     function _checkSignature(AccountConfiguration config, address k1Verifier, address account) internal view {
@@ -73,6 +73,6 @@ contract SmokeTest is Script {
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(SIGNER_PK, testHash);
 
         bytes memory auth = abi.encodePacked(k1Verifier, r, s, v);
-        config.verify(account, testHash, auth);
+        config.verifyActor(account, testHash, auth);
     }
 }

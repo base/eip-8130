@@ -18,9 +18,9 @@ contract AccountConfigurationTest is Test {
     IVerifier public delegateVerifier;
     address public defaultAccountImplementation;
 
-    bytes32 constant OWNER_CHANGE_BATCH_TYPEHASH = keccak256(
-        "OwnerChangeBatch(address account,uint64 chainId,uint64 sequence,OwnerChange[] ownerChanges)"
-        "OwnerChange(bytes32 ownerId,uint8 changeType,bytes changeData)"
+    bytes32 constant SIGNED_ACTOR_CHANGES_TYPEHASH = keccak256(
+        "SignedActorChanges(address account,uint64 chainId,uint64 sequence,ActorChange[] actorChanges)"
+        "ActorChange(uint8 changeType,bytes32 actorId,bytes data)"
     );
 
     function setUp() public virtual {
@@ -39,34 +39,34 @@ contract AccountConfigurationTest is Test {
 
     // ── Account creation helpers ──
 
-    function _createK1Account(uint256 pk) internal returns (address account, bytes32 ownerId) {
+    function _createK1Account(uint256 pk) internal returns (address account, bytes32 actorId) {
         address signer = vm.addr(pk);
-        ownerId = bytes32(bytes20(signer));
+        actorId = bytes32(bytes20(signer));
 
-        IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
-        owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId,
-            config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}),
+        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
+        actors[0] = IAccountConfiguration.Actor({
+            actorId: actorId,
+            config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}),
             policyData: ""
         });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        account = accountConfiguration.createAccount(bytes32(0), bytecode, owners);
+        account = accountConfiguration.createAccount(bytes32(0), bytecode, actors);
     }
 
-    function _createK1AccountWithSalt(uint256 pk, bytes32 salt) internal returns (address account, bytes32 ownerId) {
+    function _createK1AccountWithSalt(uint256 pk, bytes32 salt) internal returns (address account, bytes32 actorId) {
         address signer = vm.addr(pk);
-        ownerId = bytes32(bytes20(signer));
+        actorId = bytes32(bytes20(signer));
 
-        IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
-        owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId,
-            config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}),
+        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
+        actors[0] = IAccountConfiguration.Actor({
+            actorId: actorId,
+            config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}),
             policyData: ""
         });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        account = accountConfiguration.createAccount(salt, bytecode, owners);
+        account = accountConfiguration.createAccount(salt, bytecode, actors);
     }
 
     // ── K1 signature helpers ──
@@ -96,19 +96,19 @@ contract AccountConfigurationTest is Test {
 
     // ── Canonical digest computation ──
 
-    function _computeOwnerChangeBatchDigest(
+    function _computeActorChangeBatchDigest(
         address account,
         uint64 chainId,
         uint64 sequence,
-        IAccountConfiguration.OwnerChange[] memory ownerChanges
+        IAccountConfiguration.ActorChange[] memory actorChanges
     ) internal pure returns (bytes32) {
-        bytes32[] memory ownerChangeHash = new bytes32[](ownerChanges.length);
-        for (uint256 i; i < ownerChanges.length; i++) {
-            ownerChangeHash[i] = keccak256(abi.encode(ownerChanges[i]));
+        bytes32[] memory actorChangeHash = new bytes32[](actorChanges.length);
+        for (uint256 i; i < actorChanges.length; i++) {
+            actorChangeHash[i] = keccak256(abi.encode(actorChanges[i]));
         }
         return keccak256(
             abi.encode(
-                OWNER_CHANGE_BATCH_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(ownerChangeHash))
+                SIGNED_ACTOR_CHANGES_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(actorChangeHash))
             )
         );
     }

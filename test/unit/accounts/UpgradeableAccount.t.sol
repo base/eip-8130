@@ -35,7 +35,7 @@ contract UpgradeableAccountV2 is UpgradeableAccount {
 }
 
 contract UpgradeableAccountTest is AccountConfigurationTest {
-    uint256 constant OWNER_PK = 100;
+    uint256 constant ACTOR_PK = 100;
     MockTarget public target;
     address public upgradeableImpl;
 
@@ -45,16 +45,16 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         upgradeableImpl = address(new UpgradeableAccount(address(accountConfiguration)));
     }
 
-    function _createUpgradeableAccount(uint256 pk) internal returns (address account, bytes32 ownerId) {
+    function _createUpgradeableAccount(uint256 pk) internal returns (address account, bytes32 actorId) {
         address signer = vm.addr(pk);
-        ownerId = bytes32(bytes20(signer));
+        actorId = bytes32(bytes20(signer));
 
-        IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
-        owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
+        actors[0] = IAccountConfiguration.Actor({
+            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
 
         bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
-        account = accountConfiguration.createAccount(bytes32(0), proxyBytecode, owners);
+        account = accountConfiguration.createAccount(bytes32(0), proxyBytecode, actors);
     }
 
     function _singleCall(address t, uint256 v, bytes memory d) internal pure returns (Call[] memory calls) {
@@ -65,10 +65,10 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
     // ── Proxy basics ──
 
     function test_proxyDelegatesToDefault() public {
-        (address account,) = _createUpgradeableAccount(OWNER_PK);
+        (address account,) = _createUpgradeableAccount(ACTOR_PK);
 
         bytes32 hash = keccak256("test");
-        bytes memory authData = _buildK1Auth(OWNER_PK, hash);
+        bytes memory authData = _buildK1Auth(ACTOR_PK, hash);
 
         bytes4 result = UpgradeableAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0x1626ba7e));
@@ -80,31 +80,31 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
     }
 
     function test_deterministicAddress() public {
-        address signer = vm.addr(OWNER_PK);
-        bytes32 ownerId = bytes32(bytes20(signer));
+        address signer = vm.addr(ACTOR_PK);
+        bytes32 actorId = bytes32(bytes20(signer));
 
-        IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
-        owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
+        actors[0] = IAccountConfiguration.Actor({
+            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
 
         bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
-        address predicted = accountConfiguration.computeAddress(bytes32(0), proxyBytecode, owners);
+        address predicted = accountConfiguration.computeAddress(bytes32(0), proxyBytecode, actors);
 
-        (address actual,) = _createUpgradeableAccount(OWNER_PK);
+        (address actual,) = _createUpgradeableAccount(ACTOR_PK);
         assertEq(actual, predicted);
     }
 
     // ── Caller authorization ──
 
     function test_selfIsAlwaysAuthorized() public {
-        (address account,) = _createUpgradeableAccount(OWNER_PK);
+        (address account,) = _createUpgradeableAccount(ACTOR_PK);
         assertTrue(UpgradeableAccount(payable(account)).isAuthorizedCaller(account));
     }
 
     // ── executeBatch ──
 
     function test_executeBatch_success() public {
-        (address account,) = _createUpgradeableAccount(OWNER_PK);
+        (address account,) = _createUpgradeableAccount(ACTOR_PK);
 
         vm.prank(account);
         UpgradeableAccount(payable(account))
@@ -114,7 +114,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
     }
 
     function test_executeBatch_withETHValue() public {
-        (address account,) = _createUpgradeableAccount(OWNER_PK);
+        (address account,) = _createUpgradeableAccount(ACTOR_PK);
         vm.deal(account, 1 ether);
 
         vm.prank(account);
@@ -125,7 +125,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
     }
 
     function test_executeBatch_revertsFromUnauthorizedCaller() public {
-        (address account,) = _createUpgradeableAccount(OWNER_PK);
+        (address account,) = _createUpgradeableAccount(ACTOR_PK);
 
         vm.prank(address(0xdead));
         vm.expectRevert();
@@ -134,7 +134,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
     }
 
     function test_executeBatch_revertsOnFailedCall() public {
-        (address account,) = _createUpgradeableAccount(OWNER_PK);
+        (address account,) = _createUpgradeableAccount(ACTOR_PK);
 
         vm.prank(account);
         vm.expectRevert();
@@ -145,7 +145,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
     // ── UUPS upgrade ──
 
     function test_upgrade_success() public {
-        (address account,) = _createUpgradeableAccount(OWNER_PK);
+        (address account,) = _createUpgradeableAccount(ACTOR_PK);
         UpgradeableAccountV2 v2Impl = new UpgradeableAccountV2(address(accountConfiguration));
 
         vm.prank(account);
@@ -156,7 +156,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
     }
 
     function test_upgrade_revertsFromNonSelf() public {
-        (address account,) = _createUpgradeableAccount(OWNER_PK);
+        (address account,) = _createUpgradeableAccount(ACTOR_PK);
         UpgradeableAccountV2 v2Impl = new UpgradeableAccountV2(address(accountConfiguration));
 
         vm.prank(address(0xdead));
@@ -165,7 +165,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
     }
 
     function test_upgrade_executeBatchStillWorks() public {
-        (address account,) = _createUpgradeableAccount(OWNER_PK);
+        (address account,) = _createUpgradeableAccount(ACTOR_PK);
         UpgradeableAccountV2 v2Impl = new UpgradeableAccountV2(address(accountConfiguration));
 
         vm.prank(account);
@@ -179,7 +179,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
     }
 
     function test_upgrade_viaExecuteBatch() public {
-        (address account,) = _createUpgradeableAccount(OWNER_PK);
+        (address account,) = _createUpgradeableAccount(ACTOR_PK);
         UpgradeableAccountV2 v2Impl = new UpgradeableAccountV2(address(accountConfiguration));
 
         Call[] memory calls = new Call[](1);
@@ -194,17 +194,17 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
     // ── isValidSignature ──
 
     function test_isValidSignature_validK1() public {
-        (address account,) = _createUpgradeableAccount(OWNER_PK);
+        (address account,) = _createUpgradeableAccount(ACTOR_PK);
 
         bytes32 hash = keccak256("validate me");
-        bytes memory authData = _buildK1Auth(OWNER_PK, hash);
+        bytes memory authData = _buildK1Auth(ACTOR_PK, hash);
 
         bytes4 result = UpgradeableAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0x1626ba7e));
     }
 
     function test_isValidSignature_invalidSignature() public {
-        (address account,) = _createUpgradeableAccount(OWNER_PK);
+        (address account,) = _createUpgradeableAccount(ACTOR_PK);
 
         bytes32 hash = keccak256("validate me");
         bytes memory authData = _buildK1Auth(999, hash);

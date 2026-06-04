@@ -19,7 +19,7 @@ contract MockTarget {
 }
 
 contract DefaultAccountTest is AccountConfigurationTest {
-    uint256 constant OWNER_PK = 100;
+    uint256 constant ACTOR_PK = 100;
     MockTarget public target;
 
     function setUp() public override {
@@ -35,14 +35,14 @@ contract DefaultAccountTest is AccountConfigurationTest {
     // ── Caller management ──
 
     function test_selfIsAlwaysAuthorized() public {
-        (address account,) = _createK1Account(OWNER_PK);
+        (address account,) = _createK1Account(ACTOR_PK);
         assertTrue(DefaultAccount(payable(account)).isAuthorizedCaller(account));
     }
 
     // ── executeBatch ──
 
     function test_executeBatch_success() public {
-        (address account,) = _createK1Account(OWNER_PK);
+        (address account,) = _createK1Account(ACTOR_PK);
 
         vm.prank(account);
         DefaultAccount(payable(account))
@@ -52,7 +52,7 @@ contract DefaultAccountTest is AccountConfigurationTest {
     }
 
     function test_executeBatch_withETHValue() public {
-        (address account,) = _createK1Account(OWNER_PK);
+        (address account,) = _createK1Account(ACTOR_PK);
         vm.deal(account, 1 ether);
 
         vm.prank(account);
@@ -63,7 +63,7 @@ contract DefaultAccountTest is AccountConfigurationTest {
     }
 
     function test_executeBatch_multipleCalls() public {
-        (address account,) = _createK1Account(OWNER_PK);
+        (address account,) = _createK1Account(ACTOR_PK);
         MockTarget target2 = new MockTarget();
 
         Call[] memory calls = new Call[](2);
@@ -78,7 +78,7 @@ contract DefaultAccountTest is AccountConfigurationTest {
     }
 
     function test_executeBatch_revertsFromUnauthorizedCaller() public {
-        (address account,) = _createK1Account(OWNER_PK);
+        (address account,) = _createK1Account(ACTOR_PK);
 
         vm.prank(address(0xdead));
         vm.expectRevert();
@@ -87,7 +87,7 @@ contract DefaultAccountTest is AccountConfigurationTest {
     }
 
     function test_executeBatch_revertsOnFailedCall() public {
-        (address account,) = _createK1Account(OWNER_PK);
+        (address account,) = _createK1Account(ACTOR_PK);
 
         vm.prank(account);
         vm.expectRevert();
@@ -98,17 +98,17 @@ contract DefaultAccountTest is AccountConfigurationTest {
     // ── isValidSignature ──
 
     function test_isValidSignature_validK1() public {
-        (address account,) = _createK1Account(OWNER_PK);
+        (address account,) = _createK1Account(ACTOR_PK);
 
         bytes32 hash = keccak256("validate me");
-        bytes memory authData = _buildK1Auth(OWNER_PK, hash);
+        bytes memory authData = _buildK1Auth(ACTOR_PK, hash);
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0x1626ba7e));
     }
 
     function test_isValidSignature_invalidSignature() public {
-        (address account,) = _createK1Account(OWNER_PK);
+        (address account,) = _createK1Account(ACTOR_PK);
 
         bytes32 hash = keccak256("validate me");
         bytes memory authData = _buildK1Auth(999, hash);
@@ -117,8 +117,8 @@ contract DefaultAccountTest is AccountConfigurationTest {
         assertEq(result, bytes4(0xFFFFFFFF));
     }
 
-    function test_isValidSignature_unknownOwnerId() public {
-        (address account,) = _createK1Account(OWNER_PK);
+    function test_isValidSignature_unknownActorId() public {
+        (address account,) = _createK1Account(ACTOR_PK);
 
         bytes32 hash = keccak256("validate me");
         bytes memory authData = _buildK1Auth(999, hash);

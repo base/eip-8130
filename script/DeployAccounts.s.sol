@@ -14,7 +14,7 @@ import {K1Verifier} from "../src/verifiers/K1Verifier.sol";
 
 /// @notice Demonstrates deploying all three wallet types via AccountConfiguration.createAccount.
 ///
-///         All wallets share the same owner setup and AccountConfiguration system —
+///         All wallets share the same actor setup and AccountConfiguration system —
 ///         they differ only in the proxy bytecode placed at the account address.
 ///
 ///         Wallet types:
@@ -49,17 +49,17 @@ contract DeployAccounts is Script {
 
         // ── Step 3: Create accounts ──
         //
-        //     Each account gets its own address with its own owner set.
+        //     Each account gets its own address with its own actor set.
         //     The "bytecode" passed to createAccount is the PROXY — a tiny
         //     delegatecall forwarder that points to the implementation above.
         //     The proxy is what lives permanently at the account address.
 
-        address owner = msg.sender;
-        bytes32 ownerId = bytes32(bytes20(owner));
+        address actor = msg.sender;
+        bytes32 actorId = bytes32(bytes20(actor));
 
-        IAccountConfiguration.Owner[] memory owners = new IAccountConfiguration.Owner[](1);
-        owners[0] = IAccountConfiguration.Owner({
-            ownerId: ownerId, config: IAccountConfiguration.OwnerConfig({verifier: k1, scopes: 0x00, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
+        actors[0] = IAccountConfiguration.Actor({
+            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: k1, scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
 
         // ── 3a: DefaultAccount (ERC-1167 proxy, 45 bytes) ──
         //
@@ -68,7 +68,7 @@ contract DeployAccounts is Script {
 
         bytes memory erc1167Bytecode =
             abi.encodePacked(hex"363d3d373d3d3d363d73", defaultImpl, hex"5af43d82803e903d91602b57fd5bf3");
-        address defaultAccount = accountConfig.createAccount(bytes32(uint256(1)), erc1167Bytecode, owners);
+        address defaultAccount = accountConfig.createAccount(bytes32(uint256(1)), erc1167Bytecode, actors);
 
         console.log("");
         console.log("=== Accounts (proxies at these addresses) ===");
@@ -83,7 +83,7 @@ contract DeployAccounts is Script {
 
         bytes memory highRateBytecode =
             abi.encodePacked(hex"363d3d373d3d3d363d73", highRateImpl, hex"5af43d82803e903d91602b57fd5bf3");
-        address highRateAccount = accountConfig.createAccount(bytes32(uint256(2)), highRateBytecode, owners);
+        address highRateAccount = accountConfig.createAccount(bytes32(uint256(2)), highRateBytecode, actors);
 
         console.log("DefaultHighRateAccount: ", highRateAccount);
         console.log("  proxy size:            45 bytes (ERC-1167)");
@@ -100,7 +100,7 @@ contract DeployAccounts is Script {
         //     To upgrade later: account calls upgradeToAndCall(newImpl, "").
 
         bytes memory upgradeableProxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
-        address upgradeableAccount = accountConfig.createAccount(bytes32(uint256(3)), upgradeableProxyBytecode, owners);
+        address upgradeableAccount = accountConfig.createAccount(bytes32(uint256(3)), upgradeableProxyBytecode, actors);
 
         console.log("UpgradeableAccount:     ", upgradeableAccount);
         console.log("  proxy size:            93 bytes (ERC-1967 + default)");
@@ -111,13 +111,13 @@ contract DeployAccounts is Script {
         console.log("");
         console.log("=== Verification ===");
 
-        IAccountConfiguration.OwnerConfig memory ownerCfg = accountConfig.getOwnerConfig(defaultAccount, ownerId);
-        console.log("DefaultAccount owner verifier:", ownerCfg.verifier);
-        console.log("DefaultAccount owner scopes:  ", ownerCfg.scopes);
+        IAccountConfiguration.ActorConfig memory actorCfg = accountConfig.getActorConfig(defaultAccount, actorId);
+        console.log("DefaultAccount actor verifier:", actorCfg.verifier);
+        console.log("DefaultAccount actor scope:  ", actorCfg.scope);
 
-        ownerCfg = accountConfig.getOwnerConfig(upgradeableAccount, ownerId);
-        console.log("UpgradeableAccount owner verifier:", ownerCfg.verifier);
-        console.log("UpgradeableAccount owner scopes:  ", ownerCfg.scopes);
+        actorCfg = accountConfig.getActorConfig(upgradeableAccount, actorId);
+        console.log("UpgradeableAccount actor verifier:", actorCfg.verifier);
+        console.log("UpgradeableAccount actor scope:  ", actorCfg.scope);
 
         vm.stopBroadcast();
     }

@@ -25,7 +25,7 @@ address constant EXTERNAL_CALLER_VERIFIER = address(uint160(uint256(keccak256("e
 ///
 ///         Caller authorization via AccountConfiguration:
 ///           - address(this) is always authorized (hardcoded) — covers 8130 direct dispatch
-///           - External callers (EntryPoints, PolicyManagers) are registered as owners
+///           - External callers (EntryPoints, PolicyManagers) are registered as actors
 ///             with EXTERNAL_CALLER_VERIFIER as the verifier in AccountConfiguration
 contract DefaultAccount is Receiver {
     AccountConfiguration public immutable ACCOUNT_CONFIGURATION;
@@ -55,7 +55,7 @@ contract DefaultAccount is Receiver {
     /// @param signature Auth data in verifier || data format
     /// @return magicValue 0x1626ba7e if valid, 0xffffffff otherwise
     function isValidSignature(bytes32 hash, bytes calldata signature) external view virtual returns (bytes4) {
-        try ACCOUNT_CONFIGURATION.verify(address(this), hash, signature) returns (uint8) {
+        try ACCOUNT_CONFIGURATION.verifyActor(address(this), hash, signature) returns (uint8) {
             return bytes4(0x1626ba7e);
         } catch {
             return bytes4(0xFFFFFFFF);
@@ -76,8 +76,8 @@ contract DefaultAccount is Receiver {
 
     function _isAuthorizedCaller(address caller) internal view virtual returns (bool) {
         if (caller == address(this)) return true;
-        IAccountConfiguration.OwnerConfig memory config =
-            ACCOUNT_CONFIGURATION.getOwnerConfig(address(this), bytes32(bytes20(caller)));
+        IAccountConfiguration.ActorConfig memory config =
+            ACCOUNT_CONFIGURATION.getActorConfig(address(this), bytes32(bytes20(caller)));
         return config.verifier == EXTERNAL_CALLER_VERIFIER;
     }
 }

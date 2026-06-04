@@ -6,7 +6,7 @@ import {IAccountConfiguration} from "../../../src/interfaces/IAccountConfigurati
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 contract AccountLockTest is AccountConfigurationTest {
-    uint256 constant OWNER_PK = 300;
+    uint256 constant ACTOR_PK = 300;
 
     function _lockAccount(address account, uint16 unlockDelay) internal {
         vm.prank(account);
@@ -21,7 +21,7 @@ contract AccountLockTest is AccountConfigurationTest {
     // ── Lock lifecycle ──
 
     function test_lockAccount() public {
-        (address account,) = _createK1Account(OWNER_PK);
+        (address account,) = _createK1Account(ACTOR_PK);
 
         _lockAccount(account, 1 hours);
 
@@ -34,7 +34,7 @@ contract AccountLockTest is AccountConfigurationTest {
     }
 
     function test_requestUnlock() public {
-        (address account,) = _createK1Account(OWNER_PK);
+        (address account,) = _createK1Account(ACTOR_PK);
 
         _lockAccount(account, 1 hours);
 
@@ -48,7 +48,7 @@ contract AccountLockTest is AccountConfigurationTest {
     }
 
     function test_unlockAfterDelay() public {
-        (address account,) = _createK1Account(OWNER_PK);
+        (address account,) = _createK1Account(ACTOR_PK);
 
         _lockAccount(account, 1 hours);
 
@@ -60,7 +60,7 @@ contract AccountLockTest is AccountConfigurationTest {
     }
 
     function test_unlockRevertsBeforeDelay() public {
-        (address account,) = _createK1Account(OWNER_PK);
+        (address account,) = _createK1Account(ACTOR_PK);
 
         _lockAccount(account, 1 hours);
 
@@ -72,7 +72,7 @@ contract AccountLockTest is AccountConfigurationTest {
     }
 
     function test_unlockRevertsWithoutRequest() public {
-        (address account,) = _createK1Account(OWNER_PK);
+        (address account,) = _createK1Account(ACTOR_PK);
 
         _lockAccount(account, 1 hours);
 
@@ -81,7 +81,7 @@ contract AccountLockTest is AccountConfigurationTest {
     }
 
     function test_requestUnlockRevertsWhenNotLocked() public {
-        (address account,) = _createK1Account(OWNER_PK);
+        (address account,) = _createK1Account(ACTOR_PK);
 
         vm.prank(account);
         vm.expectRevert();
@@ -89,7 +89,7 @@ contract AccountLockTest is AccountConfigurationTest {
     }
 
     function test_lockRevertsWhenAlreadyLocked() public {
-        (address account,) = _createK1Account(OWNER_PK);
+        (address account,) = _createK1Account(ACTOR_PK);
 
         _lockAccount(account, 1 hours);
 
@@ -98,30 +98,30 @@ contract AccountLockTest is AccountConfigurationTest {
         accountConfiguration.lock(2 hours);
     }
 
-    function test_lockedAccountRejectsOwnerChanges() public {
-        (address account,) = _createK1Account(OWNER_PK);
+    function test_lockedAccountRejectsActorChanges() public {
+        (address account,) = _createK1Account(ACTOR_PK);
 
         _lockAccount(account, 1 hours);
 
-        IAccountConfiguration.OwnerChange[] memory changes = new IAccountConfiguration.OwnerChange[](1);
-        changes[0] = IAccountConfiguration.OwnerChange({
-            ownerId: bytes32(bytes20(vm.addr(400))),
+        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
+        changes[0] = IAccountConfiguration.ActorChange({
+            actorId: bytes32(bytes20(vm.addr(400))),
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), bytes(""))
+            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), bytes(""))
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
-        bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(OWNER_PK, digest);
+        bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
+        bytes memory auth = _buildK1Auth(ACTOR_PK, digest);
 
         vm.expectRevert();
-        accountConfiguration.applySignedOwnerChanges(account, uint64(block.chainid), changes, auth);
+        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
     }
 
     // ── Full lifecycle ──
 
     function test_fullLockUnlockCycle() public {
-        (address account,) = _createK1Account(OWNER_PK);
+        (address account,) = _createK1Account(ACTOR_PK);
 
         _lockAccount(account, 1 hours);
         (bool locked,,,) = accountConfiguration.getLockStatus(account);
@@ -133,18 +133,18 @@ contract AccountLockTest is AccountConfigurationTest {
         vm.warp(1000 + 1 hours);
         assertFalse(accountConfiguration.isLocked(account));
 
-        IAccountConfiguration.OwnerChange[] memory changes = new IAccountConfiguration.OwnerChange[](1);
-        changes[0] = IAccountConfiguration.OwnerChange({
-            ownerId: bytes32(bytes20(vm.addr(500))),
+        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
+        changes[0] = IAccountConfiguration.ActorChange({
+            actorId: bytes32(bytes20(vm.addr(500))),
             changeType: 0x01,
-            configData: abi.encode(IAccountConfiguration.OwnerConfig({verifier: address(k1Verifier), scopes: 0x00, policyType: 0x00}), bytes(""))
+            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), bytes(""))
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
-        bytes32 digest = _computeOwnerChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(OWNER_PK, digest);
+        bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
+        bytes memory auth = _buildK1Auth(ACTOR_PK, digest);
 
-        accountConfiguration.applySignedOwnerChanges(account, uint64(block.chainid), changes, auth);
-        assertTrue(accountConfiguration.isOwner(account, bytes32(bytes20(vm.addr(500)))));
+        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
+        assertTrue(accountConfiguration.isActor(account, bytes32(bytes20(vm.addr(500)))));
     }
 }
