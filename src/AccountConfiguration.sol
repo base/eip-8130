@@ -26,16 +26,29 @@ contract AccountConfiguration is IAccountConfiguration {
 
     bytes4 constant ERC1271_SELECTOR = bytes4(keccak256("isValidSignature(bytes32,bytes)"));
 
-    /// @dev Typehash for actor initialization, NOT compliant with EIP-712 to mitigate phishing attacks.
+    /// @dev Typehash for the importAccount ERC-1271 signature, NOT compliant with EIP-712 to mitigate phishing
+    ///      attacks. Initial actors are hashed structurally via ACTOR_TYPEHASH / ACTORCONFIG_TYPEHASH below.
     bytes32 public constant ACTOR_INITIALIZATION_TYPEHASH = keccak256(
         "ActorInitialization(bytes32 salt,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address verifier,uint8 scope,uint48 expiry,uint8 policyType)"
     );
+
+    /// @dev Per-actor typehash used to structurally hash each Actor within an ActorInitialization import digest.
+    bytes32 public constant ACTOR_TYPEHASH = keccak256(
+        "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address verifier,uint8 scope,uint48 expiry,uint8 policyType)"
+    );
+
+    /// @dev Per-config typehash used to structurally hash an Actor's ActorConfig within an import digest.
+    bytes32 public constant ACTORCONFIG_TYPEHASH =
+        keccak256("ActorConfig(address verifier,uint8 scope,uint48 expiry,uint8 policyType)");
 
     /// @dev Typehash for signed actor changes, NOT compliant with EIP-712 to mitigate phishing attacks.
     bytes32 public constant SIGNED_ACTOR_CHANGES_TYPEHASH = keccak256(
         "SignedActorChanges(address account,uint64 chainId,uint64 sequence,ActorChange[] actorChanges)"
         "ActorChange(uint8 changeType,bytes32 actorId,bytes data)"
     );
+
+    /// @dev Per-change typehash used to structurally hash each ActorChange within a SignedActorChanges batch.
+    bytes32 public constant ACTORCHANGE_TYPEHASH = keccak256("ActorChange(uint8 changeType,bytes32 actorId,bytes data)");
 
     // ----------------------------------------------------------------------------------------------------------------
     // ACTOR CHANGE TYPES
@@ -119,9 +132,10 @@ contract AccountConfiguration is IAccountConfiguration {
     // FUNCTIONS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice Deploy a new account with initial actors configured using safe defaults.
-    ///         Initial actors are always unrestricted (scope = 0x00).
-    function createAccount(bytes32 userSalt, bytes calldata bytecode, Actor[] calldata initialActors)
+    /// @notice Deploy a new account with its initial actors. Initial actors bootstrap account ownership and are always
+    ///         registered as unrestricted owners (scope = 0x00, no expiry, no policy); scoped keys and session-key
+    ///         policies are added afterwards via applySignedActorChanges. Lock state is initialized to safe defaults.
+    function createAccount(bytes32 userSalt, bytes calldata bytecode, InitialActor[] calldata initialActors)
         external
         returns (address account)
     {
@@ -130,11 +144,15 @@ contract AccountConfiguration is IAccountConfiguration {
         // Initialize account actors (reverts naturally on duplicate via _authorizeActor)
         _initializeAccount(account, initialActors);
 
-        // Create account code
+        // Mark the account initialized: localSequence doubles as the initialized flag, so setting it to 1 blocks
+        // importAccount (which requires localSequence == 0) from running against an already-created account.
+        _accountState[account].localSequence = 1;
+
+        // Create account code at the CREATE2 address derived from the packed actors commitment.
         bytes memory deploymentCode = _buildDeploymentCode(bytecode);
-        bytes32 deploymentSalt = _computeActorInitializationDigest(userSalt, initialActors);
+        bytes32 effectiveSalt = _computeEffectiveSalt(userSalt, initialActors);
         assembly {
-            pop(create2(0, add(deploymentCode, 0x20), mload(deploymentCode), deploymentSalt))
+            pop(create2(0, add(deploymentCode, 0x20), mload(deploymentCode), effectiveSalt))
         }
         emit AccountCreated(account, userSalt, keccak256(bytecode));
     }
@@ -142,11 +160,19 @@ contract AccountConfiguration is IAccountConfiguration {
     /// @notice Import an existing account to AccountConfiguration management.
     /// @dev Verifies via ERC-1271. Accounts must have bytecode.
     /// @dev Custom hash used to partially mitigate phishing attacks on eth_signTypedData.
-    function importAccount(address account, Actor[] calldata initialActors, bytes calldata signature) external {
+    function importAccount(address account, InitialActor[] calldata initialActors, bytes calldata signature)
+        external
+        onlyUnlocked(account)
+    {
+        // importAccount targets genuine contract accounts. Reject EIP-7702 delegated accounts (code 0xef0100 || addr):
+        // a delegated EOA's auth is its (mutable) delegate and it already has the implicit-EOA / delegation paths.
+        // Codeless EOAs are rejected naturally by the ERC-1271 check below (a no-code staticcall returns no data).
+        require(!_isDelegated(account));
+
         require(_accountState[account].localSequence == 0);
         _accountState[account].localSequence = 1;
 
-        bytes32 digest = _computeActorInitializationDigest(bytes32(bytes20(account)), initialActors);
+        bytes32 digest = _computeImportDigest(account, initialActors);
         (bool success, bytes memory result) =
             account.staticcall(abi.encodeWithSelector(ERC1271_SELECTOR, digest, signature));
         require(success && result.length == 32 && abi.decode(result, (bytes4)) == ERC1271_SELECTOR);
@@ -224,15 +250,20 @@ contract AccountConfiguration is IAccountConfiguration {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     /// @notice Verify an account bytes signature in verifier(20) || data format.
-    /// @dev Designed for easy account integration with ERC-1271.
-    /// @return verified True if the signature is valid.
+    /// @dev ERC-1271-style boolean check: returns false on any failure (invalid signature, unknown/revoked actor,
+    ///      actorId not bound to the auth verifier, or an actor lacking SIGNATURE scope) rather than reverting.
+    ///      verifyActor reverts on authentication failure, so it is called externally and the revert is caught.
+    /// @return verified True if the signature is valid and the resolved actor may sign messages.
     function verifySignature(address account, bytes32 hash, bytes calldata signature)
         external
         view
         returns (bool verified)
     {
-        uint8 scope = verifyActor(account, hash, signature);
-        return scope == 0 || scope & SCOPE_SIGNER != 0;
+        try this.verifyActor(account, hash, signature) returns (uint8 scope) {
+            return scope == 0 || scope & SCOPE_SIGNER != 0;
+        } catch {
+            return false;
+        }
     }
 
     /// @notice Verify an account approved a hash using auth in verifier(20) || data format.
@@ -243,24 +274,20 @@ contract AccountConfiguration is IAccountConfiguration {
     }
 
     /// @notice Compute the counterfactual address for an account.
-    function computeAddress(bytes32 userSalt, bytes calldata bytecode, Actor[] calldata initialActors)
+    function computeAddress(bytes32 userSalt, bytes calldata bytecode, InitialActor[] calldata initialActors)
         public
         view
         returns (address)
     {
-        bytes32 deploymentSalt = _computeActorInitializationDigest(userSalt, initialActors);
+        bytes32 effectiveSalt = _computeEffectiveSalt(userSalt, initialActors);
         bytes32 codeHash = keccak256(_buildDeploymentCode(bytecode));
-        bytes32 create2Hash = keccak256(abi.encodePacked(bytes1(0xFF), address(this), deploymentSalt, codeHash));
+        bytes32 create2Hash = keccak256(abi.encodePacked(bytes1(0xFF), address(this), effectiveSalt, codeHash));
         return address(uint160(uint256(create2Hash)));
     }
 
     // ----------------------------------------------------------------------------------------------------------------
     // STORAGE VIEWS
     // ----------------------------------------------------------------------------------------------------------------
-
-    function isInitialized(address account) public view returns (bool) {
-        return _accountState[account].localSequence > 0;
-    }
 
     function isActor(address account, bytes32 actorId) public view returns (bool) {
         address verifier = _actorConfig[actorId][account].verifier;
@@ -308,6 +335,16 @@ contract AccountConfiguration is IAccountConfiguration {
     // INTERNAL FUNCTIONS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
+    /// @dev True if `account` is an EIP-7702 delegated account, i.e. its code begins with the delegation
+    ///      indicator 0xef0100. The 0xef prefix is reserved (EIP-3541), so no normal contract code starts with it.
+    function _isDelegated(address account) internal view returns (bool delegated) {
+        assembly ("memory-safe") {
+            mstore(0x00, 0)
+            extcodecopy(account, 0x1d, 0, 3)
+            delegated := eq(mload(0x00), 0xef0100)
+        }
+    }
+
     /// @notice Returns true if the account is locked and clears storage if unlocked
     /// @dev Side effects to clear locked state
     function _isLockedSideEffects(address account) internal returns (bool locked) {
@@ -324,7 +361,7 @@ contract AccountConfiguration is IAccountConfiguration {
     // ACTOR CHANGES
     // ----------------------------------------------------------------------------------------------------------------
 
-    function _initializeAccount(address account, Actor[] calldata initialActors) internal nonZero(account) {
+    function _initializeAccount(address account, InitialActor[] calldata initialActors) internal nonZero(account) {
         // Must have at least one initial actor
         require(initialActors.length > 0);
 
@@ -334,7 +371,12 @@ contract AccountConfiguration is IAccountConfiguration {
             require(initialActors[i].actorId > previousActorId);
             previousActorId = initialActors[i].actorId;
 
-            _authorizeActor(account, initialActors[i].actorId, initialActors[i].config, initialActors[i].policyData);
+            // Initial actors are always unrestricted owners: scope 0x00, no expiry, no policy. The InitialActor type
+            // cannot express scope/expiry/policy, so these defaults are structural. Scoped keys and session-key
+            // policies are added later via applySignedActorChanges.
+            ActorConfig memory config =
+                ActorConfig({verifier: initialActors[i].verifier, scope: 0, expiry: 0, policyType: POLICY_NONE});
+            _authorizeActor(account, initialActors[i].actorId, config, "");
         }
     }
 
@@ -398,24 +440,50 @@ contract AccountConfiguration is IAccountConfiguration {
         emit ActorRevoked(account, actorId);
     }
 
-    function _computeActorInitializationDigest(bytes32 salt, Actor[] calldata initialActors)
+    /// @dev CREATE2 salt for account creation. This is a deterministic commitment (not a signed message), so it
+    ///      uses a tightly packed encoding that protocol clients can reproduce cheaply across chains:
+    ///      effective_salt = keccak256(user_salt || actors_commitment).
+    function _computeEffectiveSalt(bytes32 userSalt, InitialActor[] calldata initialActors)
         internal
         pure
         returns (bytes32)
     {
-        // Hash each actor
-        bytes32[] memory initializeActorHashes = new bytes32[](initialActors.length);
+        return keccak256(abi.encodePacked(userSalt, _computeActorsCommitment(initialActors)));
+    }
+
+    /// @dev Packed commitment over the initial actor set, 52 bytes per actor: actorId (32) || verifier (20).
+    ///      Initial actors are always unrestricted owner keys, so no scope/expiry/policy fields participate.
+    function _computeActorsCommitment(InitialActor[] calldata initialActors) internal pure returns (bytes32) {
+        bytes memory packed;
         for (uint256 i; i < initialActors.length; i++) {
-            initializeActorHashes[i] = keccak256(
-                abi.encode(initialActors[i].actorId, initialActors[i].config, keccak256(initialActors[i].policyData))
-            );
+            packed = abi.encodePacked(packed, initialActors[i].actorId, initialActors[i].verifier);
+        }
+        return keccak256(packed);
+    }
+
+    /// @dev Typed digest for the importAccount ERC-1271 signature (a signed message), so signers can reproduce it
+    ///      with standard EIP-712-style struct hashing. `salt` is bound to the account address.
+    function _computeImportDigest(address account, InitialActor[] calldata initialActors)
+        internal
+        pure
+        returns (bytes32)
+    {
+        bytes32[] memory actorHashes = new bytes32[](initialActors.length);
+        for (uint256 i; i < initialActors.length; i++) {
+            // Imported actors are unrestricted owners: scope, expiry, and policyType are 0 and policyData is empty.
+            // The digest retains the full Actor/ActorConfig typehash structure (zero-filled) for a single canonical
+            // type, matching the importAccount signature payload in EIP-8130.
+            bytes32 configHash =
+                keccak256(abi.encode(ACTORCONFIG_TYPEHASH, initialActors[i].verifier, uint8(0), uint48(0), uint8(0)));
+            actorHashes[i] =
+                keccak256(abi.encode(ACTOR_TYPEHASH, initialActors[i].actorId, configHash, keccak256("")));
         }
 
-        // Hash cumulative initialization data
-        return
-            keccak256(
-                abi.encode(ACTOR_INITIALIZATION_TYPEHASH, salt, keccak256(abi.encodePacked(initializeActorHashes)))
-            );
+        return keccak256(
+            abi.encode(
+                ACTOR_INITIALIZATION_TYPEHASH, bytes32(bytes20(account)), keccak256(abi.encodePacked(actorHashes))
+            )
+        );
     }
 
     function _computeSignedActorChangesDigest(
@@ -424,10 +492,15 @@ contract AccountConfiguration is IAccountConfiguration {
         uint64 sequence,
         ActorChange[] calldata actorChanges
     ) internal pure returns (bytes32) {
-        // Hash each actor change
+        // Hash each actor change structurally: the variable-length `data` is hashed before encoding so the
+        // digest commits to a fixed-width layout (matches the ActorChange sub-type in SIGNED_ACTOR_CHANGES_TYPEHASH).
         bytes32[] memory actorChangeHashes = new bytes32[](actorChanges.length);
         for (uint256 i; i < actorChanges.length; i++) {
-            actorChangeHashes[i] = keccak256(abi.encode(actorChanges[i]));
+            actorChangeHashes[i] = keccak256(
+                abi.encode(
+                    ACTORCHANGE_TYPEHASH, actorChanges[i].changeType, actorChanges[i].actorId, keccak256(actorChanges[i].data)
+                )
+            );
         }
 
         // Hash the batch of actor changes

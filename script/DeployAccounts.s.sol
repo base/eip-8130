@@ -57,9 +57,8 @@ contract DeployAccounts is Script {
         address actor = msg.sender;
         bytes32 actorId = bytes32(bytes20(actor));
 
-        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
-        actors[0] = IAccountConfiguration.Actor({
-            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: k1, scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
+        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, verifier: k1});
 
         // ── 3a: DefaultAccount (ERC-1167 proxy, 45 bytes) ──
         //

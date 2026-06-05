@@ -6,14 +6,21 @@ import {IAccountConfiguration} from "../../../src/interfaces/IAccountConfigurati
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 contract CreateAccountTest is AccountConfigurationTest {
+    function _initialActor(bytes32 actorId, address verifier)
+        internal
+        pure
+        returns (IAccountConfiguration.InitialActor memory)
+    {
+        return IAccountConfiguration.InitialActor({actorId: actorId, verifier: verifier});
+    }
+
     function test_createAccount_singleK1Actor(uint256 pk) public {
         pk = bound(pk, 1, 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364140);
         address actor = vm.addr(pk);
         bytes32 actorId = bytes32(bytes20(actor));
 
-        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
-        actors[0] = IAccountConfiguration.Actor({
-            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
+        actors[0] = _initialActor(actorId, address(k1Verifier));
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address account = accountConfiguration.createAccount(bytes32(0), bytecode, actors);
@@ -30,21 +37,13 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 actorId1 = bytes32(bytes20(actor1));
         bytes32 actorId2 = bytes32(bytes20(actor2));
 
-        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](2);
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](2);
         if (actorId1 < actorId2) {
-            actors[0] = IAccountConfiguration.Actor({
-                actorId: actorId1,
-                config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
-            actors[1] = IAccountConfiguration.Actor({
-                actorId: actorId2,
-                config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
+            actors[0] = _initialActor(actorId1, address(k1Verifier));
+            actors[1] = _initialActor(actorId2, address(k1Verifier));
         } else {
-            actors[0] = IAccountConfiguration.Actor({
-                actorId: actorId2,
-                config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
-            actors[1] = IAccountConfiguration.Actor({
-                actorId: actorId1,
-                config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
+            actors[0] = _initialActor(actorId2, address(k1Verifier));
+            actors[1] = _initialActor(actorId1, address(k1Verifier));
         }
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
@@ -59,9 +58,8 @@ contract CreateAccountTest is AccountConfigurationTest {
         address actor = vm.addr(1);
         bytes32 actorId = bytes32(bytes20(actor));
 
-        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
-        actors[0] = IAccountConfiguration.Actor({
-            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
+        actors[0] = _initialActor(actorId, address(k1Verifier));
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address predicted = accountConfiguration.computeAddress(bytes32(0), bytecode, actors);
@@ -74,9 +72,8 @@ contract CreateAccountTest is AccountConfigurationTest {
         address actor = vm.addr(1);
         bytes32 actorId = bytes32(bytes20(actor));
 
-        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
-        actors[0] = IAccountConfiguration.Actor({
-            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
+        actors[0] = _initialActor(actorId, address(k1Verifier));
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         accountConfiguration.createAccount(bytes32(0), bytecode, actors);
@@ -95,11 +92,9 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 smaller = actorId1 < actorId2 ? actorId1 : actorId2;
         bytes32 larger = actorId1 < actorId2 ? actorId2 : actorId1;
 
-        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](2);
-        actors[0] = IAccountConfiguration.Actor({
-            actorId: larger, config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
-        actors[1] = IAccountConfiguration.Actor({
-            actorId: smaller, config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](2);
+        actors[0] = _initialActor(larger, address(k1Verifier));
+        actors[1] = _initialActor(smaller, address(k1Verifier));
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         vm.expectRevert();
@@ -107,7 +102,7 @@ contract CreateAccountTest is AccountConfigurationTest {
     }
 
     function test_createAccount_revertsWithNoActors() public {
-        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](0);
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](0);
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
 
         vm.expectRevert();
@@ -117,29 +112,32 @@ contract CreateAccountTest is AccountConfigurationTest {
     function test_createAccount_revertsWithZeroVerifier() public {
         bytes32 actorId = bytes32(uint256(1));
 
-        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
-        actors[0] = IAccountConfiguration.Actor({
-            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: address(0), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
+        actors[0] = _initialActor(actorId, address(0));
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         vm.expectRevert();
         accountConfiguration.createAccount(bytes32(0), bytecode, actors);
     }
 
-    function test_createAccount_initialActorsHaveSpecifiedScope() public {
+    function test_createAccount_unrestrictedInitialActor() public {
         address actor = vm.addr(1);
         bytes32 actorId = bytes32(bytes20(actor));
 
-        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
-        actors[0] = IAccountConfiguration.Actor({
-            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x03, expiry: 0, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
+        actors[0] = _initialActor(actorId, address(k1Verifier));
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address account = accountConfiguration.createAccount(bytes32(0), bytecode, actors);
 
         IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, actorId);
         assertEq(cfg.verifier, address(k1Verifier));
-        assertEq(cfg.scope, 0x03);
+        assertEq(cfg.scope, 0x00);
+        assertEq(cfg.expiry, 0);
+        assertEq(cfg.policyType, 0x00);
+
+        // Created accounts are marked initialized (localSequence == 1).
+        assertEq(accountConfiguration.getChangeSequences(account).local, 1);
 
         (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 unlockDelay) =
             accountConfiguration.getLockStatus(account);
@@ -153,9 +151,8 @@ contract CreateAccountTest is AccountConfigurationTest {
         address actor = vm.addr(1);
         bytes32 actorId = bytes32(bytes20(actor));
 
-        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
-        actors[0] = IAccountConfiguration.Actor({
-            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
+        actors[0] = _initialActor(actorId, address(k1Verifier));
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address addr1 = accountConfiguration.computeAddress(bytes32(uint256(1)), bytecode, actors);

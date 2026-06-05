@@ -110,13 +110,14 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
     function test_sequenceIncrements() public {
         (address account,) = _createK1Account(ACTOR_PK);
 
-        assertEq(accountConfiguration.getChangeSequences(account).local, 0);
-
-        _authorizeActor(account, ACTOR_PK, bytes32(bytes20(vm.addr(300))), address(k1Verifier));
+        // createAccount initializes localSequence to 1 (the initialized flag), so the local channel starts at 1.
         assertEq(accountConfiguration.getChangeSequences(account).local, 1);
 
-        _authorizeActor(account, ACTOR_PK, bytes32(bytes20(vm.addr(301))), address(k1Verifier));
+        _authorizeActor(account, ACTOR_PK, bytes32(bytes20(vm.addr(300))), address(k1Verifier));
         assertEq(accountConfiguration.getChangeSequences(account).local, 2);
+
+        _authorizeActor(account, ACTOR_PK, bytes32(bytes20(vm.addr(301))), address(k1Verifier));
+        assertEq(accountConfiguration.getChangeSequences(account).local, 3);
     }
 
     function test_revertsWhenLocked() public {

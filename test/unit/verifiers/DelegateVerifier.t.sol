@@ -16,21 +16,15 @@ contract DelegateVerifierTest is AccountConfigurationTest {
         bytes32 delegatorActorId = bytes32(bytes20(delegateSigner));
         bytes32 delegateRefActorId = bytes32(bytes20(delegateAccount));
 
-        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](2);
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](2);
         if (delegatorActorId < delegateRefActorId) {
-            actors[0] = IAccountConfiguration.Actor({
-                actorId: delegatorActorId,
-                config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
-            actors[1] = IAccountConfiguration.Actor({
-                actorId: delegateRefActorId,
-                config: IAccountConfiguration.ActorConfig({verifier: address(delegateVerifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
+            actors[0] = IAccountConfiguration.InitialActor({actorId: delegatorActorId, verifier: address(k1Verifier)});
+            actors[1] =
+                IAccountConfiguration.InitialActor({actorId: delegateRefActorId, verifier: address(delegateVerifier)});
         } else {
-            actors[0] = IAccountConfiguration.Actor({
-                actorId: delegateRefActorId,
-                config: IAccountConfiguration.ActorConfig({verifier: address(delegateVerifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
-            actors[1] = IAccountConfiguration.Actor({
-                actorId: delegatorActorId,
-                config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
+            actors[0] =
+                IAccountConfiguration.InitialActor({actorId: delegateRefActorId, verifier: address(delegateVerifier)});
+            actors[1] = IAccountConfiguration.InitialActor({actorId: delegatorActorId, verifier: address(k1Verifier)});
         }
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
@@ -73,10 +67,8 @@ contract DelegateVerifierTest is AccountConfigurationTest {
         (address accountA,) = _createK1Account(DELEGATE_PK);
 
         bytes32 delegateRefA = bytes32(bytes20(accountA));
-        IAccountConfiguration.Actor[] memory actorsB = new IAccountConfiguration.Actor[](1);
-        actorsB[0] = IAccountConfiguration.Actor({
-            actorId: delegateRefA,
-            config: IAccountConfiguration.ActorConfig({verifier: address(delegateVerifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.InitialActor[] memory actorsB = new IAccountConfiguration.InitialActor[](1);
+        actorsB[0] = IAccountConfiguration.InitialActor({actorId: delegateRefA, verifier: address(delegateVerifier)});
         bytes memory bytecodeB = _computeERC1167Bytecode(defaultAccountImplementation);
         address accountB = accountConfiguration.createAccount(bytes32(uint256(10)), bytecodeB, actorsB);
 

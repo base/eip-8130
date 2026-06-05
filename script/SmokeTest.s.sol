@@ -46,9 +46,8 @@ contract SmokeTest is Script {
         internal
         returns (address)
     {
-        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
-        actors[0] = IAccountConfiguration.Actor({
-            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: k1Verifier, scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
+        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, verifier: k1Verifier});
 
         bytes memory bytecode =
             abi.encodePacked(hex"363d3d373d3d3d363d73", defaultImpl, hex"5af43d82803e903d91602b57fd5bf3");

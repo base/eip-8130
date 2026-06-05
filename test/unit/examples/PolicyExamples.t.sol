@@ -196,22 +196,12 @@ contract PolicyExamplesTest is AccountConfigurationTest {
 
     /// @dev Account with a K1 root actor (can authorize actors) and the manager as an execution-enabled actor.
     function _createAccountWithRootAndManager() internal returns (address) {
-        IAccountConfiguration.Actor memory root = IAccountConfiguration.Actor({
-            actorId: bytes32(bytes20(vm.addr(ROOT_PK))),
-            config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}),
-            policyData: ""
-        });
-        IAccountConfiguration.Actor memory mgr = IAccountConfiguration.Actor({
-            actorId: bytes32(bytes20(address(manager))),
-            config: IAccountConfiguration.ActorConfig({
-                verifier: EXTERNAL_CALLER_VERIFIER,
-                scope: 0x00,
-                expiry: 0, policyType: 0x00
-            }),
-            policyData: ""
-        });
+        IAccountConfiguration.InitialActor memory root =
+            IAccountConfiguration.InitialActor({actorId: bytes32(bytes20(vm.addr(ROOT_PK))), verifier: address(k1Verifier)});
+        IAccountConfiguration.InitialActor memory mgr =
+            IAccountConfiguration.InitialActor({actorId: bytes32(bytes20(address(manager))), verifier: EXTERNAL_CALLER_VERIFIER});
 
-        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](2);
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](2);
         (actors[0], actors[1]) = root.actorId < mgr.actorId ? (root, mgr) : (mgr, root);
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);

@@ -23,6 +23,8 @@ contract AccountConfigurationTest is Test {
         "ActorChange(uint8 changeType,bytes32 actorId,bytes data)"
     );
 
+    bytes32 constant ACTORCHANGE_TYPEHASH = keccak256("ActorChange(uint8 changeType,bytes32 actorId,bytes data)");
+
     function setUp() public virtual {
         k1Verifier = IVerifier(new K1Verifier());
         p256Verifier = IVerifier(new P256Verifier());
@@ -43,12 +45,8 @@ contract AccountConfigurationTest is Test {
         address signer = vm.addr(pk);
         actorId = bytes32(bytes20(signer));
 
-        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
-        actors[0] = IAccountConfiguration.Actor({
-            actorId: actorId,
-            config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}),
-            policyData: ""
-        });
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
+        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, verifier: address(k1Verifier)});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         account = accountConfiguration.createAccount(bytes32(0), bytecode, actors);
@@ -58,12 +56,8 @@ contract AccountConfigurationTest is Test {
         address signer = vm.addr(pk);
         actorId = bytes32(bytes20(signer));
 
-        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
-        actors[0] = IAccountConfiguration.Actor({
-            actorId: actorId,
-            config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}),
-            policyData: ""
-        });
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
+        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, verifier: address(k1Verifier)});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         account = accountConfiguration.createAccount(salt, bytecode, actors);
@@ -104,7 +98,11 @@ contract AccountConfigurationTest is Test {
     ) internal pure returns (bytes32) {
         bytes32[] memory actorChangeHash = new bytes32[](actorChanges.length);
         for (uint256 i; i < actorChanges.length; i++) {
-            actorChangeHash[i] = keccak256(abi.encode(actorChanges[i]));
+            actorChangeHash[i] = keccak256(
+                abi.encode(
+                    ACTORCHANGE_TYPEHASH, actorChanges[i].changeType, actorChanges[i].actorId, keccak256(actorChanges[i].data)
+                )
+            );
         }
         return keccak256(
             abi.encode(

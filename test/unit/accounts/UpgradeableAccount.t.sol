@@ -49,9 +49,8 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         address signer = vm.addr(pk);
         actorId = bytes32(bytes20(signer));
 
-        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
-        actors[0] = IAccountConfiguration.Actor({
-            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
+        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, verifier: address(k1Verifier)});
 
         bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
         account = accountConfiguration.createAccount(bytes32(0), proxyBytecode, actors);
@@ -83,9 +82,8 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         address signer = vm.addr(ACTOR_PK);
         bytes32 actorId = bytes32(bytes20(signer));
 
-        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
-        actors[0] = IAccountConfiguration.Actor({
-            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
+        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, verifier: address(k1Verifier)});
 
         bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
         address predicted = accountConfiguration.computeAddress(bytes32(0), proxyBytecode, actors);

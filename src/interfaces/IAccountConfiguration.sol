@@ -9,7 +9,7 @@ interface IAccountConfiguration {
 
     struct ChangeSequences {
         uint64 multichain; // chain_id 0
-        uint64 local; // chain_id == block.chainid
+        uint64 local; // chain_id == block.chainid; starts at 1 once initialized (created/imported), 0 = uninitialized
     }
 
     struct ActorConfig {
@@ -17,6 +17,12 @@ interface IAccountConfiguration {
         uint8 scope;
         uint48 expiry; // Unix seconds; 0 = no expiry. Actor invalid once block.timestamp > expiry
         uint8 policyType; // 0x00 = none; any non-zero = gated to stored manager (value interpreted by the manager)
+    }
+
+    // Minimal actor used for account creation and import (always unrestricted: scope=0x00, policyType=0x00, no expiry).
+    struct InitialActor {
+        bytes32 actorId;
+        address verifier;
     }
 
     struct Actor {
@@ -61,11 +67,11 @@ interface IAccountConfiguration {
     // FUNCTIONS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    function createAccount(bytes32 userSalt, bytes calldata bytecode, Actor[] calldata initialActors)
+    function createAccount(bytes32 userSalt, bytes calldata bytecode, InitialActor[] calldata initialActors)
         external
         returns (address);
 
-    function importAccount(address account, Actor[] calldata initialActors, bytes calldata signature) external;
+    function importAccount(address account, InitialActor[] calldata initialActors, bytes calldata signature) external;
 
     function applySignedActorChanges(
         address account,
@@ -90,7 +96,7 @@ interface IAccountConfiguration {
     function verifyActor(address account, bytes32 hash, bytes calldata auth) external view returns (uint8 scope);
 
     // Account creation
-    function computeAddress(bytes32 userSalt, bytes calldata bytecode, Actor[] calldata initialActors)
+    function computeAddress(bytes32 userSalt, bytes calldata bytecode, InitialActor[] calldata initialActors)
         external
         view
         returns (address);
@@ -98,8 +104,6 @@ interface IAccountConfiguration {
     // ----------------------------------------------------------------------------------------------------------------
     // STORAGE VIEWS
     // ----------------------------------------------------------------------------------------------------------------
-
-    function isInitialized(address account) external view returns (bool);
 
     function isActor(address account, bytes32 actorId) external view returns (bool);
 

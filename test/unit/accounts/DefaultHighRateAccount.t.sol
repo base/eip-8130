@@ -34,9 +34,8 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
         address signer = vm.addr(pk);
         actorId = bytes32(bytes20(signer));
 
-        IAccountConfiguration.Actor[] memory actors = new IAccountConfiguration.Actor[](1);
-        actors[0] = IAccountConfiguration.Actor({
-            actorId: actorId, config: IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), policyData: ""});
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
+        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, verifier: address(k1Verifier)});
 
         bytes memory bytecode = _computeERC1167Bytecode(highRateImplementation);
         account = accountConfiguration.createAccount(bytes32(uint256(0xbeef)), bytecode, actors);
