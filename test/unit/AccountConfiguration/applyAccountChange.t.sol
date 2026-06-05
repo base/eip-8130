@@ -107,7 +107,12 @@ contract AccountLockTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: bytes32(bytes20(vm.addr(400))),
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -137,7 +142,12 @@ contract AccountLockTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: bytes32(bytes20(vm.addr(500))),
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;

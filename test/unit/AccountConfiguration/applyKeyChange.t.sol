@@ -19,7 +19,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -44,7 +49,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x04, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    verifier: address(k1Verifier), scope: 0x04, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -89,12 +99,22 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: actor1,
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
         });
         changes[1] = IAccountConfiguration.ActorChange({
             actorId: actor2,
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -129,7 +149,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: bytes32(bytes20(vm.addr(300))),
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -151,7 +176,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: thirdActorId,
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -174,7 +204,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: thirdActorId,
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -199,7 +234,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: thirdActorId,
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -217,7 +257,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: actorActorId,
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -251,7 +296,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: bytes32(bytes20(vm.addr(300))),
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -278,7 +328,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(eoa).local;
@@ -332,7 +387,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
         });
 
         // chainId=0 for multichain
@@ -400,7 +460,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
         });
         changes[1] = IAccountConfiguration.ActorChange({actorId: selfActorId, changeType: 0x02, data: ""});
 
@@ -436,7 +501,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: thirdActorId,
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -464,7 +534,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: thirdActorId,
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -502,7 +577,10 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: verifier, scope: scope, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({verifier: verifier, scope: scope, expiry: 0, policyType: 0x00}),
+                bytes("")
+            )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -538,7 +616,10 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: verifier, scope: scope, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({verifier: verifier, scope: scope, expiry: 0, policyType: 0x00}),
+                bytes("")
+            )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;

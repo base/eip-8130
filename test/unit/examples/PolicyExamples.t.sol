@@ -196,10 +196,12 @@ contract PolicyExamplesTest is AccountConfigurationTest {
 
     /// @dev Account with a K1 root actor (can authorize actors) and the manager as an execution-enabled actor.
     function _createAccountWithRootAndManager() internal returns (address) {
-        IAccountConfiguration.InitialActor memory root =
-            IAccountConfiguration.InitialActor({actorId: bytes32(bytes20(vm.addr(ROOT_PK))), verifier: address(k1Verifier)});
-        IAccountConfiguration.InitialActor memory mgr =
-            IAccountConfiguration.InitialActor({actorId: bytes32(bytes20(address(manager))), verifier: EXTERNAL_CALLER_VERIFIER});
+        IAccountConfiguration.InitialActor memory root = IAccountConfiguration.InitialActor({
+            actorId: bytes32(bytes20(vm.addr(ROOT_PK))), verifier: address(k1Verifier)
+        });
+        IAccountConfiguration.InitialActor memory mgr = IAccountConfiguration.InitialActor({
+            actorId: bytes32(bytes20(address(manager))), verifier: EXTERNAL_CALLER_VERIFIER
+        });
 
         IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](2);
         (actors[0], actors[1]) = root.actorId < mgr.actorId ? (root, mgr) : (mgr, root);
@@ -212,17 +214,13 @@ contract PolicyExamplesTest is AccountConfigurationTest {
     ///      `commitment`. This writes `policy_manager`/`policy_commitment` that the manager reads back per call.
     function _authorizePolicyActor(bytes32 actorId, bytes32 commitment) internal {
         IAccountConfiguration.ActorConfig memory cfg = IAccountConfiguration.ActorConfig({
-            verifier: address(k1Verifier),
-            scope: SCOPE_SENDER,
-            expiry: 0, policyType: POLICY_GATED
+            verifier: address(k1Verifier), scope: SCOPE_SENDER, expiry: 0, policyType: POLICY_GATED
         });
         bytes memory policyData = abi.encodePacked(address(manager), commitment);
 
         IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
         changes[0] = IAccountConfiguration.ActorChange({
-            actorId: actorId,
-            changeType: AUTHORIZE_ACTOR,
-            data: abi.encode(cfg, policyData)
+            actorId: actorId, changeType: AUTHORIZE_ACTOR, data: abi.encode(cfg, policyData)
         });
 
         uint64 chainId = uint64(block.chainid);

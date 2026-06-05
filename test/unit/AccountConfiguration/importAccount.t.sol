@@ -58,7 +58,8 @@ contract ImportAccountTest is AccountConfigurationTest {
         returns (IAccountConfiguration.InitialActor[] memory actors)
     {
         actors = new IAccountConfiguration.InitialActor[](1);
-        actors[0] = IAccountConfiguration.InitialActor({actorId: bytes32(bytes20(signer)), verifier: address(k1Verifier)});
+        actors[0] =
+            IAccountConfiguration.InitialActor({actorId: bytes32(bytes20(signer)), verifier: address(k1Verifier)});
     }
 
     function test_importAccount_validSignature() public {

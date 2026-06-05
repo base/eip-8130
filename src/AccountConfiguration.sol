@@ -48,7 +48,8 @@ contract AccountConfiguration is IAccountConfiguration {
     );
 
     /// @dev Per-change typehash used to structurally hash each ActorChange within a SignedActorChanges batch.
-    bytes32 public constant ACTORCHANGE_TYPEHASH = keccak256("ActorChange(uint8 changeType,bytes32 actorId,bytes data)");
+    bytes32 public constant ACTORCHANGE_TYPEHASH =
+        keccak256("ActorChange(uint8 changeType,bytes32 actorId,bytes data)");
 
     // ----------------------------------------------------------------------------------------------------------------
     // ACTOR CHANGE TYPES
@@ -475,8 +476,7 @@ contract AccountConfiguration is IAccountConfiguration {
             // type, matching the importAccount signature payload in EIP-8130.
             bytes32 configHash =
                 keccak256(abi.encode(ACTORCONFIG_TYPEHASH, initialActors[i].verifier, uint8(0), uint48(0), uint8(0)));
-            actorHashes[i] =
-                keccak256(abi.encode(ACTOR_TYPEHASH, initialActors[i].actorId, configHash, keccak256("")));
+            actorHashes[i] = keccak256(abi.encode(ACTOR_TYPEHASH, initialActors[i].actorId, configHash, keccak256("")));
         }
 
         return keccak256(
@@ -498,7 +498,10 @@ contract AccountConfiguration is IAccountConfiguration {
         for (uint256 i; i < actorChanges.length; i++) {
             actorChangeHashes[i] = keccak256(
                 abi.encode(
-                    ACTORCHANGE_TYPEHASH, actorChanges[i].changeType, actorChanges[i].actorId, keccak256(actorChanges[i].data)
+                    ACTORCHANGE_TYPEHASH,
+                    actorChanges[i].changeType,
+                    actorChanges[i].actorId,
+                    keccak256(actorChanges[i].data)
                 )
             );
         }
@@ -506,7 +509,11 @@ contract AccountConfiguration is IAccountConfiguration {
         // Hash the batch of actor changes
         return keccak256(
             abi.encode(
-                SIGNED_ACTOR_CHANGES_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(actorChangeHashes))
+                SIGNED_ACTOR_CHANGES_TYPEHASH,
+                account,
+                chainId,
+                sequence,
+                keccak256(abi.encodePacked(actorChangeHashes))
             )
         );
     }

@@ -100,7 +100,10 @@ contract AccountConfigurationTest is Test {
         for (uint256 i; i < actorChanges.length; i++) {
             actorChangeHash[i] = keccak256(
                 abi.encode(
-                    ACTORCHANGE_TYPEHASH, actorChanges[i].changeType, actorChanges[i].actorId, keccak256(actorChanges[i].data)
+                    ACTORCHANGE_TYPEHASH,
+                    actorChanges[i].changeType,
+                    actorChanges[i].actorId,
+                    keccak256(actorChanges[i].data)
                 )
             );
         }

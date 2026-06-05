@@ -262,7 +262,10 @@ contract VerifyTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: verifier, scope: scope, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({verifier: verifier, scope: scope, expiry: 0, policyType: 0x00}),
+                bytes("")
+            )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
@@ -308,7 +311,10 @@ contract VerifyTest is AccountConfigurationTest {
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
-            data: abi.encode(IAccountConfiguration.ActorConfig({verifier: verifier, scope: 0x00, expiry: 0, policyType: 0x00}), bytes(""))
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({verifier: verifier, scope: 0x00, expiry: 0, policyType: 0x00}),
+                bytes("")
+            )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
