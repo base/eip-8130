@@ -22,7 +22,7 @@ gates identically on any non-zero `policyType` and does not interpret the value;
    `PolicyManager.execute(actorId, ...)` with `msg.sender == account`. The manager re-reads `getPolicy(account,
    actorId)` on every call and requires it to resolve to `(this, commitment)`, so a revoked or expired key stops
    immediately. It then invokes the policy, which enforces the committed policy against the per-use action and
-   returns an `executeBatch` call plan that the manager — an execution-enabled actor (`EXTERNAL_CALLER_VERIFIER`)
+   returns an `executeBatch` call plan that the manager — an execution-enabled actor (`EXTERNAL_CALLER_AUTHENTICATOR`)
    — forwards to the account.
 
 ```

@@ -10,7 +10,7 @@ import {DefaultHighRateAccount} from "../src/accounts/DefaultHighRateAccount.sol
 import {UpgradeableAccount} from "../src/accounts/UpgradeableAccount.sol";
 import {UpgradeableProxy} from "../src/accounts/UpgradeableProxy.sol";
 
-import {K1Verifier} from "../src/verifiers/K1Verifier.sol";
+import {K1Authenticator} from "../src/authenticators/K1Authenticator.sol";
 
 /// @notice Demonstrates deploying all three wallet types via AccountConfiguration.createAccount.
 ///
@@ -27,11 +27,11 @@ contract DeployAccounts is Script {
 
         // ── Step 1: Deploy system infrastructure (once per chain) ──
 
-        address k1 = address(new K1Verifier{salt: 0}());
+        address k1 = address(new K1Authenticator{salt: 0}());
         AccountConfiguration accountConfig = new AccountConfiguration{salt: 0}();
 
         console.log("AccountConfiguration:", address(accountConfig));
-        console.log("K1Verifier:          ", k1);
+        console.log("K1Authenticator:          ", k1);
 
         // ── Step 2: Deploy wallet implementations (once per chain) ──
         //
@@ -58,7 +58,7 @@ contract DeployAccounts is Script {
         bytes32 actorId = bytes32(bytes20(actor));
 
         IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
-        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, verifier: k1});
+        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, authenticator: k1});
 
         // ── 3a: DefaultAccount (ERC-1167 proxy, 45 bytes) ──
         //
@@ -105,17 +105,17 @@ contract DeployAccounts is Script {
         console.log("  proxy size:            93 bytes (ERC-1967 + default)");
         console.log("  upgradeable:           yes (UUPS)");
 
-        // ── Step 4: Verify accounts work ──
+        // ── Step 4: Authenticate accounts work ──
 
         console.log("");
-        console.log("=== Verification ===");
+        console.log("=== Authentication ===");
 
         IAccountConfiguration.ActorConfig memory actorCfg = accountConfig.getActorConfig(defaultAccount, actorId);
-        console.log("DefaultAccount actor verifier:", actorCfg.verifier);
+        console.log("DefaultAccount actor authenticator:", actorCfg.authenticator);
         console.log("DefaultAccount actor scope:  ", actorCfg.scope);
 
         actorCfg = accountConfig.getActorConfig(upgradeableAccount, actorId);
-        console.log("UpgradeableAccount actor verifier:", actorCfg.verifier);
+        console.log("UpgradeableAccount actor authenticator:", actorCfg.authenticator);
         console.log("UpgradeableAccount actor scope:  ", actorCfg.scope);
 
         vm.stopBroadcast();

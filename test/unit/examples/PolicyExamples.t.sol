@@ -2,7 +2,7 @@
 pragma solidity ^0.8.30;
 
 import {IAccountConfiguration} from "../../../src/interfaces/IAccountConfiguration.sol";
-import {DefaultAccount, Call, EXTERNAL_CALLER_VERIFIER} from "../../../src/accounts/DefaultAccount.sol";
+import {DefaultAccount, Call, EXTERNAL_CALLER_AUTHENTICATOR} from "../../../src/accounts/DefaultAccount.sol";
 
 import {PolicyManager} from "../../../src/examples/policies/PolicyManager.sol";
 import {ERC20SpendLimitPolicy} from "../../../src/examples/policies/ERC20SpendLimitPolicy.sol";
@@ -197,10 +197,10 @@ contract PolicyExamplesTest is AccountConfigurationTest {
     /// @dev Account with a K1 root actor (can authorize actors) and the manager as an execution-enabled actor.
     function _createAccountWithRootAndManager() internal returns (address) {
         IAccountConfiguration.InitialActor memory root = IAccountConfiguration.InitialActor({
-            actorId: bytes32(bytes20(vm.addr(ROOT_PK))), verifier: address(k1Verifier)
+            actorId: bytes32(bytes20(vm.addr(ROOT_PK))), authenticator: address(k1Authenticator)
         });
         IAccountConfiguration.InitialActor memory mgr = IAccountConfiguration.InitialActor({
-            actorId: bytes32(bytes20(address(manager))), verifier: EXTERNAL_CALLER_VERIFIER
+            actorId: bytes32(bytes20(address(manager))), authenticator: EXTERNAL_CALLER_AUTHENTICATOR
         });
 
         IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](2);
@@ -214,7 +214,7 @@ contract PolicyExamplesTest is AccountConfigurationTest {
     ///      `commitment`. This writes `policy_manager`/`policy_commitment` that the manager reads back per call.
     function _authorizePolicyActor(bytes32 actorId, bytes32 commitment) internal {
         IAccountConfiguration.ActorConfig memory cfg = IAccountConfiguration.ActorConfig({
-            verifier: address(k1Verifier), scope: SCOPE_SENDER, expiry: 0, policyType: POLICY_GATED
+            authenticator: address(k1Authenticator), scope: SCOPE_SENDER, expiry: 0, policyType: POLICY_GATED
         });
         bytes memory policyData = abi.encodePacked(address(manager), commitment);
 

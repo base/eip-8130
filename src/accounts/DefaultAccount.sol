@@ -13,9 +13,9 @@ struct Call {
 }
 
 /// @dev Sentinel address for external caller authorization. No contract exists here —
-///      if the protocol ever calls verify() on it, the call naturally fails.
+///      if the protocol ever calls authenticate() on it, the call naturally fails.
 ///      Deterministic across all chains (hash-derived, no deployment needed).
-address constant EXTERNAL_CALLER_VERIFIER = address(uint160(uint256(keccak256("externalCaller"))));
+address constant EXTERNAL_CALLER_AUTHENTICATOR = address(uint160(uint256(keccak256("externalCaller"))));
 
 /// @notice Default account implementation for EIP-8130.
 ///         Deployed behind ERC-1167 minimal proxy (45 bytes, deterministic pattern).
@@ -26,7 +26,7 @@ address constant EXTERNAL_CALLER_VERIFIER = address(uint160(uint256(keccak256("e
 ///         Caller authorization via AccountConfiguration:
 ///           - address(this) is always authorized (hardcoded) — covers 8130 direct dispatch
 ///           - External callers (EntryPoints, PolicyManagers) are registered as actors
-///             with EXTERNAL_CALLER_VERIFIER as the verifier in AccountConfiguration
+///             with EXTERNAL_CALLER_AUTHENTICATOR as the authenticator in AccountConfiguration
 contract DefaultAccount is Receiver {
     AccountConfiguration public immutable ACCOUNT_CONFIGURATION;
 
@@ -50,12 +50,12 @@ contract DefaultAccount is Receiver {
     //  ERC-1271
     // ══════════════════════════════════════════════
 
-    /// @notice Signature validation via AccountConfiguration's verifier infrastructure.
-    /// @param hash The digest to verify
-    /// @param signature Auth data in verifier || data format
+    /// @notice Signature validation via AccountConfiguration's authenticator infrastructure.
+    /// @param hash The digest to authenticate
+    /// @param signature Auth data in authenticator || data format
     /// @return magicValue 0x1626ba7e if valid, 0xffffffff otherwise
     function isValidSignature(bytes32 hash, bytes calldata signature) external view virtual returns (bytes4) {
-        try ACCOUNT_CONFIGURATION.verifyActor(address(this), hash, signature) returns (uint8) {
+        try ACCOUNT_CONFIGURATION.authenticateActor(address(this), hash, signature) returns (uint8) {
             return bytes4(0x1626ba7e);
         } catch {
             return bytes4(0xFFFFFFFF);
@@ -78,6 +78,6 @@ contract DefaultAccount is Receiver {
         if (caller == address(this)) return true;
         IAccountConfiguration.ActorConfig memory config =
             ACCOUNT_CONFIGURATION.getActorConfig(address(this), bytes32(bytes20(caller)));
-        return config.verifier == EXTERNAL_CALLER_VERIFIER;
+        return config.authenticator == EXTERNAL_CALLER_AUTHENTICATOR;
     }
 }

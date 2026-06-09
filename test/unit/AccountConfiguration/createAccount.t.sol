@@ -6,12 +6,12 @@ import {IAccountConfiguration} from "../../../src/interfaces/IAccountConfigurati
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 contract CreateAccountTest is AccountConfigurationTest {
-    function _initialActor(bytes32 actorId, address verifier)
+    function _initialActor(bytes32 actorId, address authenticator)
         internal
         pure
         returns (IAccountConfiguration.InitialActor memory)
     {
-        return IAccountConfiguration.InitialActor({actorId: actorId, verifier: verifier});
+        return IAccountConfiguration.InitialActor({actorId: actorId, authenticator: authenticator});
     }
 
     function test_createAccount_singleK1Actor(uint256 pk) public {
@@ -20,7 +20,7 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 actorId = bytes32(bytes20(actor));
 
         IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
-        actors[0] = _initialActor(actorId, address(k1Verifier));
+        actors[0] = _initialActor(actorId, address(k1Authenticator));
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address account = accountConfiguration.createAccount(bytes32(0), bytecode, actors);
@@ -39,11 +39,11 @@ contract CreateAccountTest is AccountConfigurationTest {
 
         IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](2);
         if (actorId1 < actorId2) {
-            actors[0] = _initialActor(actorId1, address(k1Verifier));
-            actors[1] = _initialActor(actorId2, address(k1Verifier));
+            actors[0] = _initialActor(actorId1, address(k1Authenticator));
+            actors[1] = _initialActor(actorId2, address(k1Authenticator));
         } else {
-            actors[0] = _initialActor(actorId2, address(k1Verifier));
-            actors[1] = _initialActor(actorId1, address(k1Verifier));
+            actors[0] = _initialActor(actorId2, address(k1Authenticator));
+            actors[1] = _initialActor(actorId1, address(k1Authenticator));
         }
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
@@ -59,7 +59,7 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 actorId = bytes32(bytes20(actor));
 
         IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
-        actors[0] = _initialActor(actorId, address(k1Verifier));
+        actors[0] = _initialActor(actorId, address(k1Authenticator));
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address predicted = accountConfiguration.computeAddress(bytes32(0), bytecode, actors);
@@ -73,7 +73,7 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 actorId = bytes32(bytes20(actor));
 
         IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
-        actors[0] = _initialActor(actorId, address(k1Verifier));
+        actors[0] = _initialActor(actorId, address(k1Authenticator));
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         accountConfiguration.createAccount(bytes32(0), bytecode, actors);
@@ -93,8 +93,8 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 larger = actorId1 < actorId2 ? actorId2 : actorId1;
 
         IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](2);
-        actors[0] = _initialActor(larger, address(k1Verifier));
-        actors[1] = _initialActor(smaller, address(k1Verifier));
+        actors[0] = _initialActor(larger, address(k1Authenticator));
+        actors[1] = _initialActor(smaller, address(k1Authenticator));
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         vm.expectRevert();
@@ -109,7 +109,7 @@ contract CreateAccountTest is AccountConfigurationTest {
         accountConfiguration.createAccount(bytes32(0), bytecode, actors);
     }
 
-    function test_createAccount_revertsWithZeroVerifier() public {
+    function test_createAccount_revertsWithZeroAuthenticator() public {
         bytes32 actorId = bytes32(uint256(1));
 
         IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
@@ -125,13 +125,13 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 actorId = bytes32(bytes20(actor));
 
         IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
-        actors[0] = _initialActor(actorId, address(k1Verifier));
+        actors[0] = _initialActor(actorId, address(k1Authenticator));
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address account = accountConfiguration.createAccount(bytes32(0), bytecode, actors);
 
         IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, actorId);
-        assertEq(cfg.verifier, address(k1Verifier));
+        assertEq(cfg.authenticator, address(k1Authenticator));
         assertEq(cfg.scope, 0x00);
         assertEq(cfg.expiry, 0);
         assertEq(cfg.policyType, 0x00);
@@ -152,7 +152,7 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 actorId = bytes32(bytes20(actor));
 
         IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
-        actors[0] = _initialActor(actorId, address(k1Verifier));
+        actors[0] = _initialActor(actorId, address(k1Authenticator));
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         address addr1 = accountConfiguration.computeAddress(bytes32(uint256(1)), bytecode, actors);

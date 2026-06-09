@@ -5,17 +5,17 @@ import {Test} from "forge-std/Test.sol";
 
 import {AccountConfiguration} from "../../src/AccountConfiguration.sol";
 import {IAccountConfiguration} from "../../src/interfaces/IAccountConfiguration.sol";
-import {IVerifier} from "../../src/interfaces/IVerifier.sol";
-import {K1Verifier} from "../../src/verifiers/K1Verifier.sol";
-import {P256Verifier} from "../../src/verifiers/P256Verifier.sol";
-import {DelegateVerifier} from "../../src/verifiers/DelegateVerifier.sol";
+import {IAuthenticator} from "../../src/interfaces/IAuthenticator.sol";
+import {K1Authenticator} from "../../src/authenticators/K1Authenticator.sol";
+import {P256Authenticator} from "../../src/authenticators/P256Authenticator.sol";
+import {DelegateAuthenticator} from "../../src/authenticators/DelegateAuthenticator.sol";
 import {DefaultAccount} from "../../src/accounts/DefaultAccount.sol";
 
 contract AccountConfigurationTest is Test {
     AccountConfiguration public accountConfiguration;
-    IVerifier public k1Verifier;
-    IVerifier public p256Verifier;
-    IVerifier public delegateVerifier;
+    IAuthenticator public k1Authenticator;
+    IAuthenticator public p256Authenticator;
+    IAuthenticator public delegateAuthenticator;
     address public defaultAccountImplementation;
 
     bytes32 constant SIGNED_ACTOR_CHANGES_TYPEHASH = keccak256(
@@ -26,10 +26,10 @@ contract AccountConfigurationTest is Test {
     bytes32 constant ACTORCHANGE_TYPEHASH = keccak256("ActorChange(uint8 changeType,bytes32 actorId,bytes data)");
 
     function setUp() public virtual {
-        k1Verifier = IVerifier(new K1Verifier());
-        p256Verifier = IVerifier(new P256Verifier());
+        k1Authenticator = IAuthenticator(new K1Authenticator());
+        p256Authenticator = IAuthenticator(new P256Authenticator());
         accountConfiguration = new AccountConfiguration();
-        delegateVerifier = IVerifier(new DelegateVerifier(address(accountConfiguration)));
+        delegateAuthenticator = IAuthenticator(new DelegateAuthenticator(address(accountConfiguration)));
         defaultAccountImplementation = address(new DefaultAccount(address(accountConfiguration)));
     }
 
@@ -46,7 +46,7 @@ contract AccountConfigurationTest is Test {
         actorId = bytes32(bytes20(signer));
 
         IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
-        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, verifier: address(k1Verifier)});
+        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, authenticator: address(k1Authenticator)});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         account = accountConfiguration.createAccount(bytes32(0), bytecode, actors);
@@ -57,7 +57,7 @@ contract AccountConfigurationTest is Test {
         actorId = bytes32(bytes20(signer));
 
         IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
-        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, verifier: address(k1Verifier)});
+        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, authenticator: address(k1Authenticator)});
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
         account = accountConfiguration.createAccount(salt, bytecode, actors);
@@ -70,10 +70,10 @@ contract AccountConfigurationTest is Test {
         return abi.encodePacked(r, s, v);
     }
 
-    /// @dev Build auth bytes in verifier(20) || data format for K1 verification.
+    /// @dev Build auth bytes in authenticator(20) || data format for K1 authentication.
     function _buildK1Auth(uint256 pk, bytes32 digest) internal view returns (bytes memory) {
         bytes memory sig = _signDigest(pk, digest);
-        return abi.encodePacked(address(k1Verifier), sig);
+        return abi.encodePacked(address(k1Authenticator), sig);
     }
 
     /// @dev Build auth bytes for implicit EOA path: address(0) || ecdsa signature.

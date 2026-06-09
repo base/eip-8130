@@ -3,11 +3,11 @@ pragma solidity ^0.8.30;
 
 import {WebAuthn} from "openzeppelin/utils/cryptography/WebAuthn.sol";
 
-import {IVerifier} from "../interfaces/IVerifier.sol";
+import {IAuthenticator} from "../interfaces/IAuthenticator.sol";
 
-/// @notice P-256 WebAuthn/Passkey verifier. actorId = keccak256(pub_key_x || pub_key_y).
-contract WebAuthnVerifier is IVerifier {
-    function verify(bytes32 hash, bytes calldata data) external view returns (bytes32 actorId) {
+/// @notice P-256 WebAuthn/Passkey authenticator. actorId = keccak256(pub_key_x || pub_key_y).
+contract WebAuthnAuthenticator is IAuthenticator {
+    function authenticate(bytes32 hash, bytes calldata data) external view returns (bytes32 actorId) {
         (WebAuthn.WebAuthnAuth memory auth, bytes32 x, bytes32 y) =
             abi.decode(data, (WebAuthn.WebAuthnAuth, bytes32, bytes32));
         actorId = keccak256(abi.encodePacked(x, y));

@@ -35,7 +35,7 @@ contract ERC4337AccountTest is AccountConfigurationTest {
         actorId = bytes32(bytes20(signer));
 
         IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
-        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, verifier: address(k1Verifier)});
+        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, authenticator: address(k1Authenticator)});
 
         bytes memory bytecode = _computeERC1167Bytecode(erc4337Implementation);
         account = accountConfiguration.createAccount(bytes32(0), bytecode, actors);

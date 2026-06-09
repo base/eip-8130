@@ -28,7 +28,7 @@ struct PackedUserOperation {
 ///
 ///         Designed to be THE permanent wallet — users never upgrade the implementation.
 ///         New capabilities are added by authorizing callers (PolicyManager, etc.)
-///         and registering actors/verifiers via the AccountConfiguration system contract.
+///         and registering actors/authenticators via the AccountConfiguration system contract.
 ///
 ///         Supports:
 ///           - EIP-8130 direct dispatch (msg.sender = from, always authorized as self-call)
@@ -91,7 +91,7 @@ contract ERC4337Account is Receiver {
     // ══════════════════════════════════════════════
 
     /// @notice Validates a UserOperation signature via the AccountConfiguration system.
-    ///         Signature format follows 8130 verifier conventions (verifier_type || data).
+    ///         Signature format follows 8130 authenticator conventions (authenticator_type || data).
     function validateUserOp(PackedUserOperation calldata userOp, bytes32 userOpHash, uint256 missingAccountFunds)
         external
         returns (uint256 validationData)
@@ -99,7 +99,7 @@ contract ERC4337Account is Receiver {
         require(_isAuthorizedCaller(msg.sender));
 
         bool valid;
-        try ACCOUNT_CONFIGURATION.verifyActor(address(this), userOpHash, userOp.signature) returns (uint8) {
+        try ACCOUNT_CONFIGURATION.authenticateActor(address(this), userOpHash, userOp.signature) returns (uint8) {
             valid = true;
         } catch {
             valid = false;
@@ -117,9 +117,9 @@ contract ERC4337Account is Receiver {
     //  ERC-1271
     // ══════════════════════════════════════════════
 
-    /// @notice Signature validation via AccountConfiguration's verifier infrastructure.
+    /// @notice Signature validation via AccountConfiguration's authenticator infrastructure.
     function isValidSignature(bytes32 hash, bytes calldata signature) external view returns (bytes4) {
-        try ACCOUNT_CONFIGURATION.verifyActor(address(this), hash, signature) returns (uint8) {
+        try ACCOUNT_CONFIGURATION.authenticateActor(address(this), hash, signature) returns (uint8) {
             return bytes4(0x1626ba7e);
         } catch {
             return bytes4(0xFFFFFFFF);

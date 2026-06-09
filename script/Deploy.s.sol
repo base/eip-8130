@@ -6,11 +6,11 @@ import {Script, console} from "forge-std/Script.sol";
 import {AccountConfiguration} from "../src/AccountConfiguration.sol";
 import {DefaultAccount} from "../src/accounts/DefaultAccount.sol";
 import {DefaultHighRateAccount} from "../src/accounts/DefaultHighRateAccount.sol";
-import {K1Verifier} from "../src/verifiers/K1Verifier.sol";
-import {P256Verifier} from "../src/verifiers/P256Verifier.sol";
-import {WebAuthnVerifier} from "../src/verifiers/WebAuthnVerifier.sol";
-import {DelegateVerifier} from "../src/verifiers/DelegateVerifier.sol";
-import {AlwaysValidVerifier} from "../src/verifiers/AlwaysValidVerifier.sol";
+import {K1Authenticator} from "../src/authenticators/K1Authenticator.sol";
+import {P256Authenticator} from "../src/authenticators/P256Authenticator.sol";
+import {WebAuthnAuthenticator} from "../src/authenticators/WebAuthnAuthenticator.sol";
+import {DelegateAuthenticator} from "../src/authenticators/DelegateAuthenticator.sol";
+import {AlwaysValidAuthenticator} from "../src/authenticators/AlwaysValidAuthenticator.sol";
 
 /// @dev Nick's deterministic deployment proxy — same address on every EVM chain.
 ///      Receives (salt ++ initCode) as calldata and deploys via CREATE2.
@@ -67,14 +67,14 @@ contract Deploy is Script {
             _addr(abi.encodePacked(type(DefaultHighRateAccount).creationCode, abi.encode(accountConfig)))
         );
         console.log("");
-        console.log("K1Verifier:            ", _addr(type(K1Verifier).creationCode));
-        console.log("P256Verifier:          ", _addr(type(P256Verifier).creationCode));
-        console.log("WebAuthnVerifier:      ", _addr(type(WebAuthnVerifier).creationCode));
+        console.log("K1Authenticator:            ", _addr(type(K1Authenticator).creationCode));
+        console.log("P256Authenticator:          ", _addr(type(P256Authenticator).creationCode));
+        console.log("WebAuthnAuthenticator:      ", _addr(type(WebAuthnAuthenticator).creationCode));
         console.log(
-            "DelegateVerifier:      ",
-            _addr(abi.encodePacked(type(DelegateVerifier).creationCode, abi.encode(accountConfig)))
+            "DelegateAuthenticator:      ",
+            _addr(abi.encodePacked(type(DelegateAuthenticator).creationCode, abi.encode(accountConfig)))
         );
-        console.log("AlwaysValidVerifier:   ", _addr(type(AlwaysValidVerifier).creationCode));
+        console.log("AlwaysValidAuthenticator:   ", _addr(type(AlwaysValidAuthenticator).creationCode));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -92,23 +92,24 @@ contract Deploy is Script {
         address defaultHighRate =
             _create2(abi.encodePacked(type(DefaultHighRateAccount).creationCode, abi.encode(accountConfig)));
 
-        // ── Verifiers ──
+        // ── Authenticators ──
 
-        address k1 = _create2(type(K1Verifier).creationCode);
-        address p256 = _create2(type(P256Verifier).creationCode);
-        address webAuthn = _create2(type(WebAuthnVerifier).creationCode);
-        address delegate = _create2(abi.encodePacked(type(DelegateVerifier).creationCode, abi.encode(accountConfig)));
-        address alwaysValid = _create2(type(AlwaysValidVerifier).creationCode);
+        address k1 = _create2(type(K1Authenticator).creationCode);
+        address p256 = _create2(type(P256Authenticator).creationCode);
+        address webAuthn = _create2(type(WebAuthnAuthenticator).creationCode);
+        address delegate =
+            _create2(abi.encodePacked(type(DelegateAuthenticator).creationCode, abi.encode(accountConfig)));
+        address alwaysValid = _create2(type(AlwaysValidAuthenticator).creationCode);
 
         console.log("AccountConfiguration:  ", accountConfig);
         console.log("DefaultAccount:        ", defaultAccount);
         console.log("DefaultHighRateAccount:", defaultHighRate);
         console.log("");
-        console.log("K1Verifier:            ", k1);
-        console.log("P256Verifier:          ", p256);
-        console.log("WebAuthnVerifier:      ", webAuthn);
-        console.log("DelegateVerifier:      ", delegate);
-        console.log("AlwaysValidVerifier:   ", alwaysValid);
+        console.log("K1Authenticator:            ", k1);
+        console.log("P256Authenticator:          ", p256);
+        console.log("WebAuthnAuthenticator:      ", webAuthn);
+        console.log("DelegateAuthenticator:      ", delegate);
+        console.log("AlwaysValidAuthenticator:   ", alwaysValid);
 
         vm.stopBroadcast();
     }

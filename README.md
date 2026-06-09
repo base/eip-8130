@@ -6,7 +6,7 @@ Reference implementation for [EIP-8130: Account Abstraction by Account Configura
 
 ## Overview
 
-EIP-8130 defines a new transaction type and onchain system contract that together provide account abstraction. Accounts configure authorized actors and verifiers in the system contract; the protocol validates transactions using onchain verifier contracts that implement `IVerifier.verify(hash, data)`.
+EIP-8130 defines a new transaction type and onchain system contract that together provide account abstraction. Accounts configure authorized actors and authenticators in the system contract; the protocol validates transactions using onchain authenticator contracts that implement `IAuthenticator.authenticate(hash, data)`.
 
 ## Contracts
 
@@ -16,17 +16,17 @@ EIP-8130 defines a new transaction type and onchain system contract that togethe
 | `DefaultAccount` | Default wallet implementation auto-delegated to EOAs |
 | `DefaultHighRateAccount` | Wallet variant that blocks ETH transfers when locked for higher mempool rate limits |
 
-### Verifiers
+### Authenticators
 
-The canonical EIP-8130 verifier set. `AlwaysValidVerifier` is an example/test helper, not a canonical verifier.
+The canonical EIP-8130 authenticator set. `AlwaysValidAuthenticator` is an example/test helper, not a canonical authenticator.
 
 | Contract | Algorithm |
 |----------|-----------|
-| `K1Verifier` | secp256k1 (ECDSA) |
-| `P256Verifier` | secp256r1 / P-256 (raw) |
-| `WebAuthnVerifier` | secp256r1 / P-256 (WebAuthn) |
-| `DelegateVerifier` | Delegated validation (1-hop) |
-| `AlwaysValidVerifier` | Always valid — keyless relay (example/testing only) |
+| `K1Authenticator` | secp256k1 (ECDSA) |
+| `P256Authenticator` | secp256r1 / P-256 (raw) |
+| `WebAuthnAuthenticator` | secp256r1 / P-256 (WebAuthn) |
+| `DelegateAuthenticator` | Delegated validation (1-hop) |
+| `AlwaysValidAuthenticator` | Always valid — keyless relay (example/testing only) |
 
 ## Usage
 

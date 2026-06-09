@@ -2,7 +2,7 @@
 pragma solidity ^0.8.30;
 
 import {IAccountConfiguration} from "./interfaces/IAccountConfiguration.sol";
-import {IVerifier} from "./interfaces/IVerifier.sol";
+import {IAuthenticator} from "./interfaces/IAuthenticator.sol";
 
 /// @notice Account Configuration system contract for EIP-8130.
 ///         Manages actor authorization, account creation, change sequencing, and account lock.
@@ -29,17 +29,17 @@ contract AccountConfiguration is IAccountConfiguration {
     /// @dev Typehash for the importAccount ERC-1271 signature, NOT compliant with EIP-712 to mitigate phishing
     ///      attacks. Initial actors are hashed structurally via ACTOR_TYPEHASH / ACTORCONFIG_TYPEHASH below.
     bytes32 public constant ACTOR_INITIALIZATION_TYPEHASH = keccak256(
-        "ActorInitialization(bytes32 salt,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address verifier,uint8 scope,uint48 expiry,uint8 policyType)"
+        "ActorInitialization(bytes32 salt,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint8 scope,uint48 expiry,uint8 policyType)"
     );
 
     /// @dev Per-actor typehash used to structurally hash each Actor within an ActorInitialization import digest.
     bytes32 public constant ACTOR_TYPEHASH = keccak256(
-        "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address verifier,uint8 scope,uint48 expiry,uint8 policyType)"
+        "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint8 scope,uint48 expiry,uint8 policyType)"
     );
 
     /// @dev Per-config typehash used to structurally hash an Actor's ActorConfig within an import digest.
     bytes32 public constant ACTORCONFIG_TYPEHASH =
-        keccak256("ActorConfig(address verifier,uint8 scope,uint48 expiry,uint8 policyType)");
+        keccak256("ActorConfig(address authenticator,uint8 scope,uint48 expiry,uint8 policyType)");
 
     /// @dev Typehash for signed actor changes, NOT compliant with EIP-712 to mitigate phishing attacks.
     bytes32 public constant SIGNED_ACTOR_CHANGES_TYPEHASH = keccak256(
@@ -90,12 +90,12 @@ contract AccountConfiguration is IAccountConfiguration {
     /// @notice Actor can change account actors
     uint8 public constant SCOPE_CHANGE_ACTORS = 0x08;
 
-    /// @dev Verifier namespace: 0=implicit EOA, 1=ecrecover EOA, 2..max-1=custom, max=revoked.
-    /// @notice Explicit verifier for native EOA signatures via ecrecover.
-    address public constant ECRECOVER_VERIFIER = address(1);
+    /// @dev Authenticator namespace: 0=implicit EOA, 1=ecrecover EOA, 2..max-1=custom, max=revoked.
+    /// @notice Explicit authenticator for native EOA signatures via ecrecover.
+    address public constant ECRECOVER_AUTHENTICATOR = address(1);
 
-    /// @notice Sentinel verifier written on self-actorId revocation to block implicit re-authorization.
-    address public constant REVOKED_VERIFIER = address(type(uint160).max);
+    /// @notice Sentinel authenticator written on self-actorId revocation to block implicit re-authorization.
+    address public constant REVOKED_AUTHENTICATOR = address(type(uint160).max);
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // STORAGE
@@ -183,7 +183,7 @@ contract AccountConfiguration is IAccountConfiguration {
     }
 
     /// @notice Apply actor changes (actor management only).
-    ///         Direct verification via verifier + actor_config, isValidSignature fallback for migration.
+    ///         Direct authentication via authenticator + actor_config, isValidSignature fallback for migration.
     function applySignedActorChanges(
         address account,
         uint64 chainId,
@@ -196,9 +196,9 @@ contract AccountConfiguration is IAccountConfiguration {
         uint64 sequence =
             chainId == 0 ? _accountState[account].multichainSequence++ : _accountState[account].localSequence++;
 
-        // Compute digest and verify
+        // Compute digest and authenticate
         bytes32 digest = _computeSignedActorChangesDigest(account, chainId, sequence, actorChanges);
-        uint8 scope = verifyActor(account, digest, auth);
+        uint8 scope = authenticateActor(account, digest, auth);
 
         // Require actor has scope to change actors (scope == 0 means unrestricted)
         require(scope == 0 || scope & SCOPE_CHANGE_ACTORS != 0);
@@ -250,28 +250,28 @@ contract AccountConfiguration is IAccountConfiguration {
     // VIEW FUNCTIONS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice Verify an account bytes signature in verifier(20) || data format.
+    /// @notice Authenticate an account bytes signature in authenticator(20) || data format.
     /// @dev ERC-1271-style boolean check: returns false on any failure (invalid signature, unknown/revoked actor,
-    ///      actorId not bound to the auth verifier, or an actor lacking SIGNATURE scope) rather than reverting.
-    ///      verifyActor reverts on authentication failure, so it is called externally and the revert is caught.
+    ///      actorId not bound to the auth authenticator, or an actor lacking SIGNATURE scope) rather than reverting.
+    ///      authenticateActor reverts on authentication failure, so it is called externally and the revert is caught.
     /// @return verified True if the signature is valid and the resolved actor may sign messages.
     function verifySignature(address account, bytes32 hash, bytes calldata signature)
         external
         view
         returns (bool verified)
     {
-        try this.verifyActor(account, hash, signature) returns (uint8 scope) {
+        try this.authenticateActor(account, hash, signature) returns (uint8 scope) {
             return scope == 0 || scope & SCOPE_SIGNER != 0;
         } catch {
             return false;
         }
     }
 
-    /// @notice Verify an account approved a hash using auth in verifier(20) || data format.
+    /// @notice Authenticate an account approved a hash using auth in authenticator(20) || data format.
     /// @return scope The scope of the verified actor (0x00 = unrestricted).
-    function verifyActor(address account, bytes32 hash, bytes calldata auth) public view returns (uint8 scope) {
+    function authenticateActor(address account, bytes32 hash, bytes calldata auth) public view returns (uint8 scope) {
         require(auth.length >= 20);
-        return _verify(account, hash, address(bytes20(auth[:20])), auth[20:]);
+        return _authenticate(account, hash, address(bytes20(auth[:20])), auth[20:]);
     }
 
     /// @notice Compute the counterfactual address for an account.
@@ -291,10 +291,10 @@ contract AccountConfiguration is IAccountConfiguration {
     // ----------------------------------------------------------------------------------------------------------------
 
     function isActor(address account, bytes32 actorId) public view returns (bool) {
-        address verifier = _actorConfig[actorId][account].verifier;
-        if (verifier >= ECRECOVER_VERIFIER && verifier != REVOKED_VERIFIER) return true;
+        address authenticator = _actorConfig[actorId][account].authenticator;
+        if (authenticator >= ECRECOVER_AUTHENTICATOR && authenticator != REVOKED_AUTHENTICATOR) return true;
         // Implicit EOA: self-actorId with truly empty slot
-        return verifier == address(0) && actorId == bytes32(bytes20(account));
+        return authenticator == address(0) && actorId == bytes32(bytes20(account));
     }
 
     function getActorConfig(address account, bytes32 actorId) external view returns (ActorConfig memory) {
@@ -375,8 +375,9 @@ contract AccountConfiguration is IAccountConfiguration {
             // Initial actors are always unrestricted owners: scope 0x00, no expiry, no policy. The InitialActor type
             // cannot express scope/expiry/policy, so these defaults are structural. Scoped keys and session-key
             // policies are added later via applySignedActorChanges.
-            ActorConfig memory config =
-                ActorConfig({verifier: initialActors[i].verifier, scope: 0, expiry: 0, policyType: POLICY_NONE});
+            ActorConfig memory config = ActorConfig({
+                authenticator: initialActors[i].authenticator, scope: 0, expiry: 0, policyType: POLICY_NONE
+            });
             _authorizeActor(account, initialActors[i].actorId, config, "");
         }
     }
@@ -385,9 +386,9 @@ contract AccountConfiguration is IAccountConfiguration {
         internal
         nonZero(account)
     {
-        require(config.verifier >= ECRECOVER_VERIFIER && config.verifier != REVOKED_VERIFIER);
-        address existing = _actorConfig[actorId][account].verifier;
-        require(existing == address(0) || existing == REVOKED_VERIFIER);
+        require(config.authenticator >= ECRECOVER_AUTHENTICATOR && config.authenticator != REVOKED_AUTHENTICATOR);
+        address existing = _actorConfig[actorId][account].authenticator;
+        require(existing == address(0) || existing == REVOKED_AUTHENTICATOR);
 
         // A policy-bearing actor must be scope-restricted and may not hold CONFIG scope: the policy gate only
         // covers SENDER-context calls, so a CONFIG-scoped (or unrestricted) key could authorize new, unrestricted
@@ -431,7 +432,7 @@ contract AccountConfiguration is IAccountConfiguration {
         require(isActor(account, actorId));
         if (actorId == bytes32(bytes20(account))) {
             _actorConfig[actorId][account] =
-                ActorConfig({verifier: REVOKED_VERIFIER, scope: 0, expiry: 0, policyType: POLICY_NONE});
+                ActorConfig({authenticator: REVOKED_AUTHENTICATOR, scope: 0, expiry: 0, policyType: POLICY_NONE});
         } else {
             delete _actorConfig[actorId][account];
         }
@@ -452,12 +453,12 @@ contract AccountConfiguration is IAccountConfiguration {
         return keccak256(abi.encodePacked(userSalt, _computeActorsCommitment(initialActors)));
     }
 
-    /// @dev Packed commitment over the initial actor set, 52 bytes per actor: actorId (32) || verifier (20).
+    /// @dev Packed commitment over the initial actor set, 52 bytes per actor: actorId (32) || authenticator (20).
     ///      Initial actors are always unrestricted owner keys, so no scope/expiry/policy fields participate.
     function _computeActorsCommitment(InitialActor[] calldata initialActors) internal pure returns (bytes32) {
         bytes memory packed;
         for (uint256 i; i < initialActors.length; i++) {
-            packed = abi.encodePacked(packed, initialActors[i].actorId, initialActors[i].verifier);
+            packed = abi.encodePacked(packed, initialActors[i].actorId, initialActors[i].authenticator);
         }
         return keccak256(packed);
     }
@@ -474,8 +475,9 @@ contract AccountConfiguration is IAccountConfiguration {
             // Imported actors are unrestricted owners: scope, expiry, and policyType are 0 and policyData is empty.
             // The digest retains the full Actor/ActorConfig typehash structure (zero-filled) for a single canonical
             // type, matching the importAccount signature payload in EIP-8130.
-            bytes32 configHash =
-                keccak256(abi.encode(ACTORCONFIG_TYPEHASH, initialActors[i].verifier, uint8(0), uint48(0), uint8(0)));
+            bytes32 configHash = keccak256(
+                abi.encode(ACTORCONFIG_TYPEHASH, initialActors[i].authenticator, uint8(0), uint48(0), uint8(0))
+            );
             actorHashes[i] = keccak256(abi.encode(ACTOR_TYPEHASH, initialActors[i].actorId, configHash, keccak256("")));
         }
 
@@ -519,44 +521,48 @@ contract AccountConfiguration is IAccountConfiguration {
     }
 
     // ----------------------------------------------------------------------------------------------------------------
-    // VERIFICATION
+    // AUTHENTICATION
     // ----------------------------------------------------------------------------------------------------------------
 
-    function _verify(address account, bytes32 hash, address verifier, bytes calldata data)
+    function _authenticate(address account, bytes32 hash, address authenticator, bytes calldata data)
         internal
         view
         returns (uint8 scope)
     {
-        if (verifier == address(0)) return _verifyImplicitEOA(account, hash, data);
-        if (verifier == ECRECOVER_VERIFIER) return _verifyEcrecover(account, hash, data);
-        require(verifier != REVOKED_VERIFIER);
+        if (authenticator == address(0)) return _authenticateImplicitEOA(account, hash, data);
+        if (authenticator == ECRECOVER_AUTHENTICATOR) return _authenticateEcrecover(account, hash, data);
+        require(authenticator != REVOKED_AUTHENTICATOR);
 
-        bytes32 actorId = IVerifier(verifier).verify(hash, data);
+        bytes32 actorId = IAuthenticator(authenticator).authenticate(hash, data);
         require(actorId != bytes32(0));
 
         ActorConfig memory config = _actorConfig[actorId][account];
-        require(config.verifier == verifier);
+        require(config.authenticator == authenticator);
         // Expiry is read from the same slot; an expired actor fails authentication. 0 = no expiry.
         require(config.expiry == 0 || block.timestamp <= config.expiry);
         return config.scope;
     }
 
     /// @dev Implicit EOA: native ecrecover, requires self-actorId slot to be empty.
-    function _verifyImplicitEOA(address account, bytes32 hash, bytes calldata data) internal view returns (uint8) {
-        require(_actorConfig[bytes32(bytes20(account))][account].verifier == address(0));
+    function _authenticateImplicitEOA(address account, bytes32 hash, bytes calldata data)
+        internal
+        view
+        returns (uint8)
+    {
+        require(_actorConfig[bytes32(bytes20(account))][account].authenticator == address(0));
         address recovered = _recoverSigner(hash, data);
         require(recovered == account);
         return 0;
     }
 
-    /// @dev Explicit EOA actor via native ecrecover verifier (address(1)).
-    function _verifyEcrecover(address account, bytes32 hash, bytes calldata data) internal view returns (uint8) {
+    /// @dev Explicit EOA actor via native ecrecover authenticator (address(1)).
+    function _authenticateEcrecover(address account, bytes32 hash, bytes calldata data) internal view returns (uint8) {
         address recovered = _recoverSigner(hash, data);
         require(recovered != address(0));
 
         bytes32 actorId = bytes32(bytes20(recovered));
         ActorConfig memory config = _actorConfig[actorId][account];
-        require(config.verifier == ECRECOVER_VERIFIER);
+        require(config.authenticator == ECRECOVER_AUTHENTICATOR);
         // Expiry is read from the same slot; an expired actor fails authentication. 0 = no expiry.
         require(config.expiry == 0 || block.timestamp <= config.expiry);
         return config.scope;

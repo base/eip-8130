@@ -109,7 +109,7 @@ contract AccountLockTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 IAccountConfiguration.ActorConfig({
-                    verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
             )
@@ -144,7 +144,7 @@ contract AccountLockTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 IAccountConfiguration.ActorConfig({
-                    verifier: address(k1Verifier), scope: 0x00, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
             )

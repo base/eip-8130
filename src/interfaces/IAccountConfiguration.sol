@@ -13,7 +13,7 @@ interface IAccountConfiguration {
     }
 
     struct ActorConfig {
-        address verifier;
+        address authenticator;
         uint8 scope;
         uint48 expiry; // Unix seconds; 0 = no expiry. Actor invalid once block.timestamp > expiry
         uint8 policyType; // 0x00 = none; any non-zero = gated to stored manager (value interpreted by the manager)
@@ -22,7 +22,7 @@ interface IAccountConfiguration {
     // Minimal actor used for account creation and import (always unrestricted: scope=0x00, policyType=0x00, no expiry).
     struct InitialActor {
         bytes32 actorId;
-        address verifier;
+        address authenticator;
     }
 
     struct Actor {
@@ -93,7 +93,7 @@ interface IAccountConfiguration {
         view
         returns (bool verified);
 
-    function verifyActor(address account, bytes32 hash, bytes calldata auth) external view returns (uint8 scope);
+    function authenticateActor(address account, bytes32 hash, bytes calldata auth) external view returns (uint8 scope);
 
     // Account creation
     function computeAddress(bytes32 userSalt, bytes calldata bytecode, InitialActor[] calldata initialActors)

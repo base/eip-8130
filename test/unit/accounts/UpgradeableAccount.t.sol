@@ -50,7 +50,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         actorId = bytes32(bytes20(signer));
 
         IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
-        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, verifier: address(k1Verifier)});
+        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, authenticator: address(k1Authenticator)});
 
         bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
         account = accountConfiguration.createAccount(bytes32(0), proxyBytecode, actors);
@@ -83,7 +83,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         bytes32 actorId = bytes32(bytes20(signer));
 
         IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
-        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, verifier: address(k1Verifier)});
+        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, authenticator: address(k1Authenticator)});
 
         bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
         address predicted = accountConfiguration.computeAddress(bytes32(0), proxyBytecode, actors);

@@ -12,8 +12,8 @@ import {Policy} from "./Policy.sol";
 /// @notice Minimal, self-contained reference policy manager for EIP-8130 actor policies.
 ///
 /// @dev Role in the EIP-8130 flow:
-///      - The manager is registered as an execution-enabled actor on the account (an actor whose verifier is
-///        `EXTERNAL_CALLER_VERIFIER`), so it may drive the account via `executeBatch`.
+///      - The manager is registered as an execution-enabled actor on the account (an actor whose authenticator is
+///        `EXTERNAL_CALLER_AUTHENTICATOR`), so it may drive the account via `executeBatch`.
 ///      - A restricted session-key actor is configured with a non-zero `policyType` and `policy_manager =
 ///        address(this)`, so the protocol gate forces every call that actor makes to land on this manager.
 ///      - When the session key transacts, the protocol dispatches its call *as the account*, so `msg.sender`

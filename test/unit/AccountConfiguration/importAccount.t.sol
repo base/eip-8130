@@ -26,13 +26,13 @@ contract ImportAccountTest is AccountConfigurationTest {
     // the full Actor/ActorConfig typehash structure; for imported (always unrestricted) actors the config fields are
     // zero and policyData is empty.
     bytes32 constant ACTOR_INITIALIZATION_TYPEHASH = keccak256(
-        "ActorInitialization(bytes32 salt,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address verifier,uint8 scope,uint48 expiry,uint8 policyType)"
+        "ActorInitialization(bytes32 salt,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint8 scope,uint48 expiry,uint8 policyType)"
     );
     bytes32 constant ACTOR_TYPEHASH = keccak256(
-        "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address verifier,uint8 scope,uint48 expiry,uint8 policyType)"
+        "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint8 scope,uint48 expiry,uint8 policyType)"
     );
     bytes32 constant ACTORCONFIG_TYPEHASH =
-        keccak256("ActorConfig(address verifier,uint8 scope,uint48 expiry,uint8 policyType)");
+        keccak256("ActorConfig(address authenticator,uint8 scope,uint48 expiry,uint8 policyType)");
 
     function _computeImportDigest(address account, IAccountConfiguration.InitialActor[] memory initialActors)
         internal
@@ -41,8 +41,9 @@ contract ImportAccountTest is AccountConfigurationTest {
     {
         bytes32[] memory actorHashes = new bytes32[](initialActors.length);
         for (uint256 i; i < initialActors.length; i++) {
-            bytes32 configHash =
-                keccak256(abi.encode(ACTORCONFIG_TYPEHASH, initialActors[i].verifier, uint8(0), uint48(0), uint8(0)));
+            bytes32 configHash = keccak256(
+                abi.encode(ACTORCONFIG_TYPEHASH, initialActors[i].authenticator, uint8(0), uint48(0), uint8(0))
+            );
             actorHashes[i] = keccak256(abi.encode(ACTOR_TYPEHASH, initialActors[i].actorId, configHash, keccak256("")));
         }
         return keccak256(
@@ -58,8 +59,9 @@ contract ImportAccountTest is AccountConfigurationTest {
         returns (IAccountConfiguration.InitialActor[] memory actors)
     {
         actors = new IAccountConfiguration.InitialActor[](1);
-        actors[0] =
-            IAccountConfiguration.InitialActor({actorId: bytes32(bytes20(signer)), verifier: address(k1Verifier)});
+        actors[0] = IAccountConfiguration.InitialActor({
+            actorId: bytes32(bytes20(signer)), authenticator: address(k1Authenticator)
+        });
     }
 
     function test_importAccount_validSignature() public {

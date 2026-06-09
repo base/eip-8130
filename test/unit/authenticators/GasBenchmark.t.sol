@@ -6,23 +6,23 @@ import {Test, console} from "forge-std/Test.sol";
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {IAccountConfiguration} from "../../../src/interfaces/IAccountConfiguration.sol";
 import {DefaultAccount} from "../../../src/accounts/DefaultAccount.sol";
-import {IVerifier} from "../../../src/interfaces/IVerifier.sol";
-import {K1Verifier} from "../../../src/verifiers/K1Verifier.sol";
-import {P256Verifier} from "../../../src/verifiers/P256Verifier.sol";
-import {WebAuthnVerifier} from "../../../src/verifiers/WebAuthnVerifier.sol";
-import {DelegateVerifier} from "../../../src/verifiers/DelegateVerifier.sol";
+import {IAuthenticator} from "../../../src/interfaces/IAuthenticator.sol";
+import {K1Authenticator} from "../../../src/authenticators/K1Authenticator.sol";
+import {P256Authenticator} from "../../../src/authenticators/P256Authenticator.sol";
+import {WebAuthnAuthenticator} from "../../../src/authenticators/WebAuthnAuthenticator.sol";
+import {DelegateAuthenticator} from "../../../src/authenticators/DelegateAuthenticator.sol";
 
-/// @dev Measures verifier gas under two conditions:
+/// @dev Measures authenticator gas under two conditions:
 ///      - Cold: first call (includes 2600 cold account access)
 ///      - Warm: second call (100 warm access)
 ///
 ///      Run:  forge test --match-contract GasBenchmarkTest -vv
 ///      Trace: forge test --match-contract GasBenchmarkTest -vvvv
 contract GasBenchmarkTest is Test {
-    K1Verifier k1;
-    P256Verifier p256;
-    WebAuthnVerifier webAuthn;
-    DelegateVerifier delegate;
+    K1Authenticator k1;
+    P256Authenticator p256;
+    WebAuthnAuthenticator webAuthn;
+    DelegateAuthenticator delegate;
     AccountConfiguration config;
     address defaultImpl;
 
@@ -34,11 +34,11 @@ contract GasBenchmarkTest is Test {
     bytes delegateData;
 
     function setUp() public {
-        k1 = new K1Verifier();
-        p256 = new P256Verifier();
-        webAuthn = new WebAuthnVerifier();
+        k1 = new K1Authenticator();
+        p256 = new P256Authenticator();
+        webAuthn = new WebAuthnAuthenticator();
         config = new AccountConfiguration();
-        delegate = new DelegateVerifier(address(config));
+        delegate = new DelegateAuthenticator(address(config));
         defaultImpl = address(new DefaultAccount(address(config)));
 
         testHash = keccak256("benchmark");
@@ -66,13 +66,13 @@ contract GasBenchmarkTest is Test {
             address signerA = vm.addr(pkA);
             bytes32 actorIdA = bytes32(bytes20(signerA));
             IAccountConfiguration.InitialActor[] memory actorsA = new IAccountConfiguration.InitialActor[](1);
-            actorsA[0] = IAccountConfiguration.InitialActor({actorId: actorIdA, verifier: address(k1)});
+            actorsA[0] = IAccountConfiguration.InitialActor({actorId: actorIdA, authenticator: address(k1)});
             bytes memory bytecode =
                 abi.encodePacked(hex"363d3d373d3d3d363d73", defaultImpl, hex"5af43d82803e903d91602b57fd5bf3");
             config.createAccount(bytes32("benchA"), bytecode, actorsA);
             address accountA = config.computeAddress(bytes32("benchA"), bytecode, actorsA);
             (uint8 v, bytes32 r, bytes32 s) = vm.sign(pkA, testHash);
-            // Nested auth: k1Verifier(20) || sig
+            // Nested auth: k1Authenticator(20) || sig
             bytes memory nestedAuth = abi.encodePacked(address(k1), r, s, v);
             delegateData = abi.encodePacked(accountA, nestedAuth);
         }
@@ -80,70 +80,70 @@ contract GasBenchmarkTest is Test {
 
     // ─── Individual tests (for -vvvv traces) ────────────────────────────────
 
-    function test_gasK1Verifier() public {
-        k1.verify(testHash, k1Sig);
+    function test_gasK1Authenticator() public {
+        k1.authenticate(testHash, k1Sig);
         uint256 gas0 = gasleft();
-        k1.verify(testHash, k1Sig);
+        k1.authenticate(testHash, k1Sig);
         uint256 gasUsed = gas0 - gasleft();
-        emit log_named_uint("K1Verifier.verify (warm)", gasUsed);
+        emit log_named_uint("K1Authenticator.authenticate (warm)", gasUsed);
     }
 
-    function test_gasP256Verifier() public {
-        p256.verify(testHash, p256Data);
+    function test_gasP256Authenticator() public {
+        p256.authenticate(testHash, p256Data);
         uint256 gas0 = gasleft();
-        p256.verify(testHash, p256Data);
+        p256.authenticate(testHash, p256Data);
         uint256 gasUsed = gas0 - gasleft();
-        emit log_named_uint("P256Verifier.verify (warm)", gasUsed);
+        emit log_named_uint("P256Authenticator.authenticate (warm)", gasUsed);
     }
 
-    function test_gasDelegateVerifier() public {
-        delegate.verify(testHash, delegateData);
+    function test_gasDelegateAuthenticator() public {
+        delegate.authenticate(testHash, delegateData);
         uint256 gas0 = gasleft();
-        delegate.verify(testHash, delegateData);
+        delegate.authenticate(testHash, delegateData);
         uint256 gasUsed = gas0 - gasleft();
-        emit log_named_uint("DelegateVerifier.verify (warm)", gasUsed);
+        emit log_named_uint("DelegateAuthenticator.authenticate (warm)", gasUsed);
     }
 
     // ─── Summary ─────────────────────────────────────────────────────────────
 
     function test_gasSummary() public {
         console.log("");
-        console.log("=== EIP-8130 Verifier Gas Benchmark ===");
+        console.log("=== EIP-8130 Authenticator Gas Benchmark ===");
         console.log("");
-        console.log("  Verifier                Cold      Warm     Precompile");
+        console.log("  Authenticator                Cold      Warm     Precompile");
         console.log("  ---------------------------------------------------------");
 
-        // K1 Verifier
+        // K1 Authenticator
         {
             uint256 g0 = gasleft();
-            k1.verify(testHash, k1Sig);
+            k1.authenticate(testHash, k1Sig);
             uint256 cold = g0 - gasleft();
             g0 = gasleft();
-            k1.verify(testHash, k1Sig);
+            k1.authenticate(testHash, k1Sig);
             uint256 warm = g0 - gasleft();
-            console.log("  K1Verifier              %s     %s    ecrecover (3000)", _pad(cold), _pad(warm));
+            console.log("  K1Authenticator              %s     %s    ecrecover (3000)", _pad(cold), _pad(warm));
         }
 
-        // P256 Verifier
+        // P256 Authenticator
         {
             uint256 g0 = gasleft();
-            p256.verify(testHash, p256Data);
+            p256.authenticate(testHash, p256Data);
             uint256 cold = g0 - gasleft();
             g0 = gasleft();
-            p256.verify(testHash, p256Data);
+            p256.authenticate(testHash, p256Data);
             uint256 warm = g0 - gasleft();
-            console.log("  P256Verifier            %s     %s    P256VERIFY (6900)", _pad(cold), _pad(warm));
+            console.log("  P256Authenticator            %s     %s    P256VERIFY (6900)", _pad(cold), _pad(warm));
         }
 
-        // Delegate Verifier
+        // Delegate Authenticator
         {
             uint256 g0 = gasleft();
-            delegate.verify(testHash, delegateData);
+            delegate.authenticate(testHash, delegateData);
             uint256 cold = g0 - gasleft();
             g0 = gasleft();
-            delegate.verify(testHash, delegateData);
+            delegate.authenticate(testHash, delegateData);
             uint256 warm = g0 - gasleft();
-            console.log("  DelegateVerifier        %s     %s    ecrecover (3000)", _pad(cold), _pad(warm));
+            console.log("  DelegateAuthenticator        %s     %s    ecrecover (3000)", _pad(cold), _pad(warm));
         }
 
         console.log("  ---------------------------------------------------------");
