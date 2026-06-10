@@ -62,23 +62,27 @@ contract ERC4337Account is Receiver {
     ///
     ///        abi.encode(
     ///          bytes32 magic,
-    ///          IAccountConfiguration.ActorChange[] changes,
-    ///          bytes changesAuth,   // authorizes `changes` (owner-signed digest)
-    ///          bytes opAuth         // authenticates this UserOperation
+    ///          SignedActorChanges[] changeSets, // each: (ActorChange[] changes, bytes auth)
+    ///          bytes opAuth                     // authenticates this UserOperation over userOpHash
     ///        )
     ///
     ///      Each `SignedActorChanges` set is applied in order during validation (e.g.
-    ///      rotating the controlling key to a P-256 actor). A non-empty, fully-applied
-    ///      batch authorizes the op: each set is signed by an authorized actor over a
-    ///      monotonic-sequence digest, so it cannot be forged and is one-time-use. No
-    ///      separate op-over-`userOpHash` signature is required — the final signed
-    ///      change in the chain is what authorizes the operation. Any other signature is
-    ///      treated as a plain authenticator blob (`authenticator || data`), preserving
-    ///      prior behaviour.
+    ///      rotating the controlling key to a P-256 actor). Each change is bound to this
+    ///      account + a monotonic sequence and authorized by the account's own key, so it
+    ///      is safe to apply. Applying the changes only mutates configuration — it does NOT
+    ///      authorize the op. The op is still authenticated as usual by `opAuth`, a plain
+    ///      authenticator blob (`authenticator || data`) that signs for this exact
+    ///      `userOpHash`, and may be produced by a key the changes just added/rotated to.
+    ///      Any signature without the magic prefix is itself treated as the plain `opAuth`
+    ///      blob signing `userOpHash`, preserving prior behaviour.
     ///
     ///      Wire format:
-    ///        abi.encode(bytes32 magic, SignedActorChanges[] changeSets)
+    ///        abi.encode(bytes32 magic, SignedActorChanges[] changeSets, bytes opAuth)
     bytes32 internal constant SIGNED_ACTOR_CHANGES_MAGIC = keccak256("ERC4337Account.signedActorChanges.v1");
+
+    /// @dev Elevated-scope bitflags, mirroring AccountConfiguration. A scope of 0x00 is an unrestricted owner.
+    uint8 internal constant SCOPE_SENDER = 0x02; // may initiate transactions (authorize the op's calls)
+    uint8 internal constant SCOPE_PAYER = 0x04; // may spend account funds paying for the op
 
     event CallerAuthorized(address indexed caller);
     event CallerRevoked(address indexed caller);
@@ -134,7 +138,7 @@ contract ERC4337Account is Receiver {
     {
         require(_isAuthorizedCaller(msg.sender));
 
-        validationData = _validateSignature(userOpHash, userOp.signature) ? 0 : 1;
+        validationData = _validateSignature(userOp, userOpHash, missingAccountFunds) ? 0 : 1;
 
         if (missingAccountFunds != 0) {
             assembly {
@@ -143,27 +147,41 @@ contract ERC4337Account is Receiver {
         }
     }
 
-    /// @notice Applies signed actor/owner changes carried by `signature`. When present,
-    ///         successfully applying them authorizes this op (no separate op signature).
-    /// @dev Changes are applied atomically with this op: if any change auth is invalid or
-    ///      its sequence is stale, validation fails and the EntryPoint rolls everything
-    ///      back. Each set is signed by an authorized actor over the
-    ///      `(account, chainId, sequence, actorChanges)` digest, so it cannot be forged
-    ///      and the monotonic sequence makes it one-time-use.
+    /// @notice Validates `userOp` by authenticating it as a plain authenticator blob over `userOpHash` and
+    ///         enforcing the verified actor's elevated scope and policy. A signature carrying signed actor/owner
+    ///         changes additionally applies them during validation before the op itself is authenticated.
+    /// @dev Signed-actor-changes path (signature begins with {SIGNED_ACTOR_CHANGES_MAGIC}): each set is applied
+    ///      during validation via `applySignedActorChanges` (which binds the change to THIS account + a monotonic
+    ///      sequence and enforces CONFIG scope) and an empty batch is rejected. Because each change is bound to
+    ///      `address(this)` and authorized by the account's own key, it is safe to apply and only ever mutates the
+    ///      sender's own config. The changes do NOT authorize the op; the trailing `opAuth` blob must still sign
+    ///      for this exact `userOpHash` as usual (and may be produced by a key the changes just added/rotated to).
+    ///      Applying changes mutates `AccountConfiguration` storage during validation, which violates ERC-7562
+    ///      mempool rules unless this account / factory is staked or granted an exception.
     ///
-    ///      An empty change-set batch is rejected (it would otherwise authorize any op).
-    ///
-    ///      Note: the change digest does not bind `userOpHash`/`callData`, so this path is
-    ///      intended for self-bundled (direct `handleOps`) submission. Applying changes
-    ///      also mutates `AccountConfiguration` storage during validation, which violates
-    ///      ERC-7562 mempool rules unless this account / factory is staked or granted an
-    ///      exception.
-    function _validateSignature(bytes32 userOpHash, bytes calldata signature) internal returns (bool) {
+    ///      Op authentication (both paths) enforces the verified actor's elevated scope and policy:
+    ///        - the actor must be unrestricted (scope 0x00) or hold {SCOPE_SENDER} to authorize the calls;
+    ///        - a self-funded op (`missingAccountFunds != 0`) additionally requires {SCOPE_PAYER};
+    ///        - a policy-gated actor (non-zero `policyType`) may only drive calls to its policy target, so
+    ///          `userOp.callData` must be an `executeBatch` whose every call targets that address.
+    function _validateSignature(PackedUserOperation calldata userOp, bytes32 userOpHash, uint256 missingAccountFunds)
+        internal
+        returns (bool)
+    {
+        bytes calldata signature = userOp.signature;
+        bytes memory opAuth = signature;
+
         if (signature.length >= 32 && bytes32(signature[:32]) == SIGNED_ACTOR_CHANGES_MAGIC) {
-            (, SignedActorChanges[] memory changeSets) = abi.decode(signature, (bytes32, SignedActorChanges[]));
+            SignedActorChanges[] memory changeSets;
+            (, changeSets, opAuth) = abi.decode(signature, (bytes32, SignedActorChanges[], bytes));
 
             if (changeSets.length == 0) return false;
 
+            // Each set is independently safe to apply: `applySignedActorChanges` binds the change digest to
+            // THIS account (`address(this)`) + a monotonic sequence and authenticates it against the account's
+            // own CONFIG-scoped actor. So the changes can only ever mutate the sender's config, authorized by
+            // the sender's own key — nobody can inject another account's changes here, and the sender (who
+            // pays) is always the one whose configuration is changed.
             for (uint256 i; i < changeSets.length; i++) {
                 try ACCOUNT_CONFIGURATION.applySignedActorChanges(
                     address(this), uint64(block.chainid), changeSets[i].changes, changeSets[i].auth
@@ -172,31 +190,63 @@ contract ERC4337Account is Receiver {
                     return false;
                 }
             }
-            return true;
         }
 
-        return _authenticate(userOpHash, signature);
+        // The op is always authenticated by a signature over `userOpHash` (which commits to `callData`):
+        // applying changes alone never authorizes the op. On the changes path this is the trailing `opAuth`
+        // blob, which may be produced by a key the changes just added/rotated to.
+        (bool valid, uint8 scope, address policyTarget) = _authenticate(userOpHash, opAuth);
+        if (!valid) return false;
+
+        // scope 0x00 = unrestricted owner; otherwise the actor must explicitly hold the required scopes.
+        if (scope != 0) {
+            if (scope & SCOPE_SENDER == 0) return false;
+            if (missingAccountFunds != 0 && scope & SCOPE_PAYER == 0) return false;
+        }
+
+        // A policy-gated actor may only direct the account's calls to its policy target.
+        if (policyTarget != address(0) && !_callsTargetOnly(userOp.callData, policyTarget)) return false;
+
+        return true;
     }
 
-    function _authenticate(bytes32 hash, bytes memory auth) internal view returns (bool valid) {
-        try ACCOUNT_CONFIGURATION.authenticateActor(address(this), hash, auth) returns (uint8) {
-            valid = true;
+    function _authenticate(bytes32 hash, bytes memory auth)
+        internal
+        view
+        returns (bool valid, uint8 scope, address policyTarget)
+    {
+        // policyType is reserved for future manager-defined semantics; the account gates on scope + target today.
+        try ACCOUNT_CONFIGURATION.authenticateActor(address(this), hash, auth) returns (uint8 s, uint8, address p) {
+            return (true, s, p);
         } catch {
-            valid = false;
+            return (false, 0, address(0));
         }
+    }
+
+    /// @dev True iff `callData` is a non-empty `executeBatch` whose every call targets `policyTarget`.
+    ///      Because `userOpHash` commits to `callData`, enforcing this during validation binds the gated
+    ///      actor's authorization to calls that stay within its policy target.
+    function _callsTargetOnly(bytes calldata callData, address policyTarget) internal pure returns (bool) {
+        if (callData.length < 4 || bytes4(callData[:4]) != ERC4337Account.executeBatch.selector) return false;
+        Call[] memory calls = abi.decode(callData[4:], (Call[]));
+        if (calls.length == 0) return false;
+        for (uint256 i; i < calls.length; i++) {
+            if (calls[i].target != policyTarget) return false;
+        }
+        return true;
     }
 
     // ══════════════════════════════════════════════
     //  ERC-1271
     // ══════════════════════════════════════════════
 
-    /// @notice Signature validation via AccountConfiguration's authenticator infrastructure.
+    /// @notice Signature validation via AccountConfiguration. Requires the verified actor to hold SIGNER
+    ///         scope (or be an unrestricted owner); `verifySignature` enforces this and never reverts.
     function isValidSignature(bytes32 hash, bytes calldata signature) external view returns (bytes4) {
-        try ACCOUNT_CONFIGURATION.authenticateActor(address(this), hash, signature) returns (uint8) {
-            return bytes4(0x1626ba7e);
-        } catch {
-            return bytes4(0xFFFFFFFF);
-        }
+        return
+            ACCOUNT_CONFIGURATION.verifySignature(address(this), hash, signature)
+                ? bytes4(0x1626ba7e)
+                : bytes4(0xFFFFFFFF);
     }
 
     // ══════════════════════════════════════════════

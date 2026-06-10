@@ -93,7 +93,15 @@ interface IAccountConfiguration {
         view
         returns (bool verified);
 
-    function authenticateActor(address account, bytes32 hash, bytes calldata auth) external view returns (uint8 scope);
+    /// @notice Authenticate `auth` (authenticator(20) || data) over `hash` and return the verified actor's
+    ///         authorization surface: scope plus its policy gate (sub-type byte and resolved target).
+    /// @return scope The scope of the verified actor (0x00 = unrestricted).
+    /// @return policyType The actor's policy sub-type byte (0x00 = none).
+    /// @return policyTarget The actor's policy gate target, or address(0) if ungated.
+    function authenticateActor(address account, bytes32 hash, bytes calldata auth)
+        external
+        view
+        returns (uint8 scope, uint8 policyType, address policyTarget);
 
     // Account creation
     function computeAddress(bytes32 userSalt, bytes calldata bytecode, InitialActor[] calldata initialActors)

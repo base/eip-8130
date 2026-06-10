@@ -14,7 +14,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         bytes32 hash = keccak256("authenticate me");
         bytes memory auth = _buildK1Auth(ACTOR_PK, hash);
 
-        uint8 scope = accountConfiguration.authenticateActor(account, hash, auth);
+        (uint8 scope,,) = accountConfiguration.authenticateActor(account, hash, auth);
         assertEq(scope, uint8(0x00));
     }
 
@@ -132,7 +132,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         bytes32 hash = keccak256("scoped authenticate");
         bytes memory auth = _buildK1Auth(401, hash);
 
-        uint8 scope = accountConfiguration.authenticateActor(account, hash, auth);
+        (uint8 scope,,) = accountConfiguration.authenticateActor(account, hash, auth);
         assertEq(scope, uint8(0x01));
     }
 
@@ -146,7 +146,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         bytes32 hash = keccak256("unrestricted");
         bytes memory auth = _buildK1Auth(401, hash);
 
-        uint8 scope = accountConfiguration.authenticateActor(account, hash, auth);
+        (uint8 scope,,) = accountConfiguration.authenticateActor(account, hash, auth);
         assertEq(scope, uint8(0x00));
     }
 
@@ -160,7 +160,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         bytes memory auth = _buildImplicitEOAAuth(eoaPk, hash);
 
         // No createAccount or importAccount — the EOA is implicitly authorized
-        uint8 scope = accountConfiguration.authenticateActor(eoa, hash, auth);
+        (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, hash, auth);
         assertEq(scope, 0);
     }
 
@@ -208,7 +208,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         _implicitAuthorizeActor(eoa, eoaPk, selfActorId, accountConfiguration.ECRECOVER_AUTHENTICATOR());
 
         bytes32 hash = keccak256("explicit self-actor");
-        uint8 scope = accountConfiguration.authenticateActor(eoa, hash, _buildExplicitEOAAuth(eoaPk, hash));
+        (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, hash, _buildExplicitEOAAuth(eoaPk, hash));
         assertEq(scope, 0);
 
         // Explicit self-actor registration disables implicit auth path.
@@ -225,7 +225,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         _implicitAuthorizeActor(eoa, eoaPk, bobActorId, accountConfiguration.ECRECOVER_AUTHENTICATOR());
 
         bytes32 hash = keccak256("explicit non-self actor");
-        uint8 scope = accountConfiguration.authenticateActor(eoa, hash, _buildExplicitEOAAuth(bobPk, hash));
+        (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, hash, _buildExplicitEOAAuth(bobPk, hash));
         assertEq(scope, 0);
     }
 
@@ -336,5 +336,64 @@ contract AuthenticateTest is AccountConfigurationTest {
         bytes memory auth = _buildImplicitEOAAuth(pk, digest);
 
         accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
+    }
+
+    function _authorizeGatedActor(
+        address account,
+        uint256 ownerPk,
+        bytes32 newActorId,
+        uint8 scope,
+        uint8 policyType,
+        address policyManager,
+        bytes32 commitment
+    ) internal {
+        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
+        changes[0] = IAccountConfiguration.ActorChange({
+            actorId: newActorId,
+            changeType: 0x01,
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    authenticator: address(k1Authenticator), scope: scope, expiry: 0, policyType: policyType
+                }),
+                abi.encodePacked(policyManager, commitment)
+            )
+        });
+
+        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
+        accountConfiguration.applySignedActorChanges(
+            account, uint64(block.chainid), changes, _buildK1Auth(ownerPk, digest)
+        );
+    }
+
+    /// @notice authenticate surfaces the actor's full authorization: scope, the reserved policyType byte, and the
+    ///         resolved policy target (the manager); the commitment stays an execution-time read.
+    function test_authenticate_returnsScopePolicyTypeAndTarget() public {
+        (address account,) = _createK1Account(ACTOR_PK);
+
+        uint256 sessionPk = 410;
+        bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
+        address policyManager = address(0xB0B);
+        _authorizeGatedActor(account, ACTOR_PK, sessionActorId, 0x02, 0x01, policyManager, keccak256("commit"));
+
+        bytes32 hash = keccak256("gated authenticate");
+        (uint8 scope, uint8 policyType, address policyTarget) =
+            accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
+
+        assertEq(scope, uint8(0x02));
+        assertEq(policyType, uint8(0x01));
+        assertEq(policyTarget, policyManager);
+    }
+
+    function test_authenticate_ungatedActorReturnsZeroPolicy() public {
+        (address account,) = _createK1Account(ACTOR_PK);
+
+        bytes32 hash = keccak256("ungated authenticate");
+        (uint8 scope, uint8 policyType, address policyTarget) =
+            accountConfiguration.authenticateActor(account, hash, _buildK1Auth(ACTOR_PK, hash));
+
+        assertEq(scope, uint8(0x00));
+        assertEq(policyType, uint8(0x00));
+        assertEq(policyTarget, address(0));
     }
 }

@@ -55,7 +55,7 @@ contract DefaultAccount is Receiver {
     /// @param signature Auth data in authenticator || data format
     /// @return magicValue 0x1626ba7e if valid, 0xffffffff otherwise
     function isValidSignature(bytes32 hash, bytes calldata signature) external view virtual returns (bytes4) {
-        try ACCOUNT_CONFIGURATION.authenticateActor(address(this), hash, signature) returns (uint8) {
+        try ACCOUNT_CONFIGURATION.authenticateActor(address(this), hash, signature) returns (uint8, uint8, address) {
             return bytes4(0x1626ba7e);
         } catch {
             return bytes4(0xFFFFFFFF);

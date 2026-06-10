@@ -198,7 +198,7 @@ contract AccountConfiguration is IAccountConfiguration {
 
         // Compute digest and authenticate
         bytes32 digest = _computeSignedActorChangesDigest(account, chainId, sequence, actorChanges);
-        uint8 scope = authenticateActor(account, digest, auth);
+        (uint8 scope,,) = authenticateActor(account, digest, auth);
 
         // Require actor has scope to change actors (scope == 0 means unrestricted)
         require(scope == 0 || scope & SCOPE_CHANGE_ACTORS != 0);
@@ -260,16 +260,30 @@ contract AccountConfiguration is IAccountConfiguration {
         view
         returns (bool verified)
     {
-        try this.authenticateActor(account, hash, signature) returns (uint8 scope) {
+        try this.authenticateActor(account, hash, signature) returns (uint8 scope, uint8, address) {
             return scope == 0 || scope & SCOPE_SIGNER != 0;
         } catch {
             return false;
         }
     }
 
-    /// @notice Authenticate an account approved a hash using auth in authenticator(20) || data format.
+    /// @notice Authenticate an account approved a hash using auth in authenticator(20) || data format, returning
+    ///         the verified actor's authorization surface so a consumer (e.g. an ERC-4337 account) can make a
+    ///         full authorization decision from a single call without re-deriving the actorId.
+    /// @dev Authorization is scope + policy, not scope alone. `scope` is the actor's capability set; `policyType`
+    ///      and `policyTarget` describe its policy gate. `policyType` is the per-actor policy sub-type byte —
+    ///      currently `0x00` (none) or non-zero (gated); its specific non-zero value is reserved for future,
+    ///      manager-defined semantics and is returned here so the return shape need not change when that lands.
+    ///      `policyTarget` is the resolved policy *manager* (never the signed commitment, which stays an
+    ///      execution-time read via getPolicy), or address(0) when ungated.
     /// @return scope The scope of the verified actor (0x00 = unrestricted).
-    function authenticateActor(address account, bytes32 hash, bytes calldata auth) public view returns (uint8 scope) {
+    /// @return policyType The actor's policy sub-type byte (0x00 = none).
+    /// @return policyTarget The actor's policy gate target, or address(0) if ungated.
+    function authenticateActor(address account, bytes32 hash, bytes calldata auth)
+        public
+        view
+        returns (uint8 scope, uint8 policyType, address policyTarget)
+    {
         require(auth.length >= 20);
         return _authenticate(account, hash, address(bytes20(auth[:20])), auth[20:]);
     }
@@ -527,7 +541,7 @@ contract AccountConfiguration is IAccountConfiguration {
     function _authenticate(address account, bytes32 hash, address authenticator, bytes calldata data)
         internal
         view
-        returns (uint8 scope)
+        returns (uint8 scope, uint8 policyType, address policyTarget)
     {
         if (authenticator == address(0)) return _authenticateImplicitEOA(account, hash, data);
         if (authenticator == ECRECOVER_AUTHENTICATOR) return _authenticateEcrecover(account, hash, data);
@@ -540,23 +554,28 @@ contract AccountConfiguration is IAccountConfiguration {
         require(config.authenticator == authenticator);
         // Expiry is read from the same slot; an expired actor fails authentication. 0 = no expiry.
         require(config.expiry == 0 || block.timestamp <= config.expiry);
-        return config.scope;
+        return (config.scope, config.policyType, _resolvePolicyTarget(account, actorId, config.policyType));
     }
 
-    /// @dev Implicit EOA: native ecrecover, requires self-actorId slot to be empty.
+    /// @dev Implicit EOA: native ecrecover, requires self-actorId slot to be empty. Implicit EOAs are always
+    ///      unrestricted owners with no policy.
     function _authenticateImplicitEOA(address account, bytes32 hash, bytes calldata data)
         internal
         view
-        returns (uint8)
+        returns (uint8, uint8, address)
     {
         require(_actorConfig[bytes32(bytes20(account))][account].authenticator == address(0));
         address recovered = _recoverSigner(hash, data);
         require(recovered == account);
-        return 0;
+        return (0, POLICY_NONE, address(0));
     }
 
     /// @dev Explicit EOA actor via native ecrecover authenticator (address(1)).
-    function _authenticateEcrecover(address account, bytes32 hash, bytes calldata data) internal view returns (uint8) {
+    function _authenticateEcrecover(address account, bytes32 hash, bytes calldata data)
+        internal
+        view
+        returns (uint8, uint8, address)
+    {
         address recovered = _recoverSigner(hash, data);
         require(recovered != address(0));
 
@@ -565,7 +584,15 @@ contract AccountConfiguration is IAccountConfiguration {
         require(config.authenticator == ECRECOVER_AUTHENTICATOR);
         // Expiry is read from the same slot; an expired actor fails authentication. 0 = no expiry.
         require(config.expiry == 0 || block.timestamp <= config.expiry);
-        return config.scope;
+        return (config.scope, config.policyType, _resolvePolicyTarget(account, actorId, config.policyType));
+    }
+
+    /// @dev Resolves an actor's policy gate target: address(0) when ungated (policyType == 0x00), otherwise the
+    ///      stored policy manager. Reads only the manager address, never the signed commitment, so it is safe to
+    ///      call during signature validation (e.g. ERC-4337 validateUserOp).
+    function _resolvePolicyTarget(address account, bytes32 actorId, uint8 policyType) internal view returns (address) {
+        if (policyType == POLICY_NONE) return address(0);
+        return _policyManager[actorId][account];
     }
 
     function _recoverSigner(bytes32 hash, bytes calldata data) internal pure returns (address recovered) {
