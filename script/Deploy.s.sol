@@ -6,6 +6,8 @@ import {Script, console} from "forge-std/Script.sol";
 import {AccountConfiguration} from "../src/AccountConfiguration.sol";
 import {DefaultAccount} from "../src/accounts/DefaultAccount.sol";
 import {DefaultHighRateAccount} from "../src/accounts/DefaultHighRateAccount.sol";
+import {ERC4337Account} from "../src/accounts/BackwardCompatibleERC4337Account.sol";
+import {UpgradeableAccount} from "../src/accounts/UpgradeableAccount.sol";
 import {K1Authenticator} from "../src/authenticators/K1Authenticator.sol";
 import {P256Authenticator} from "../src/authenticators/P256Authenticator.sol";
 import {WebAuthnAuthenticator} from "../src/authenticators/WebAuthnAuthenticator.sol";
@@ -17,14 +19,24 @@ import {AlwaysValidAuthenticator} from "../src/authenticators/AlwaysValidAuthent
 ///      https://github.com/Arachnid/deterministic-deployment-proxy
 address constant CREATE2_FACTORY = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
 
+/// @dev Canonical ERC-4337 v0.7 EntryPoint — same address on every chain.
+address constant ENTRY_POINT = 0x0000000071727De22E5E9d8BAf0edAc6f37da032;
+
 bytes32 constant SALT = bytes32(0);
 
-/// @notice Deploys the full EIP-8130 system.
-///         All addresses are canonical: determined solely by salt + bytecode,
-///         independent of the deployer's address or nonce.
+/// @notice Deploys the full EIP-8130 system: the AccountConfiguration system contract, every
+///         account implementation, and every canonical authenticator.
+///
+///         All addresses are canonical: determined solely by salt + bytecode, independent of the
+///         deployer's address or nonce, and identical on every chain.
 ///
 /// @dev Preview all addresses without deploying:
 ///      forge script script/Deploy.s.sol --sig "addresses()"
+///
+///      Deploy + verify (Blockscout, no API key needed):
+///      forge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast \
+///        --private-key $PRIVATE_KEY --verify \
+///        --verifier blockscout --verifier-url https://base-sepolia.blockscout.com/api/
 contract Deploy is Script {
     // ─────────────────────────────────────────────────────────────────────────
     // Helpers
@@ -47,6 +59,31 @@ contract Deploy is Script {
         require(ok && addr.code.length > 0, "create2 deployment failed");
     }
 
+    /// @dev Init code for each contract, given the resolved AccountConfiguration address.
+    function _accountConfigInit() internal pure returns (bytes memory) {
+        return type(AccountConfiguration).creationCode;
+    }
+
+    function _defaultAccountInit(address accountConfig) internal pure returns (bytes memory) {
+        return abi.encodePacked(type(DefaultAccount).creationCode, abi.encode(accountConfig));
+    }
+
+    function _defaultHighRateInit(address accountConfig) internal pure returns (bytes memory) {
+        return abi.encodePacked(type(DefaultHighRateAccount).creationCode, abi.encode(accountConfig));
+    }
+
+    function _erc4337AccountInit(address accountConfig) internal pure returns (bytes memory) {
+        return abi.encodePacked(type(ERC4337Account).creationCode, abi.encode(accountConfig, ENTRY_POINT));
+    }
+
+    function _upgradeableAccountInit(address accountConfig) internal pure returns (bytes memory) {
+        return abi.encodePacked(type(UpgradeableAccount).creationCode, abi.encode(accountConfig));
+    }
+
+    function _delegateAuthInit(address accountConfig) internal pure returns (bytes memory) {
+        return abi.encodePacked(type(DelegateAuthenticator).creationCode, abi.encode(accountConfig));
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Address preview  (no deployment)
     // ─────────────────────────────────────────────────────────────────────────
@@ -54,27 +91,23 @@ contract Deploy is Script {
     /// @notice Logs the canonical address of every contract in the system.
     ///         Addresses depend only on the compiler output and SALT — they are
     ///         the same on every chain and are known before deployment.
-    function addresses() public {
-        address accountConfig = _addr(type(AccountConfiguration).creationCode);
+    function addresses() public pure {
+        address accountConfig = _addr(_accountConfigInit());
 
-        console.log("AccountConfiguration:  ", accountConfig);
-        console.log(
-            "DefaultAccount:        ",
-            _addr(abi.encodePacked(type(DefaultAccount).creationCode, abi.encode(accountConfig)))
-        );
-        console.log(
-            "DefaultHighRateAccount:",
-            _addr(abi.encodePacked(type(DefaultHighRateAccount).creationCode, abi.encode(accountConfig)))
-        );
+        console.log("AccountConfiguration:    ", accountConfig);
         console.log("");
-        console.log("K1Authenticator:            ", _addr(type(K1Authenticator).creationCode));
-        console.log("P256Authenticator:          ", _addr(type(P256Authenticator).creationCode));
-        console.log("WebAuthnAuthenticator:      ", _addr(type(WebAuthnAuthenticator).creationCode));
-        console.log(
-            "DelegateAuthenticator:      ",
-            _addr(abi.encodePacked(type(DelegateAuthenticator).creationCode, abi.encode(accountConfig)))
-        );
-        console.log("AlwaysValidAuthenticator:   ", _addr(type(AlwaysValidAuthenticator).creationCode));
+        console.log("=== Account implementations ===");
+        console.log("DefaultAccount:          ", _addr(_defaultAccountInit(accountConfig)));
+        console.log("DefaultHighRateAccount:  ", _addr(_defaultHighRateInit(accountConfig)));
+        console.log("ERC4337Account:          ", _addr(_erc4337AccountInit(accountConfig)));
+        console.log("UpgradeableAccount:      ", _addr(_upgradeableAccountInit(accountConfig)));
+        console.log("");
+        console.log("=== Authenticators ===");
+        console.log("K1Authenticator:         ", _addr(type(K1Authenticator).creationCode));
+        console.log("P256Authenticator:       ", _addr(type(P256Authenticator).creationCode));
+        console.log("WebAuthnAuthenticator:   ", _addr(type(WebAuthnAuthenticator).creationCode));
+        console.log("DelegateAuthenticator:   ", _addr(_delegateAuthInit(accountConfig)));
+        console.log("AlwaysValidAuthenticator:", _addr(type(AlwaysValidAuthenticator).creationCode));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -84,32 +117,39 @@ contract Deploy is Script {
     function run() public {
         vm.startBroadcast();
 
-        // ── Core ──
+        // ── Core system contract ──
 
-        address accountConfig = _create2(type(AccountConfiguration).creationCode);
-        address defaultAccount =
-            _create2(abi.encodePacked(type(DefaultAccount).creationCode, abi.encode(accountConfig)));
-        address defaultHighRate =
-            _create2(abi.encodePacked(type(DefaultHighRateAccount).creationCode, abi.encode(accountConfig)));
+        address accountConfig = _create2(_accountConfigInit());
+
+        // ── Account implementations (singletons; every account proxy delegates to one) ──
+
+        address defaultAccount = _create2(_defaultAccountInit(accountConfig));
+        address defaultHighRate = _create2(_defaultHighRateInit(accountConfig));
+        address erc4337Account = _create2(_erc4337AccountInit(accountConfig));
+        address upgradeableAccount = _create2(_upgradeableAccountInit(accountConfig));
 
         // ── Authenticators ──
 
         address k1 = _create2(type(K1Authenticator).creationCode);
         address p256 = _create2(type(P256Authenticator).creationCode);
         address webAuthn = _create2(type(WebAuthnAuthenticator).creationCode);
-        address delegate =
-            _create2(abi.encodePacked(type(DelegateAuthenticator).creationCode, abi.encode(accountConfig)));
+        address delegate = _create2(_delegateAuthInit(accountConfig));
         address alwaysValid = _create2(type(AlwaysValidAuthenticator).creationCode);
 
-        console.log("AccountConfiguration:  ", accountConfig);
-        console.log("DefaultAccount:        ", defaultAccount);
-        console.log("DefaultHighRateAccount:", defaultHighRate);
+        console.log("AccountConfiguration:    ", accountConfig);
         console.log("");
-        console.log("K1Authenticator:            ", k1);
-        console.log("P256Authenticator:          ", p256);
-        console.log("WebAuthnAuthenticator:      ", webAuthn);
-        console.log("DelegateAuthenticator:      ", delegate);
-        console.log("AlwaysValidAuthenticator:   ", alwaysValid);
+        console.log("=== Account implementations ===");
+        console.log("DefaultAccount:          ", defaultAccount);
+        console.log("DefaultHighRateAccount:  ", defaultHighRate);
+        console.log("ERC4337Account:          ", erc4337Account);
+        console.log("UpgradeableAccount:      ", upgradeableAccount);
+        console.log("");
+        console.log("=== Authenticators ===");
+        console.log("K1Authenticator:         ", k1);
+        console.log("P256Authenticator:       ", p256);
+        console.log("WebAuthnAuthenticator:   ", webAuthn);
+        console.log("DelegateAuthenticator:   ", delegate);
+        console.log("AlwaysValidAuthenticator:", alwaysValid);
 
         vm.stopBroadcast();
     }
