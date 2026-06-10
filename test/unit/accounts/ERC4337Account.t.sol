@@ -217,6 +217,86 @@ contract ERC4337AccountTest is AccountConfigurationTest {
         assertEq(ENTRY_POINT.balance - epBalanceBefore, prefund);
     }
 
+    // ── validateUserOp: validation-phase actor changes ──
+
+    bytes32 constant SIGNED_ACTOR_CHANGES_MAGIC = keccak256("ERC4337Account.signedActorChanges.v1");
+
+    function _authorizeK1ActorChange(uint256 newPk)
+        internal
+        view
+        returns (IAccountConfiguration.ActorChange[] memory changes, bytes32 newActorId)
+    {
+        newActorId = bytes32(bytes20(vm.addr(newPk)));
+        changes = new IAccountConfiguration.ActorChange[](1);
+        changes[0] = IAccountConfiguration.ActorChange({
+            actorId: newActorId,
+            changeType: 0x01,
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    authenticator: address(k1Authenticator),
+                    scope: 0x00,
+                    expiry: 0,
+                    policyType: 0x00
+                }),
+                bytes("")
+            )
+        });
+    }
+
+    /// @notice A single UserOperation can rotate/add a key during validation and be
+    ///         authenticated by that brand-new key.
+    function test_validateUserOp_appliesSignedActorChanges() public {
+        (address account,) = _create4337Account(ACTOR_PK);
+
+        uint256 newPk = 101;
+        (IAccountConfiguration.ActorChange[] memory changes, bytes32 newActorId) =
+            _authorizeK1ActorChange(newPk);
+
+        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        bytes32 changeDigest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
+        bytes memory changesAuth = _buildK1Auth(ACTOR_PK, changeDigest);
+
+        // Authenticate the op with the *new* actor — proving it is usable within the
+        // same op it was added in.
+        bytes32 userOpHash = keccak256("rotate-and-go");
+        bytes memory opAuth = _buildK1Auth(newPk, userOpHash);
+
+        bytes memory signature = abi.encode(SIGNED_ACTOR_CHANGES_MAGIC, changes, changesAuth, opAuth);
+        PackedUserOperation memory userOp = _buildUserOp(account, signature);
+
+        vm.prank(ENTRY_POINT);
+        uint256 validationData = ERC4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0);
+
+        assertEq(validationData, 0);
+        assertTrue(accountConfiguration.isActor(account, newActorId));
+    }
+
+    /// @notice An invalid change authorization fails validation and applies nothing.
+    function test_validateUserOp_signedActorChanges_invalidChangeAuthFails() public {
+        (address account,) = _create4337Account(ACTOR_PK);
+
+        uint256 newPk = 101;
+        (IAccountConfiguration.ActorChange[] memory changes, bytes32 newActorId) =
+            _authorizeK1ActorChange(newPk);
+
+        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        bytes32 changeDigest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
+        // Signed by a non-owner key → change auth is invalid.
+        bytes memory changesAuth = _buildK1Auth(999, changeDigest);
+
+        bytes32 userOpHash = keccak256("op");
+        bytes memory opAuth = _buildK1Auth(ACTOR_PK, userOpHash);
+
+        bytes memory signature = abi.encode(SIGNED_ACTOR_CHANGES_MAGIC, changes, changesAuth, opAuth);
+        PackedUserOperation memory userOp = _buildUserOp(account, signature);
+
+        vm.prank(ENTRY_POINT);
+        uint256 validationData = ERC4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0);
+
+        assertEq(validationData, 1);
+        assertFalse(accountConfiguration.isActor(account, newActorId));
+    }
+
     // ── isValidSignature ──
 
     function test_isValidSignature_validK1() public {
