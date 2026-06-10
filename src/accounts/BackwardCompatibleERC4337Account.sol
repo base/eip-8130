@@ -137,12 +137,8 @@ contract ERC4337Account is Receiver {
     ///      self-bundled (direct `handleOps`) submission.
     function _validateSignature(bytes32 userOpHash, bytes calldata signature) internal returns (bool) {
         if (signature.length >= 32 && bytes32(signature[:32]) == SIGNED_ACTOR_CHANGES_MAGIC) {
-            (
-                ,
-                IAccountConfiguration.ActorChange[] memory changes,
-                bytes memory changesAuth,
-                bytes memory opAuth
-            ) = abi.decode(signature, (bytes32, IAccountConfiguration.ActorChange[], bytes, bytes));
+            (, IAccountConfiguration.ActorChange[] memory changes, bytes memory changesAuth, bytes memory opAuth) =
+                abi.decode(signature, (bytes32, IAccountConfiguration.ActorChange[], bytes, bytes));
 
             try ACCOUNT_CONFIGURATION.applySignedActorChanges(
                 address(this), uint64(block.chainid), changes, changesAuth

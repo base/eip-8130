@@ -233,10 +233,7 @@ contract ERC4337AccountTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 IAccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator),
-                    scope: 0x00,
-                    expiry: 0,
-                    policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
             )
@@ -249,8 +246,7 @@ contract ERC4337AccountTest is AccountConfigurationTest {
         (address account,) = _create4337Account(ACTOR_PK);
 
         uint256 newPk = 101;
-        (IAccountConfiguration.ActorChange[] memory changes, bytes32 newActorId) =
-            _authorizeK1ActorChange(newPk);
+        (IAccountConfiguration.ActorChange[] memory changes, bytes32 newActorId) = _authorizeK1ActorChange(newPk);
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 changeDigest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
@@ -276,8 +272,7 @@ contract ERC4337AccountTest is AccountConfigurationTest {
         (address account,) = _create4337Account(ACTOR_PK);
 
         uint256 newPk = 101;
-        (IAccountConfiguration.ActorChange[] memory changes, bytes32 newActorId) =
-            _authorizeK1ActorChange(newPk);
+        (IAccountConfiguration.ActorChange[] memory changes, bytes32 newActorId) = _authorizeK1ActorChange(newPk);
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 changeDigest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
