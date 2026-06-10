@@ -24,6 +24,16 @@ struct PackedUserOperation {
     bytes signature;
 }
 
+/// @notice One independently-signed batch of actor changes, mirroring a single
+///         `AccountConfiguration.applySignedActorChanges` call. Multiple sets may be
+///         supplied in a UserOperation signature and are applied in order (e.g. a set
+///         signed by the current owner, followed by a set signed by a key it just
+///         authorized).
+struct SignedActorChanges {
+    IAccountConfiguration.ActorChange[] changes;
+    bytes auth;
+}
+
 /// @notice Universal ERC-4337 + EIP-8130 account implementation.
 ///         Deployed behind ERC-1167 minimal proxy (45 bytes, deterministic pattern).
 ///
@@ -57,10 +67,13 @@ contract ERC4337Account is Receiver {
     ///          bytes opAuth         // authenticates this UserOperation
     ///        )
     ///
-    ///      The signed actor/owner changes are applied during validation (e.g.
-    ///      rotating the controlling key to a P-256 actor) before the UserOperation
-    ///      is authenticated with `opAuth`. Any other signature is treated as a plain
+    ///      Each `SignedActorChanges` set is applied in order during validation (e.g.
+    ///      rotating the controlling key to a P-256 actor) before the UserOperation is
+    ///      authenticated with `opAuth`. Any other signature is treated as a plain
     ///      authenticator blob (`authenticator || data`), preserving prior behaviour.
+    ///
+    ///      Wire format:
+    ///        abi.encode(bytes32 magic, SignedActorChanges[] changeSets, bytes opAuth)
     bytes32 internal constant SIGNED_ACTOR_CHANGES_MAGIC = keccak256("ERC4337Account.signedActorChanges.v1");
 
     event CallerAuthorized(address indexed caller);
@@ -137,16 +150,18 @@ contract ERC4337Account is Receiver {
     ///      self-bundled (direct `handleOps`) submission.
     function _validateSignature(bytes32 userOpHash, bytes calldata signature) internal returns (bool) {
         if (signature.length >= 32 && bytes32(signature[:32]) == SIGNED_ACTOR_CHANGES_MAGIC) {
-            (, IAccountConfiguration.ActorChange[] memory changes, bytes memory changesAuth, bytes memory opAuth) =
-                abi.decode(signature, (bytes32, IAccountConfiguration.ActorChange[], bytes, bytes));
+            (, SignedActorChanges[] memory changeSets, bytes memory opAuth) =
+                abi.decode(signature, (bytes32, SignedActorChanges[], bytes));
 
-            try ACCOUNT_CONFIGURATION.applySignedActorChanges(
-                address(this), uint64(block.chainid), changes, changesAuth
-            ) {
-                return _authenticate(userOpHash, opAuth);
-            } catch {
-                return false;
+            for (uint256 i; i < changeSets.length; i++) {
+                try ACCOUNT_CONFIGURATION.applySignedActorChanges(
+                    address(this), uint64(block.chainid), changeSets[i].changes, changeSets[i].auth
+                ) {}
+                catch {
+                    return false;
+                }
             }
+            return _authenticate(userOpHash, opAuth);
         }
 
         return _authenticate(userOpHash, signature);
