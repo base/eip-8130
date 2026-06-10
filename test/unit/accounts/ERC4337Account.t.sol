@@ -267,12 +267,9 @@ contract ERC4337AccountTest is AccountConfigurationTest {
         SignedActorChanges[] memory changeSets = new SignedActorChanges[](1);
         changeSets[0] = _signedSet(account, seq, ACTOR_PK, changes);
 
-        // Authenticate the op with the *new* actor — proving it is usable within the
-        // same op it was added in.
+        // Applying the signed change authorizes the op — no separate op signature.
         bytes32 userOpHash = keccak256("rotate-and-go");
-        bytes memory opAuth = _buildK1Auth(newPk, userOpHash);
-
-        bytes memory signature = abi.encode(SIGNED_ACTOR_CHANGES_MAGIC, changeSets, opAuth);
+        bytes memory signature = abi.encode(SIGNED_ACTOR_CHANGES_MAGIC, changeSets);
         PackedUserOperation memory userOp = _buildUserOp(account, signature);
 
         vm.prank(ENTRY_POINT);
@@ -284,7 +281,7 @@ contract ERC4337AccountTest is AccountConfigurationTest {
 
     /// @notice Multiple independently-signed change sets are applied in order: the
     ///         owner authorizes key B, then key B (now active) authorizes key C, all in
-    ///         one op authenticated by key C.
+    ///         one op. The final signed change in the chain authorizes the op.
     function test_validateUserOp_appliesMultipleSignedActorChangeSets() public {
         (address account,) = _create4337Account(ACTOR_PK);
 
@@ -300,9 +297,7 @@ contract ERC4337AccountTest is AccountConfigurationTest {
         changeSets[1] = _signedSet(account, seq + 1, pkB, changesC); // signed by B (active after set 0)
 
         bytes32 userOpHash = keccak256("chain-of-rotations");
-        bytes memory opAuth = _buildK1Auth(pkC, userOpHash);
-
-        bytes memory signature = abi.encode(SIGNED_ACTOR_CHANGES_MAGIC, changeSets, opAuth);
+        bytes memory signature = abi.encode(SIGNED_ACTOR_CHANGES_MAGIC, changeSets);
         PackedUserOperation memory userOp = _buildUserOp(account, signature);
 
         vm.prank(ENTRY_POINT);
@@ -326,9 +321,7 @@ contract ERC4337AccountTest is AccountConfigurationTest {
         changeSets[0] = _signedSet(account, seq, 999, changes);
 
         bytes32 userOpHash = keccak256("op");
-        bytes memory opAuth = _buildK1Auth(ACTOR_PK, userOpHash);
-
-        bytes memory signature = abi.encode(SIGNED_ACTOR_CHANGES_MAGIC, changeSets, opAuth);
+        bytes memory signature = abi.encode(SIGNED_ACTOR_CHANGES_MAGIC, changeSets);
         PackedUserOperation memory userOp = _buildUserOp(account, signature);
 
         vm.prank(ENTRY_POINT);
@@ -336,6 +329,21 @@ contract ERC4337AccountTest is AccountConfigurationTest {
 
         assertEq(validationData, 1);
         assertFalse(accountConfiguration.isActor(account, newActorId));
+    }
+
+    /// @notice An empty change-set batch is rejected (it must not authorize any op).
+    function test_validateUserOp_signedActorChanges_emptyBatchFails() public {
+        (address account,) = _create4337Account(ACTOR_PK);
+
+        SignedActorChanges[] memory changeSets = new SignedActorChanges[](0);
+        bytes32 userOpHash = keccak256("op");
+        bytes memory signature = abi.encode(SIGNED_ACTOR_CHANGES_MAGIC, changeSets);
+        PackedUserOperation memory userOp = _buildUserOp(account, signature);
+
+        vm.prank(ENTRY_POINT);
+        uint256 validationData = ERC4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0);
+
+        assertEq(validationData, 1);
     }
 
     // ── isValidSignature ──

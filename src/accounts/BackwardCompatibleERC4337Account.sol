@@ -68,12 +68,16 @@ contract ERC4337Account is Receiver {
     ///        )
     ///
     ///      Each `SignedActorChanges` set is applied in order during validation (e.g.
-    ///      rotating the controlling key to a P-256 actor) before the UserOperation is
-    ///      authenticated with `opAuth`. Any other signature is treated as a plain
-    ///      authenticator blob (`authenticator || data`), preserving prior behaviour.
+    ///      rotating the controlling key to a P-256 actor). A non-empty, fully-applied
+    ///      batch authorizes the op: each set is signed by an authorized actor over a
+    ///      monotonic-sequence digest, so it cannot be forged and is one-time-use. No
+    ///      separate op-over-`userOpHash` signature is required — the final signed
+    ///      change in the chain is what authorizes the operation. Any other signature is
+    ///      treated as a plain authenticator blob (`authenticator || data`), preserving
+    ///      prior behaviour.
     ///
     ///      Wire format:
-    ///        abi.encode(bytes32 magic, SignedActorChanges[] changeSets, bytes opAuth)
+    ///        abi.encode(bytes32 magic, SignedActorChanges[] changeSets)
     bytes32 internal constant SIGNED_ACTOR_CHANGES_MAGIC = keccak256("ERC4337Account.signedActorChanges.v1");
 
     event CallerAuthorized(address indexed caller);
@@ -139,19 +143,26 @@ contract ERC4337Account is Receiver {
         }
     }
 
-    /// @notice Applies any signed actor/owner changes carried by `signature`, then
-    ///         authenticates the UserOperation.
-    /// @dev When changes are present they are applied atomically with this op: if the
-    ///      change auth is invalid, the sequence is stale, or the subsequent op
-    ///      authentication fails, validation fails and the EntryPoint rolls everything
-    ///      back. Applying changes mutates `AccountConfiguration` storage during
-    ///      validation, which violates ERC-7562 mempool rules unless this account /
-    ///      factory is staked or granted an exception; it is always valid for
-    ///      self-bundled (direct `handleOps`) submission.
+    /// @notice Applies signed actor/owner changes carried by `signature`. When present,
+    ///         successfully applying them authorizes this op (no separate op signature).
+    /// @dev Changes are applied atomically with this op: if any change auth is invalid or
+    ///      its sequence is stale, validation fails and the EntryPoint rolls everything
+    ///      back. Each set is signed by an authorized actor over the
+    ///      `(account, chainId, sequence, actorChanges)` digest, so it cannot be forged
+    ///      and the monotonic sequence makes it one-time-use.
+    ///
+    ///      An empty change-set batch is rejected (it would otherwise authorize any op).
+    ///
+    ///      Note: the change digest does not bind `userOpHash`/`callData`, so this path is
+    ///      intended for self-bundled (direct `handleOps`) submission. Applying changes
+    ///      also mutates `AccountConfiguration` storage during validation, which violates
+    ///      ERC-7562 mempool rules unless this account / factory is staked or granted an
+    ///      exception.
     function _validateSignature(bytes32 userOpHash, bytes calldata signature) internal returns (bool) {
         if (signature.length >= 32 && bytes32(signature[:32]) == SIGNED_ACTOR_CHANGES_MAGIC) {
-            (, SignedActorChanges[] memory changeSets, bytes memory opAuth) =
-                abi.decode(signature, (bytes32, SignedActorChanges[], bytes));
+            (, SignedActorChanges[] memory changeSets) = abi.decode(signature, (bytes32, SignedActorChanges[]));
+
+            if (changeSets.length == 0) return false;
 
             for (uint256 i; i < changeSets.length; i++) {
                 try ACCOUNT_CONFIGURATION.applySignedActorChanges(
@@ -161,7 +172,7 @@ contract ERC4337Account is Receiver {
                     return false;
                 }
             }
-            return _authenticate(userOpHash, opAuth);
+            return true;
         }
 
         return _authenticate(userOpHash, signature);
