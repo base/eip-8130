@@ -11,7 +11,7 @@ import {AccountConfiguration} from "../AccountConfiguration.sol";
 ///         in normal EVM. On 8130 chains, the protocol handles DELEGATE directly
 ///         at the protocol level.
 ///
-///         Data layout: delegate_address (20) || nested_authenticator_type (1) || nested_data
+///         Data layout: delegate_address (20) || nested_authenticator (20) || nested_data
 contract DelegateAuthenticator is IAuthenticator {
     AccountConfiguration public immutable ACCOUNT_CONFIGURATION;
 
@@ -30,6 +30,7 @@ contract DelegateAuthenticator is IAuthenticator {
         address nestedAuthenticator = address(bytes20(nestedAuth[:20]));
         require(nestedAuthenticator != address(this));
 
-        ACCOUNT_CONFIGURATION.authenticateActor(delegate, hash, nestedAuth);
+        // Nested signer must have SIGNATURE scope on the delegate account.
+        require(ACCOUNT_CONFIGURATION.verifySignature(delegate, hash, nestedAuth));
     }
 }
