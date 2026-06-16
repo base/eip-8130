@@ -93,4 +93,92 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
         vm.expectRevert();
         delegateAuthenticator.authenticate(hash, doubleHopData);
     }
+
+    /// @dev EIP-8130 depth-1 constraint: the nested authenticator MUST NOT be the delegate authenticator.
+    ///      Exercises the explicit `nestedAuthenticator != address(this)` check, independent of any
+    ///      downstream actor-config lookup (no inner actor is registered).
+    function test_authenticate_revertsOnNestedAuthenticatorIsDelegate() public {
+        (address delegateAccount,) = _createK1Account(DELEGATE_PK);
+
+        bytes32 hash = keccak256("nested delegate test");
+
+        // Wire format: delegate_address(20) || nested_authenticator(=this)(20) || arbitrary bytes
+        bytes memory nestedAuth = abi.encodePacked(address(delegateAuthenticator), hex"00");
+        bytes memory data = abi.encodePacked(delegateAccount, nestedAuth);
+
+        vm.expectRevert();
+        delegateAuthenticator.authenticate(hash, data);
+    }
+
+    /// @dev EIP-8130 requires the nested check to run in B's SIGNATURE context. A nested actor on B
+    ///      whose scope lacks the SIGNATURE bit (e.g. PAYER-only) must not be usable to vouch for A.
+    function test_authenticate_revertsOnNestedActorWithoutSignerScope() public {
+        (address delegateAccount,) = _createK1Account(DELEGATE_PK);
+
+        // Authorize a PAYER-only second key on the delegate account; the owner key signs the change.
+        uint256 payerOnlyPk = 44;
+        bytes32 payerOnlyActorId = bytes32(bytes20(vm.addr(payerOnlyPk)));
+        _authorizeActorOnAccount(
+            delegateAccount, DELEGATE_PK, payerOnlyActorId, address(k1Authenticator), accountConfiguration.SCOPE_PAYER()
+        );
+
+        bytes32 hash = keccak256("payer-scope rejection test");
+        bytes memory payerSig = _signDigest(payerOnlyPk, hash);
+
+        bytes memory nestedAuth = abi.encodePacked(address(k1Authenticator), payerSig);
+        bytes memory data = abi.encodePacked(delegateAccount, nestedAuth);
+
+        vm.expectRevert();
+        delegateAuthenticator.authenticate(hash, data);
+    }
+
+    /// @dev Positive control: a nested actor explicitly authorized with SIGNATURE-only scope authenticates.
+    function test_authenticate_succeedsWithNestedActorSignerScope() public {
+        (address delegateAccount,) = _createK1Account(DELEGATE_PK);
+
+        uint256 signerOnlyPk = 45;
+        bytes32 signerOnlyActorId = bytes32(bytes20(vm.addr(signerOnlyPk)));
+        _authorizeActorOnAccount(
+            delegateAccount,
+            DELEGATE_PK,
+            signerOnlyActorId,
+            address(k1Authenticator),
+            accountConfiguration.SCOPE_SIGNER()
+        );
+
+        bytes32 hash = keccak256("signer-scope success test");
+        bytes memory signerSig = _signDigest(signerOnlyPk, hash);
+
+        bytes memory nestedAuth = abi.encodePacked(address(k1Authenticator), signerSig);
+        bytes memory data = abi.encodePacked(delegateAccount, nestedAuth);
+
+        bytes32 actorId = delegateAuthenticator.authenticate(hash, data);
+        assertEq(actorId, bytes32(bytes20(delegateAccount)));
+    }
+
+    function _authorizeActorOnAccount(
+        address account,
+        uint256 ownerPk,
+        bytes32 newActorId,
+        address authenticator,
+        uint8 scope
+    ) internal {
+        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
+        changes[0] = IAccountConfiguration.ActorChange({
+            actorId: newActorId,
+            changeType: 0x01,
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    authenticator: authenticator, scope: scope, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
+        });
+
+        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
+        bytes memory auth = _buildK1Auth(ownerPk, digest);
+
+        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
+    }
 }

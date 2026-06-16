@@ -30,6 +30,8 @@ contract DelegateAuthenticator is IAuthenticator {
         address nestedAuthenticator = address(bytes20(nestedAuth[:20]));
         require(nestedAuthenticator != address(this));
 
-        ACCOUNT_CONFIGURATION.authenticateActor(delegate, hash, nestedAuth);
+        // Nested check runs in B's SIGNATURE context per EIP-8130: verifySignature requires the resolved
+        // actor on `delegate` to satisfy SIGNATURE scope (unrestricted 0x00 or the 0x01 bit set).
+        require(ACCOUNT_CONFIGURATION.verifySignature(delegate, hash, nestedAuth));
     }
 }
