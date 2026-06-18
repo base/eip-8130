@@ -117,9 +117,12 @@ interface IAccountConfiguration {
 
     function getActorConfig(address account, bytes32 actorId) external view returns (ActorConfig memory);
 
-    /// @notice Resolves the policy gate target and signed commitment for an actor:
-    ///         0x00 -> (address(0), bytes32(0)); non-zero -> (manager, commitment).
-    function getPolicy(address account, bytes32 actorId) external view returns (address target, bytes32 commitment);
+    /// @notice Resolves an actor's policy sub-type, gate target, and signed commitment:
+    ///         0x00 -> (0x00, address(0), bytes32(0)); non-zero -> (policyType, manager, commitment).
+    function getPolicy(address account, bytes32 actorId)
+        external
+        view
+        returns (uint8 policyType, address target, bytes32 commitment);
 
     function getChangeSequences(address account) external view returns (ChangeSequences memory);
 

@@ -187,7 +187,8 @@ contract PolicyExamplesTest is AccountConfigurationTest {
         bytes32 actorId = _sessionActorId(9);
         _authorizePolicyActor(actorId, commitment);
 
-        (address target_, bytes32 signed) = accountConfiguration.getPolicy(account, actorId);
+        (uint8 policyType, address target_, bytes32 signed) = accountConfiguration.getPolicy(account, actorId);
+        assertEq(policyType, accountConfiguration.POLICY_GATED());
         assertEq(target_, address(manager));
         assertEq(signed, commitment);
     }

@@ -104,7 +104,7 @@ contract PolicyManager is ReentrancyGuard {
         commitment = _commitment(binding);
 
         // The account must have signed this exact commitment for this manager when authorizing `actorId`.
-        (address target, bytes32 signedCommitment) = ACCOUNT_CONFIGURATION.getPolicy(binding.account, actorId);
+        (, address target, bytes32 signedCommitment) = ACCOUNT_CONFIGURATION.getPolicy(binding.account, actorId);
         if (target != address(this) || signedCommitment != commitment) {
             revert CommitmentNotAuthorized(actorId, target, signedCommitment);
         }
@@ -137,7 +137,7 @@ contract PolicyManager is ReentrancyGuard {
         address account = msg.sender;
 
         // Re-read the live signed policy every call; the key must still be gated to this manager.
-        (address target, bytes32 commitment) = ACCOUNT_CONFIGURATION.getPolicy(account, actorId);
+        (, address target, bytes32 commitment) = ACCOUNT_CONFIGURATION.getPolicy(account, actorId);
         if (target != address(this) || commitment == bytes32(0)) {
             revert CommitmentNotAuthorized(actorId, target, commitment);
         }

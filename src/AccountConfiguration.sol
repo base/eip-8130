@@ -11,14 +11,23 @@ contract AccountConfiguration is IAccountConfiguration {
     // STRUCTS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @dev Packed into a single storage slot (24 bytes).
+    /// @dev Packed into a single storage slot (exactly 32 bytes).
     ///      localSequence > 0 doubles as the account initialized flag.
+    ///      The defaultEOA* fields are the inline home for the account's own secp256k1 ("self") key — the actor whose
+    ///      actorId is bytes32(bytes20(account)). When FLAG_REVOKE_DEFAULT_EOA is unset, a k1 signature recovering to
+    ///      the account authenticates with this inline config (all-zero = full owner; non-zero scope/expiry/policy =
+    ///      a scoped self key), resolved in a single SLOAD. The separate _actorConfig[self][account] slot is reserved
+    ///      for a *non-k1* self authenticator (e.g. a post-quantum verifier returning the self-actorId); the two
+    ///      homes are mutually exclusive (see _authorizeActor).
     struct AccountState {
         uint64 multichainSequence; // 8 bytes
         uint64 localSequence; // 8 bytes – also serves as initialized flag
         uint40 unlocksAt; // 5 bytes
         uint16 unlockDelay; // 2 bytes
         uint8 flags; // 1 byte – bitfield; bit 0 = default EOA revoked (see FLAG_REVOKE_DEFAULT_EOA)
+        uint8 defaultEOAScope; // 1 byte – inline self k1 scope (0 = full owner)
+        uint8 defaultEOAPolicyType; // 1 byte – inline self k1 policy sub-type (0 = none)
+        uint48 defaultEOAExpiry; // 6 bytes – inline self k1 expiry (Unix seconds; 0 = no expiry)
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -103,14 +112,14 @@ contract AccountConfiguration is IAccountConfiguration {
     // ACCOUNT STATE FLAGS
     // ----------------------------------------------------------------------------------------------------------------
 
-    /// @notice AccountState.flags bit: when set, the account's implicit default-EOA path is disabled. The default
-    ///         EOA is a K1_AUTHENTICATOR signature whose recovered signer equals the account; with no explicit
-    ///         config it returns a hardcoded full owner, gated on this flag alone (a single SLOAD).
-    ///         To prevent that full-owner result from bypassing an explicit, possibly scoped, self-actorId
-    ///         configuration, the invariant "an explicit self-actorId entry exists => this flag is set" must hold.
-    ///         The bit is set by createAccount/importAccount (disabled by default), by authorizing the self-actorId
-    ///         (the explicit entry supersedes the implicit path), and by revoking it. Once set it is not cleared:
-    ///         a managed self-actorId is operated through its explicit entry, not the zero-storage implicit path.
+    /// @notice AccountState.flags bit: when set, the account's secp256k1 ("self") key cannot authenticate — neither
+    ///         the implicit full owner nor an inline-scoped self. The self key is a K1_AUTHENTICATOR signature whose
+    ///         recovered signer equals the account; when this flag is unset, it authenticates with the inline
+    ///         AccountState.defaultEOA* config (all-zero = full owner), resolved in a single SLOAD. The flag is set
+    ///         by createAccount/importAccount (self k1 disabled by default — quantum-safe), by revoking the
+    ///         self-actorId, and by authorizing the self-actorId to a *non-k1* authenticator (mutual exclusion: the
+    ///         k1 self and a non-k1 self are never simultaneously live). Authorizing the self-actorId as a k1 actor
+    ///         clears it (re-enabling the inline self, possibly scoped).
     uint8 public constant FLAG_REVOKE_DEFAULT_EOA = 0x01;
 
     /// @dev secp256k1 half-order (n/2). Per EIP-2, only the lower-half `s` value is accepted to reject signature
@@ -162,16 +171,17 @@ contract AccountConfiguration is IAccountConfiguration {
     {
         account = computeAddress(userSalt, bytecode, initialActors);
 
-        // Initialize account actors (reverts naturally on duplicate via _authorizeActor)
-        _initializeAccount(account, initialActors);
-
         // Mark the account initialized: localSequence doubles as the initialized flag, so setting it to 1 blocks
         // importAccount (which requires localSequence == 0) from running against an already-created account.
         // Created accounts have contract code at a CREATE2 address, so the default EOA path (recovered == account)
         // is unreachable; disable it by default so the account is canonically ECDSA-owner-free (quantum-safe by
-        // default). This folds into the same slot write as localSequence, costing no extra SSTORE.
+        // default). This folds into the same slot write as localSequence, costing no extra SSTORE. Set *before*
+        // initializing actors so a self-actorId k1 initial actor can re-enable the inline self (parity with import).
         _accountState[account].localSequence = 1;
         _accountState[account].flags = FLAG_REVOKE_DEFAULT_EOA;
+
+        // Initialize account actors (reverts naturally on duplicate via _authorizeActor)
+        _initializeAccount(account, initialActors);
 
         // Create account code at the CREATE2 address derived from the packed actors commitment.
         bytes memory deploymentCode = _buildDeploymentCode(bytecode);
@@ -332,32 +342,58 @@ contract AccountConfiguration is IAccountConfiguration {
     // ----------------------------------------------------------------------------------------------------------------
 
     function isActor(address account, bytes32 actorId) public view returns (bool) {
-        // An explicit entry (self-actorId or any other actor) is always live.
+        // A populated _actorConfig entry is always live: any non-self actor, or a non-k1 ("PQ") self authenticator.
         if (_actorConfig[actorId][account].authenticator >= K1_AUTHENTICATOR) return true;
-        // No explicit entry: the self-actorId is the implicit default EOA, live unless disabled via the flag.
+        // No _actorConfig entry: the self-actorId's k1 key lives inline in AccountState, live unless the flag is set.
         if (actorId == bytes32(bytes20(account))) return !_isDefaultEoaRevoked(account);
         return false;
     }
 
-    /// @dev With an explicit entry, returns it verbatim (self-actorId or any other actor). Without one, the
-    ///      self-actorId is the implicit default EOA: a live one (flag unset) reports as a native ecrecover owner
-    ///      (scope 0); a disabled one — or any unknown actor — reports as the all-zero (empty) config. This keeps
-    ///      live-vs-disabled unambiguous without a sentinel.
+    /// @dev With a populated _actorConfig entry, returns it verbatim (any non-self actor, or a non-k1 self). For the
+    ///      self-actorId without such an entry, the k1 self lives inline in AccountState: a live one (flag unset)
+    ///      reports as a native ecrecover owner carrying its inline scope/expiry/policy (all-zero = full owner); a
+    ///      disabled one — or any unknown actor — reports as the all-zero (empty) config. This keeps live-vs-disabled
+    ///      unambiguous without a sentinel.
     function getActorConfig(address account, bytes32 actorId) external view returns (ActorConfig memory) {
         ActorConfig memory config = _actorConfig[actorId][account];
         if (config.authenticator != address(0)) return config;
         if (actorId == bytes32(bytes20(account)) && !_isDefaultEoaRevoked(account)) {
-            return ActorConfig({authenticator: K1_AUTHENTICATOR, scope: 0, expiry: 0, policyType: POLICY_NONE});
+            AccountState storage st = _accountState[account];
+            return ActorConfig({
+                authenticator: K1_AUTHENTICATOR,
+                scope: st.defaultEOAScope,
+                expiry: st.defaultEOAExpiry,
+                policyType: st.defaultEOAPolicyType
+            });
         }
         return config;
     }
 
-    /// @notice Resolves the policy gate target and signed commitment for an actor.
-    /// @dev Enforcement is at execution: this resolves where a policy-bearing actor may call and the commitment a
-    ///      target validates presented parameters against. 0x00 -> (0, 0); non-zero -> (manager, commitment).
-    function getPolicy(address account, bytes32 actorId) external view returns (address target, bytes32 commitment) {
-        if (_actorConfig[actorId][account].policyType == POLICY_NONE) return (address(0), bytes32(0));
-        return (_policyManager[actorId][account], _policyCommitment[actorId][account]);
+    /// @notice Resolves an actor's policy sub-type, gate target, and signed commitment.
+    /// @dev Enforcement is at execution: this resolves the actor's policy sub-type, where a policy-bearing actor may
+    ///      call, and the commitment a target validates presented parameters against. 0x00 -> (0, 0, 0); non-zero ->
+    ///      (policyType, manager, commitment). The policy manager/commitment are keyed by actorId, so the inline k1
+    ///      self and a non-k1 self share that keyspace; mutual exclusion guarantees at most one is live, so the
+    ///      active gate is read by actorId.
+    /// @return policyType The actor's policy sub-type byte (0x00 = none).
+    /// @return target The actor's policy gate target (manager), or address(0) if ungated.
+    /// @return commitment The actor's signed policy commitment, or bytes32(0) if ungated.
+    function getPolicy(address account, bytes32 actorId)
+        external
+        view
+        returns (uint8 policyType, address target, bytes32 commitment)
+    {
+        ActorConfig storage stored = _actorConfig[actorId][account];
+        if (stored.authenticator != address(0)) {
+            policyType = stored.policyType;
+        } else if (actorId == bytes32(bytes20(account)) && !_isDefaultEoaRevoked(account)) {
+            // Inline k1 self: policy lives in AccountState's policyType byte, manager/commitment keyed by actorId.
+            policyType = _accountState[account].defaultEOAPolicyType;
+        } else {
+            return (POLICY_NONE, address(0), bytes32(0));
+        }
+        if (policyType == POLICY_NONE) return (POLICY_NONE, address(0), bytes32(0));
+        return (policyType, _policyManager[actorId][account], _policyCommitment[actorId][account]);
     }
 
     function getChangeSequences(address account) external view returns (ChangeSequences memory) {
@@ -428,27 +464,59 @@ contract AccountConfiguration is IAccountConfiguration {
         nonZero(account)
     {
         require(config.authenticator >= K1_AUTHENTICATOR);
-        address existing = _actorConfig[actorId][account].authenticator;
-        require(existing == address(0));
 
         // A policy-bearing actor must be scope-restricted and may not hold CONFIG scope: the policy gate only
         // covers SENDER-context calls, so a CONFIG-scoped (or unrestricted) key could authorize new, unrestricted
-        // actors and escape its policy entirely.
+        // actors and escape its policy entirely. Applies to every home (inline self, non-k1 self, any other actor).
         if (config.policyType != POLICY_NONE) {
             require(config.scope != 0 && config.scope & SCOPE_CHANGE_ACTORS == 0);
         }
 
-        _actorConfig[actorId][account] = config;
-
-        // Slice and store the signed policy by policyType. The commitment is opaque to the protocol.
+        // Slice the signed policy by policyType. The commitment is opaque to the protocol.
         (address manager, bytes32 commitment) = _slicePolicy(config.policyType, policyData);
+
+        if (actorId == bytes32(bytes20(account))) {
+            // Self-actorId is routed by authenticator type and the two homes are mutually exclusive: the k1 self
+            // lives inline in AccountState; a non-k1 ("PQ") self lives in _actorConfig. Authorizing one clears the
+            // other so a k1 and a non-k1 self are never simultaneously live.
+            AccountState storage st = _accountState[account];
+            if (config.authenticator == K1_AUTHENTICATOR) {
+                // Re-authorize guard: only from a disabled self (flag set) or the unconfigured implicit owner
+                // (all-zero inline). Reconfiguring a live, non-trivially-scoped self requires revoking it first.
+                require(
+                    _isDefaultEoaRevoked(account)
+                        || (st.defaultEOAScope == 0 && st.defaultEOAPolicyType == 0 && st.defaultEOAExpiry == 0)
+                );
+                delete _actorConfig[actorId][account]; // mutual exclusion: drop any non-k1 self
+                st.defaultEOAScope = config.scope;
+                st.defaultEOAPolicyType = config.policyType;
+                st.defaultEOAExpiry = config.expiry;
+                st.flags &= ~FLAG_REVOKE_DEFAULT_EOA; // enable the inline self
+            } else {
+                require(_actorConfig[actorId][account].authenticator == address(0));
+                _actorConfig[actorId][account] = config;
+                // Mutual exclusion: disable and clear the inline k1 self.
+                st.flags |= FLAG_REVOKE_DEFAULT_EOA;
+                st.defaultEOAScope = 0;
+                st.defaultEOAPolicyType = 0;
+                st.defaultEOAExpiry = 0;
+            }
+            // Policy manager/commitment are keyed by actorId (shared keyspace across both self homes): reset, then
+            // set for the incoming config.
+            delete _policyCommitment[actorId][account];
+            delete _policyManager[actorId][account];
+            if (commitment != bytes32(0)) _policyCommitment[actorId][account] = commitment;
+            if (manager != address(0)) _policyManager[actorId][account] = manager;
+
+            emit ActorAuthorized(account, actorId, config, manager, commitment);
+            return;
+        }
+
+        // Non-self actor: single _actorConfig home.
+        require(_actorConfig[actorId][account].authenticator == address(0));
+        _actorConfig[actorId][account] = config;
         if (commitment != bytes32(0)) _policyCommitment[actorId][account] = commitment;
         if (manager != address(0)) _policyManager[actorId][account] = manager;
-
-        // The self-actorId may be configured like any other actor (e.g. to scope the account's own key). Doing so
-        // disables the implicit default-EOA path so its hardcoded full-owner result can never bypass this
-        // (possibly scoped) explicit configuration. Maintains the entry-exists => flag-set invariant.
-        if (actorId == bytes32(bytes20(account))) _accountState[account].flags |= FLAG_REVOKE_DEFAULT_EOA;
 
         emit ActorAuthorized(account, actorId, config, manager, commitment);
     }
@@ -480,9 +548,15 @@ contract AccountConfiguration is IAccountConfiguration {
         // Policy state is keyed by (account, actorId) and cleared exactly on revoke.
         delete _policyCommitment[actorId][account];
         delete _policyManager[actorId][account];
-        // For the self-actorId, also set the flag: deleting the explicit entry would otherwise re-expose the
-        // implicit full-owner path. This keeps the default EOA disabled (entry-exists => flag-set).
-        if (actorId == bytes32(bytes20(account))) _accountState[account].flags |= FLAG_REVOKE_DEFAULT_EOA;
+        // For the self-actorId, disable the k1 self: set the flag (so the inline full-owner path stays off) and
+        // clear the inline config. Covers both homes — a non-k1 self was deleted above. Never auto-resurrected.
+        if (actorId == bytes32(bytes20(account))) {
+            AccountState storage st = _accountState[account];
+            st.flags |= FLAG_REVOKE_DEFAULT_EOA;
+            st.defaultEOAScope = 0;
+            st.defaultEOAPolicyType = 0;
+            st.defaultEOAExpiry = 0;
+        }
         emit ActorRevoked(account, actorId);
     }
 
@@ -586,12 +660,12 @@ contract AccountConfiguration is IAccountConfiguration {
     }
 
     /// @dev The single secp256k1 ("K1") path. Recovers the signer (EIP-2 enforced), then resolves the actor:
-    ///        - signer == account && default EOA live  -> implicit full owner (one SLOAD: the flag);
-    ///        - otherwise the signer's actorId must carry an explicit K1 config (scoped self, re-enabled owner, or
-    ///          any other k1 actor).
-    ///      Flag-first ordering keeps the common implicit-owner and other-actor paths at a single SLOAD; only a
-    ///      managed self key (flag set + explicit entry) costs two. The "explicit self entry => flag set" invariant
-    ///      guarantees a live (flag-unset) self never has a config to shadow, so the full-owner short-circuit is safe.
+    ///        - signer == account -> the inline self config in AccountState (one SLOAD): the flag gates the whole
+    ///          key (set => revert), and when live the scope/policy/expiry come from the inline fields (all-zero =
+    ///          full owner; non-zero = a scoped self). A non-k1 ("PQ") self is unreachable here by construction (it
+    ///          requires its own authenticator), and mutual exclusion keeps the flag set whenever one is live.
+    ///        - otherwise the signer's actorId must carry an explicit K1 config in _actorConfig (any other k1 actor).
+    ///      Both the common self and other-actor paths cost a single SLOAD.
     function _authenticateK1(address account, bytes32 hash, bytes calldata data)
         internal
         view
@@ -600,7 +674,16 @@ contract AccountConfiguration is IAccountConfiguration {
         address recovered = _recoverSigner(hash, data);
         require(recovered != address(0));
 
-        if (recovered == account && !_isDefaultEoaRevoked(account)) return (0, POLICY_NONE, address(0));
+        if (recovered == account) {
+            // Inline self: a single SLOAD resolves the whole key. The flag disables it entirely; otherwise the
+            // inline scope/policy/expiry govern (all-zero = full owner).
+            AccountState storage st = _accountState[account];
+            require((st.flags & FLAG_REVOKE_DEFAULT_EOA) == 0);
+            require(st.defaultEOAExpiry == 0 || block.timestamp <= st.defaultEOAExpiry);
+            uint8 policyType = st.defaultEOAPolicyType;
+            return
+                (st.defaultEOAScope, policyType, _resolvePolicyTarget(account, bytes32(bytes20(account)), policyType));
+        }
 
         bytes32 actorId = bytes32(bytes20(recovered));
         ActorConfig memory config = _actorConfig[actorId][account];
