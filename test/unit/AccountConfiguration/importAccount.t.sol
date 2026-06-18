@@ -115,6 +115,41 @@ contract ImportAccountTest is AccountConfigurationTest {
         accountConfiguration.importAccount(account, actors, "");
     }
 
+    function test_importAccount_revertsAfterGlobalChange() public {
+        // A code-less 8130 EOA can apply a *global* (chainId 0) actor change signed by its implicit default EOA.
+        // That advances the multichain channel while localSequence stays 0. Import must still be blocked: the gate
+        // now requires *both* sequence channels empty, so an account that has already established 8130 state on the
+        // multichain channel cannot be bootstrapped via import (which would re-open the old key).
+        uint256 eoaPk = 700;
+        address eoa = vm.addr(eoaPk);
+        address device = vm.addr(701);
+
+        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
+        changes[0] = IAccountConfiguration.ActorChange({
+            actorId: bytes32(bytes20(device)),
+            changeType: 0x01,
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
+        });
+        uint64 seq = accountConfiguration.getChangeSequences(eoa).multichain;
+        bytes32 changeDigest = _computeActorChangeBatchDigest(eoa, 0, seq, changes);
+        accountConfiguration.applySignedActorChanges(eoa, 0, changes, _buildK1Auth(eoaPk, changeDigest));
+
+        // Multichain channel advanced; local channel untouched.
+        assertEq(accountConfiguration.getChangeSequences(eoa).multichain, 1);
+        assertEq(accountConfiguration.getChangeSequences(eoa).local, 0);
+
+        // Import is gated even though localSequence == 0, because the multichain channel is non-zero.
+        IAccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(device);
+        bytes32 importDigest = _computeImportDigest(eoa, actors);
+        vm.expectRevert();
+        accountConfiguration.importAccount(eoa, actors, _buildK1Auth(eoaPk, importDigest));
+    }
+
     function test_importAccount_revertsWhenLocked() public {
         uint256 ownerPk = 700;
         MockERC1271Wallet wallet = new MockERC1271Wallet(vm.addr(ownerPk));

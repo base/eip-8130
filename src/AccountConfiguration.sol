@@ -190,7 +190,8 @@ contract AccountConfiguration is IAccountConfiguration {
         external
         onlyUnlocked(account)
     {
-        require(_accountState[account].localSequence == 0);
+        // Import is a one-time bootstrap for accounts with no 8130 state yet
+        require(_accountState[account].localSequence == 0 && _accountState[account].multichainSequence == 0);
         _accountState[account].localSequence = 1;
 
         bytes32 digest = _computeImportDigest(account, initialActors);
