@@ -42,6 +42,18 @@ forge build
 forge test
 ```
 
+### Format
+
+```shell
+forge fmt
+```
+
+CI runs `forge fmt --check`, so commits with unformatted Solidity will fail. A pre-commit hook in `.githooks/` runs the same check locally. Enable it once per clone:
+
+```shell
+git config core.hooksPath .githooks
+```
+
 ## License
 
 MIT

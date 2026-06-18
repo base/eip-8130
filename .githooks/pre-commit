@@ -1,0 +1,18 @@
+#!/bin/sh
+# Pre-commit hook: enforce `forge fmt` so commits don't fail CI's `forge fmt --check`
+# step (see .github/workflows/test.yml). Enable for your clone with:
+#
+#     git config core.hooksPath .githooks
+#
+if ! command -v forge >/dev/null 2>&1; then
+    echo "pre-commit: 'forge' not found on PATH; skipping fmt check." >&2
+    echo "            Install Foundry (https://getfoundry.sh) to enable it." >&2
+    exit 0
+fi
+
+if ! forge fmt --check; then
+    echo >&2
+    echo "pre-commit: Solidity formatting issues detected (see diff above)." >&2
+    echo "            Run 'forge fmt', then re-stage and commit." >&2
+    exit 1
+fi
