@@ -9,12 +9,14 @@ import {IBootstrap} from "./IBootstrap.sol";
 ///         Flow (atomic, one tx frame):
 ///           1. `SETDELEGATE(salt, implementation)` places `0xef0100 || implementation` at a deterministic
 ///              address `keccak256(0xef0100 || factory || salt)[12:]`.
-///           2. `bootstrap(actorsHash)` primes the implementation's bootstrap state in the account's storage.
-///              `actorsHash` is the inner hash of EIP-8130's `ActorInitialization` digest and also feeds the
-///              SETDELEGATE salt, so the address binds to the actor set.
-///           3. `AccountConfiguration.importAccount(account, initialActors, "")` registers the actors.
-///              The ERC-1271 callback lands at the implementation's bootstrap branch, which validates the
-///              presented `ActorInitialization` digest against the primed `actorsHash`.
+///           2. `account.bootstrap(actorsHash, initialActors)` runs the implementation in the account's storage:
+///              it primes a transient latch, calls `AccountConfiguration.importAccount` on itself, and clears the
+///              latch. `actorsHash` is the inner hash of EIP-8130's `ActorInitialization` digest and also feeds
+///              the SETDELEGATE salt, so the address binds to the actor set.
+///
+///         The account drives `importAccount` itself, so AccountConfiguration needs no awareness of this factory
+///         and no changes to support the pattern — the bootstrap window is tracked by the account's own transient
+///         state.
 ///
 ///         Squatting / front-running defenses:
 ///           - `SETDELEGATE` address derivation includes `msg.sender`, so a different factory yields a
@@ -23,20 +25,11 @@ import {IBootstrap} from "./IBootstrap.sol";
 ///             salt and therefore a different address.
 ///           - The full sequence runs in one transaction frame; no intermediate window exists.
 ///
-///         AccountConfiguration is not aware of this factory. No registry, no privileged call path.
-///
 ///         Requires: EIP-7819 (`SETDELEGATE`, opcode 0xf6). Not yet executable on most chains; `_setDelegate`
 ///         is `virtual` so a test subclass can simulate the opcode via `vm.etch`.
 contract SetDelegateFactory {
-    IAccountConfiguration public immutable ACCOUNT_CONFIGURATION;
-
     /// @dev EIP-7702 delegation indicator prefix used in SETDELEGATE address derivation.
     bytes3 internal constant DELEGATION_INDICATOR = 0xef0100;
-
-    /// @dev Mirrors `AccountConfiguration.ACTOR_INITIALIZATION_TYPEHASH`.
-    bytes32 internal constant _ACTOR_INITIALIZATION_TYPEHASH = keccak256(
-        "ActorInitialization(bytes32 salt,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint8 scope,uint48 expiry,uint8 policyType)"
-    );
 
     /// @dev Mirrors `AccountConfiguration.ACTOR_TYPEHASH`.
     bytes32 internal constant _ACTOR_TYPEHASH = keccak256(
@@ -49,10 +42,6 @@ contract SetDelegateFactory {
 
     /// @dev `keccak256("")` — cached because every imported (always-unrestricted) actor has empty `policyData`.
     bytes32 internal constant _EMPTY_HASH = keccak256("");
-
-    constructor(address accountConfiguration) {
-        ACCOUNT_CONFIGURATION = IAccountConfiguration(accountConfiguration);
-    }
 
     // ══════════════════════════════════════════════
     //  DEPLOY
@@ -74,11 +63,9 @@ contract SetDelegateFactory {
         // (1) Place the delegation indicator at the SETDELEGATE-derived address.
         account = _setDelegate(salt, implementation);
 
-        // (2) Prime the implementation's bootstrap state. Runs implementation code in `account`'s storage.
-        IBootstrap(account).bootstrap(ah);
-
-        // (3) Register actors. ERC-1271 callback lands at the implementation's bootstrap branch.
-        ACCOUNT_CONFIGURATION.importAccount(account, initialActors, "");
+        // (2) The account primes its bootstrap latch and atomically imports its actors. The ERC-1271 callback
+        //     AccountConfiguration makes during import lands on the implementation's bootstrap branch.
+        IBootstrap(account).bootstrap(ah, initialActors);
     }
 
     // ══════════════════════════════════════════════

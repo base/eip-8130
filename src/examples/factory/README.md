@@ -14,8 +14,24 @@ repeated per account) and forecloses on-chain upgradeability.
 
 `SETDELEGATE` (opcode `0xf6`, EIP-7819) lets a contract place a 23-byte delegation indicator
 (`0xef0100 || target`) at a deterministic address. Combining it with EIP-8130's `importAccount` gives a
-fourth, off-spec path with state and gas savings plus factory-mediated upgradeability — without
-AccountConfiguration ever knowing the factory exists.
+fourth, off-spec path with state and gas savings plus factory-mediated upgradeability — **without any changes
+to AccountConfiguration** and without AccountConfiguration ever knowing the factory exists.
+
+## How the bootstrap window is tracked
+
+The account has no key, so at import time there is no signature anyone can produce — authorization is purely
+structural (the address commits to the actor set). The only question the account's ERC-1271 must answer during
+its own import is *"am I in the one-time bootstrap window?"*.
+
+The account answers that from **its own transient state**, not from AccountConfiguration's sequence counter:
+
+- `BootstrapAccount.bootstrap` sets a transient (EIP-1153) latch, calls `importAccount` **on itself**, then
+  clears the latch — all in one call frame.
+- While the latch is set (only across that nested `importAccount`), `isValidSignature` validates the presented
+  digest against the primed actors hash. Otherwise it defers to `AccountConfiguration.authenticateActor`.
+
+Because the latch lives in the account, AccountConfiguration's `importAccount` is used exactly as it ships on
+`main` — no reordering of its `localSequence` write, no awareness of the factory.
 
 ## Flow
 
@@ -29,19 +45,18 @@ Phase B (one tx)      invokes factory.deploy(initialActors, implementation, user
   B.1  SETDELEGATE(salt, implementation)
        → code(account) = 0xef0100 || implementation                 (23 bytes)
        → nonce(account) = 1                                         (EIP-7819 step 9)
-  B.2  account.bootstrap(actorsHash)
-       → implementation stores expected actors hash in account's storage
-  B.3  ACCOUNT_CONFIG.importAccount(account, initialActors, "")
-       → AccountConfig computes ActorInitialization digest
-       → STATICCALL account.isValidSignature(digest, "")
-         → Implementation's bootstrap branch (getChangeSequences(account).local == 0):
-           digest matches expected → MAGIC
-       → AccountConfig writes actor_config, bumps local sequence to 1
+  B.2  account.bootstrap(actorsHash, initialActors)                 (runs in account's storage)
+       → transient latch := actorsHash
+       → ACCOUNT_CONFIG.importAccount(account, initialActors, "")
+         → AccountConfig computes ActorInitialization digest, bumps local sequence to 1
+         → STATICCALL account.isValidSignature(digest, "")
+           → latch set → digest matches expected → MAGIC
+         → AccountConfig writes actor_config
+       → transient latch := 0                                       (bootstrap window closed)
 
 Phase C (optional)    close the implicit-EOA path
   Send a Config Change Entry (or applySignedActorChanges) with
     actor_change = revokeActor(bytes32(bytes20(account)))
-  → AccountState.flags |= FLAG_REVOKE_DEFAULT_EOA for the account
   (importAccount already disables the implicit default-EOA path on the account itself; this revokes the
    self-actorId at the actor level if it was re-enabled via an explicit self actor.)
 
@@ -56,11 +71,12 @@ Phase D (later)       upgrade implementation
 - `SETDELEGATE` address derivation includes `msg.sender`, so a different factory yields a different address.
 - The salt commits to the actor set (`actorsHash`), so a different actor set yields a different salt and
   therefore a different address. Trying to put unintended actors at the same address is a hash collision.
-- `SETDELEGATE → bootstrap → importAccount` runs in one transaction frame; no intermediate window exists for
-  a different transaction to interpose state changes.
-- After `importAccount` succeeds, `getChangeSequences(account).local == 1`, so the bootstrap branch in
-  `isValidSignature` is permanently disabled. The implementation is in normal-ERC-1271-via-AccountConfig
-  mode forever after.
+- `SETDELEGATE → bootstrap` runs in one transaction frame; no intermediate window exists for a different
+  transaction to interpose state changes.
+- The bootstrap branch is reachable only while the transient latch is set, which is only across the nested
+  `importAccount` inside `bootstrap`. The latch is cleared before `bootstrap` returns and, being transient,
+  cannot persist past the transaction. After import, `importAccount`'s one-time guard
+  (`localSequence == 0`) also prevents any second import. The branch is therefore reachable exactly once.
 - A codeless counterfactual address cannot be imported: a no-code STATICCALL returns empty data, the magic
   check fails, `importAccount` reverts. Squatting on counterfactual EOAs is impossible.
 
@@ -68,29 +84,30 @@ Phase D (later)       upgrade implementation
 
 | Contract | Role |
 |----------|------|
-| `SetDelegateFactory` | Deploys via `SETDELEGATE`, primes implementation bootstrap, calls `importAccount`. Owns the address-derivation logic and the optional `upgrade` path. |
-| `IBootstrap` | Minimal interface the implementation must expose for atomic priming. |
-| `BootstrapAccount` | Minimal bootstrap-aware reference implementation. ERC-1271 has a BOOTSTRAP branch that validates the import digest against the primed `actorsHash`, and otherwise defers to `AccountConfiguration.authenticateActor`. |
+| `SetDelegateFactory` | Deploys via `SETDELEGATE`, then calls the account's `bootstrap`. Owns the address-derivation logic and the optional `upgrade` path. Holds no reference to AccountConfiguration. |
+| `IBootstrap` | Minimal interface the implementation must expose for atomic priming + self-import. |
+| `BootstrapAccount` | Minimal bootstrap-aware reference implementation. ERC-1271 has a BOOTSTRAP branch (gated by a transient latch) that validates the import digest against the primed `actorsHash`, and otherwise defers to `AccountConfiguration.authenticateActor`. |
 
 ## Spec-side prerequisite
 
-This pattern relies on two `AccountConfiguration.importAccount` properties, both already in place on `main`:
+This pattern relies on one `AccountConfiguration.importAccount` property, already in place on `main`:
 
-1. **No delegation-indicator reject.** `importAccount` does not reject accounts whose code begins with the
-   delegation indicator (`0xef0100`). An earlier draft rejected them, but that rule never closed an attack
-   surface — a compromised k1 key already drains a delegated EOA via standard 7702 / 1559 transactions — while
-   it did block the entire SETDELEGATE factory pattern. The ERC-1271 callback is the sole binding between the
-   account and its initial actor set, which naturally rejects code-less addresses and dishonest implementations.
-2. **`localSequence` written after the ERC-1271 callback.** `importAccount` defers its `localSequence = 1`
-   write until after the STATICCALL, so the bootstrap-aware implementation can observe
-   `getChangeSequences(this).local == 0` during the callback and take its bootstrap branch. The STATICCALL
-   cannot write state, so deferring the write introduces no reentrancy risk.
+- **No delegation-indicator reject.** `importAccount` does not reject accounts whose code begins with the
+  delegation indicator (`0xef0100`). An earlier draft rejected them, but that rule never closed an attack
+  surface — a compromised k1 key already drains a delegated EOA via standard 7702 / 1559 transactions — while
+  it did block the entire SETDELEGATE factory pattern. The ERC-1271 callback is the sole binding between the
+  account and its initial actor set, which naturally rejects code-less addresses and dishonest implementations.
+
+No other change to AccountConfiguration is required: the account tracks its own bootstrap window in transient
+storage, so `importAccount` is used exactly as shipped.
 
 ## Caveats
 
 - **EIP-7819 is Draft** and `SETDELEGATE` (opcode `0xf6`) is not yet executable on most chains. In tests,
   `SetDelegateFactory._setDelegate` is overridden by `TestableSetDelegateFactory` to simulate the opcode
   via `vm.etch`. Production uses the real opcode.
+- **EIP-1153 transient storage** is used for the bootstrap latch; it is scoped to the bootstrap transaction
+  and so cannot leak into normal operation.
 - The reference `BootstrapAccount` is intentionally minimal: no execution, caller-authorization, or
   receive-hook plumbing beyond Solady's `Receiver`. Combine with `DefaultAccount` (or equivalent) for a
   full account.
@@ -111,5 +128,5 @@ These are forward-looking notes; nothing in this directory depends on them.
    indexers honor the set off-chain; AccountConfiguration remains unaware.
 2. **`account_changes` entry type `0x03 SetDelegateCreate`.** For atomic single-tx deploys via canonical
    factories within an 8130 transaction.
-3. **Do nothing protocol-side.** Factories live entirely in user space; both spec prerequisites above are
-   already satisfied on `main`.
+3. **Do nothing protocol-side.** Factories live entirely in user space; the pattern works against
+   AccountConfiguration as it ships on `main`.

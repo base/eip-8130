@@ -13,8 +13,6 @@ import {AccountConfigurationTest} from "../../../lib/AccountConfigurationTest.so
 contract TestableSetDelegateFactory is SetDelegateFactory {
     Vm internal constant _vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
-    constructor(address accountConfiguration) SetDelegateFactory(accountConfiguration) {}
-
     function _setDelegate(bytes32 salt, address target) internal override returns (address account) {
         account = computeAddress(salt);
         bytes memory existing = account.code;
@@ -33,7 +31,7 @@ contract SetDelegateFactoryTest is AccountConfigurationTest {
 
     function setUp() public override {
         super.setUp();
-        factory = new TestableSetDelegateFactory(address(accountConfiguration));
+        factory = new TestableSetDelegateFactory();
         implementation = new BootstrapAccount(address(accountConfiguration));
     }
 
@@ -69,8 +67,10 @@ contract SetDelegateFactoryTest is AccountConfigurationTest {
         assertEq(accountConfiguration.getChangeSequences(actual).local, 1);
         assertTrue(accountConfiguration.isActor(actual, bytes32(bytes20(vm.addr(pk)))));
 
-        // Bootstrap branch is permanently closed (sequence > 0).
-        assertTrue(BootstrapAccount(payable(actual)).bootstrapped());
+        // Bootstrap branch is permanently closed: the transient latch was cleared after import, so the import
+        // digest no longer auto-validates — isValidSignature now routes to AccountConfiguration (empty sig fails).
+        bytes32 importDigest = BootstrapAccount(payable(actual)).expectedImportDigest(factory.actorsHash(actors));
+        assertEq(BootstrapAccount(payable(actual)).isValidSignature(importDigest, ""), bytes4(0xffffffff));
     }
 
     function test_deploy_isDeterministic() public {
@@ -90,7 +90,8 @@ contract SetDelegateFactoryTest is AccountConfigurationTest {
 
         factory.deploy(actors, address(implementation), userSalt);
 
-        // Re-deploying the same actors+salt would re-bootstrap a now-initialized account; reverts in bootstrap.
+        // Re-deploying the same actors+salt re-enters bootstrap on a now-initialized account; importAccount's
+        // one-time guard reverts inside the nested call.
         vm.expectRevert();
         factory.deploy(actors, address(implementation), userSalt);
     }
@@ -106,7 +107,7 @@ contract SetDelegateFactoryTest is AccountConfigurationTest {
     }
 
     function test_differentFactory_yieldsDifferentAddress() public {
-        TestableSetDelegateFactory other = new TestableSetDelegateFactory(address(accountConfiguration));
+        TestableSetDelegateFactory other = new TestableSetDelegateFactory();
 
         IAccountConfiguration.InitialActor[] memory actors = _oneActor(700);
         bytes32 userSalt = bytes32(uint256(5));
