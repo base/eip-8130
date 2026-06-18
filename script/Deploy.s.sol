@@ -8,7 +8,6 @@ import {DefaultAccount} from "../src/accounts/DefaultAccount.sol";
 import {DefaultHighRateAccount} from "../src/accounts/DefaultHighRateAccount.sol";
 import {ERC4337Account} from "../src/accounts/BackwardCompatibleERC4337Account.sol";
 import {UpgradeableAccount} from "../src/accounts/UpgradeableAccount.sol";
-import {K1Authenticator} from "../src/authenticators/K1Authenticator.sol";
 import {P256Authenticator} from "../src/authenticators/P256Authenticator.sol";
 import {WebAuthnAuthenticator} from "../src/authenticators/WebAuthnAuthenticator.sol";
 import {DelegateAuthenticator} from "../src/authenticators/DelegateAuthenticator.sol";
@@ -103,7 +102,7 @@ contract Deploy is Script {
         console.log("UpgradeableAccount:      ", _addr(_upgradeableAccountInit(accountConfig)));
         console.log("");
         console.log("=== Authenticators ===");
-        console.log("K1Authenticator:         ", _addr(type(K1Authenticator).creationCode));
+        console.log("(secp256k1 is built in: AccountConfiguration.K1_AUTHENTICATOR() == address(1))");
         console.log("P256Authenticator:       ", _addr(type(P256Authenticator).creationCode));
         console.log("WebAuthnAuthenticator:   ", _addr(type(WebAuthnAuthenticator).creationCode));
         console.log("DelegateAuthenticator:   ", _addr(_delegateAuthInit(accountConfig)));
@@ -128,9 +127,8 @@ contract Deploy is Script {
         address erc4337Account = _create2(_erc4337AccountInit(accountConfig));
         address upgradeableAccount = _create2(_upgradeableAccountInit(accountConfig));
 
-        // ── Authenticators ──
+        // ── Authenticators (secp256k1 is built into AccountConfiguration; no contract to deploy) ──
 
-        address k1 = _create2(type(K1Authenticator).creationCode);
         address p256 = _create2(type(P256Authenticator).creationCode);
         address webAuthn = _create2(type(WebAuthnAuthenticator).creationCode);
         address delegate = _create2(_delegateAuthInit(accountConfig));
@@ -145,7 +143,7 @@ contract Deploy is Script {
         console.log("UpgradeableAccount:      ", upgradeableAccount);
         console.log("");
         console.log("=== Authenticators ===");
-        console.log("K1Authenticator:         ", k1);
+        console.log("(secp256k1 is built in: AccountConfiguration.K1_AUTHENTICATOR() == address(1))");
         console.log("P256Authenticator:       ", p256);
         console.log("WebAuthnAuthenticator:   ", webAuthn);
         console.log("DelegateAuthenticator:   ", delegate);

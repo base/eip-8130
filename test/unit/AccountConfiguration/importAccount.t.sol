@@ -130,18 +130,86 @@ contract ImportAccountTest is AccountConfigurationTest {
         accountConfiguration.importAccount(address(wallet), actors, abi.encodePacked(r, s, v));
     }
 
-    function test_importAccount_revertsOnDelegatedAccount() public {
+    function test_importAccount_allowsDelegatedAccount() public {
+        // EIP-7702 delegated accounts are no longer rejected: the delegate-indicator check has been removed, so
+        // import is gated solely by the ERC-1271 signature against the (delegated) account's authorization logic.
         uint256 ownerPk = 700;
         address eoa = vm.addr(ownerPk);
-        // Make the EOA an EIP-7702 delegated account (code = 0xef0100 || delegate).
-        vm.etch(eoa, abi.encodePacked(hex"ef0100", defaultAccountImplementation));
+        MockERC1271Wallet impl = new MockERC1271Wallet(eoa);
+        // Delegate the EOA's code to the ERC-1271 implementation (code = 0xef0100 || delegate).
+        vm.etch(eoa, abi.encodePacked(hex"ef0100", address(impl)));
 
-        IAccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(eoa);
+        // Register a distinct device key as the initial actor.
+        address device = vm.addr(701);
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
+        actors[0] = IAccountConfiguration.InitialActor({
+            actorId: bytes32(bytes20(device)), authenticator: address(k1Authenticator)
+        });
+
         bytes32 digest = _computeImportDigest(eoa, actors);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerPk, digest);
 
-        // Rejected before the ERC-1271 check: delegated accounts cannot be imported.
-        vm.expectRevert();
         accountConfiguration.importAccount(eoa, actors, abi.encodePacked(r, s, v));
+
+        assertEq(accountConfiguration.getChangeSequences(eoa).local, 1);
+        assertTrue(accountConfiguration.isActor(eoa, bytes32(bytes20(device))));
+        // The implicit default EOA is disabled by default on import.
+        assertFalse(accountConfiguration.isActor(eoa, bytes32(bytes20(eoa))));
+    }
+
+    function test_importAccount_7702_selfSignDisablesEoa() public {
+        // A real EIP-7702 EOA delegated to DefaultAccount self-imports using its own (default-EOA) k1 signature.
+        // That implicit full-owner path is the only authenticator available at import time, so this pins the
+        // ordering invariant: the ERC-1271 check must run before the flag is set, and the default EOA is disabled
+        // only after import succeeds.
+        uint256 eoaPk = 700;
+        address eoa = vm.addr(eoaPk);
+        vm.etch(eoa, abi.encodePacked(hex"ef0100", defaultAccountImplementation));
+
+        address device = vm.addr(701);
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
+        actors[0] = IAccountConfiguration.InitialActor({
+            actorId: bytes32(bytes20(device)), authenticator: address(k1Authenticator)
+        });
+
+        bytes32 digest = _computeImportDigest(eoa, actors);
+        // Canonical k1 auth blob: K1_AUTHENTICATOR || signature, signed by the EOA's own key (the implicit owner).
+        accountConfiguration.importAccount(eoa, actors, _buildK1Auth(eoaPk, digest));
+
+        assertEq(accountConfiguration.getChangeSequences(eoa).local, 1);
+        assertTrue(accountConfiguration.isActor(eoa, bytes32(bytes20(device))));
+        // The implicit default EOA is disabled after import: its own k1 sig now finds no config and the flag
+        // disables the full-owner fallback.
+        assertFalse(accountConfiguration.isActor(eoa, bytes32(bytes20(eoa))));
+        bytes32 h = keccak256("post import");
+        vm.expectRevert();
+        accountConfiguration.authenticateActor(eoa, h, _buildK1Auth(eoaPk, h));
+    }
+
+    function test_importAccount_7702_keepKeyViaExplicitSelfActor() public {
+        // A live 7702 EOA that wants to keep using its key past import lists the self-actorId as an explicit k1
+        // owner. Import disables the implicit full-owner fallback (sets the flag), but the same key stays a full
+        // owner through its explicit self config — lossless, no extra import option needed.
+        uint256 eoaPk = 700;
+        address eoa = vm.addr(eoaPk);
+        vm.etch(eoa, abi.encodePacked(hex"ef0100", defaultAccountImplementation));
+
+        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
+        actors[0] = IAccountConfiguration.InitialActor({
+            actorId: bytes32(bytes20(eoa)), authenticator: accountConfiguration.K1_AUTHENTICATOR()
+        });
+
+        bytes32 digest = _computeImportDigest(eoa, actors);
+        accountConfiguration.importAccount(eoa, actors, _buildK1Auth(eoaPk, digest));
+
+        assertEq(accountConfiguration.getChangeSequences(eoa).local, 1);
+        // The self-actorId is a live explicit owner.
+        assertTrue(accountConfiguration.isActor(eoa, bytes32(bytes20(eoa))));
+
+        // The same key still authenticates as a full owner — now resolved through its explicit self config rather
+        // than the (disabled) implicit fallback.
+        bytes32 h = keccak256("post import");
+        (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, h, _buildK1Auth(eoaPk, h));
+        assertEq(scope, 0);
     }
 }

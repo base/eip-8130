@@ -6,14 +6,15 @@ import {Test} from "forge-std/Test.sol";
 import {AccountConfiguration} from "../../src/AccountConfiguration.sol";
 import {IAccountConfiguration} from "../../src/interfaces/IAccountConfiguration.sol";
 import {IAuthenticator} from "../../src/interfaces/IAuthenticator.sol";
-import {K1Authenticator} from "../../src/authenticators/K1Authenticator.sol";
 import {P256Authenticator} from "../../src/authenticators/P256Authenticator.sol";
 import {DelegateAuthenticator} from "../../src/authenticators/DelegateAuthenticator.sol";
 import {DefaultAccount} from "../../src/accounts/DefaultAccount.sol";
 
 contract AccountConfigurationTest is Test {
     AccountConfiguration public accountConfiguration;
-    IAuthenticator public k1Authenticator;
+    // The single canonical secp256k1 authenticator (internal ecrecover). Not a deployed contract — it's the
+    // K1_AUTHENTICATOR sentinel (address(1)); k1 auth blobs are K1_AUTHENTICATOR(20) || r‖s‖v.
+    address public k1Authenticator;
     IAuthenticator public p256Authenticator;
     IAuthenticator public delegateAuthenticator;
     address public defaultAccountImplementation;
@@ -26,9 +27,9 @@ contract AccountConfigurationTest is Test {
     bytes32 constant ACTORCHANGE_TYPEHASH = keccak256("ActorChange(uint8 changeType,bytes32 actorId,bytes data)");
 
     function setUp() public virtual {
-        k1Authenticator = IAuthenticator(new K1Authenticator());
-        p256Authenticator = IAuthenticator(new P256Authenticator());
         accountConfiguration = new AccountConfiguration();
+        k1Authenticator = accountConfiguration.K1_AUTHENTICATOR();
+        p256Authenticator = IAuthenticator(new P256Authenticator());
         delegateAuthenticator = IAuthenticator(new DelegateAuthenticator(address(accountConfiguration)));
         defaultAccountImplementation = address(new DefaultAccount(address(accountConfiguration)));
     }
@@ -70,22 +71,11 @@ contract AccountConfigurationTest is Test {
         return abi.encodePacked(r, s, v);
     }
 
-    /// @dev Build auth bytes in authenticator(20) || data format for K1 authentication.
+    /// @dev Build a canonical K1 auth blob: K1_AUTHENTICATOR(20) || r‖s‖v. This is the single secp256k1 encoding
+    ///      for the default EOA and every k1 actor; meaning (implicit owner vs scoped key) is decided by config.
     function _buildK1Auth(uint256 pk, bytes32 digest) internal view returns (bytes memory) {
         bytes memory sig = _signDigest(pk, digest);
-        return abi.encodePacked(address(k1Authenticator), sig);
-    }
-
-    /// @dev Build auth bytes for implicit EOA path: address(0) || ecdsa signature.
-    function _buildImplicitEOAAuth(uint256 pk, bytes32 digest) internal pure returns (bytes memory) {
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, digest);
-        return abi.encodePacked(address(0), r, s, v);
-    }
-
-    /// @dev Build auth bytes for explicit EOA path: address(1) || ecdsa signature.
-    function _buildExplicitEOAAuth(uint256 pk, bytes32 digest) internal pure returns (bytes memory) {
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, digest);
-        return abi.encodePacked(address(1), r, s, v);
+        return abi.encodePacked(k1Authenticator, sig);
     }
 
     // ── Canonical digest computation ──

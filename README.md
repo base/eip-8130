@@ -18,11 +18,11 @@ EIP-8130 defines a new transaction type and onchain system contract that togethe
 
 ### Authenticators
 
-The canonical EIP-8130 authenticator set. `AlwaysValidAuthenticator` is an example/test helper, not a canonical authenticator.
+The canonical EIP-8130 authenticator set. secp256k1 (ECDSA) is built into `AccountConfiguration` as `K1_AUTHENTICATOR` (`address(1)`, native `ecrecover`) — it is the single path for the default EOA and every k1 actor, so there is no standalone contract to deploy. `AlwaysValidAuthenticator` is an example/test helper, not a canonical authenticator.
 
 | Contract | Algorithm |
 |----------|-----------|
-| `K1Authenticator` | secp256k1 (ECDSA) |
+| `K1_AUTHENTICATOR` (built in, `address(1)`) | secp256k1 (ECDSA) |
 | `P256Authenticator` | secp256r1 / P-256 (raw) |
 | `WebAuthnAuthenticator` | secp256r1 / P-256 (WebAuthn) |
 | `DelegateAuthenticator` | Delegated validation (1-hop) |

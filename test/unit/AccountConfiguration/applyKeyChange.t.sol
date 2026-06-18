@@ -338,13 +338,13 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         uint64 seq = accountConfiguration.getChangeSequences(eoa).local;
         bytes32 digest = _computeActorChangeBatchDigest(eoa, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildImplicitEOAAuth(eoaPk, digest);
+        bytes memory auth = _buildK1Auth(eoaPk, digest);
 
         accountConfiguration.applySignedActorChanges(eoa, uint64(block.chainid), changes, auth);
         assertTrue(accountConfiguration.isActor(eoa, newActorId));
     }
 
-    function test_implicitEOA_canRevokeItselfViaSentinel() public {
+    function test_implicitEOA_canRevokeItselfViaFlag() public {
         uint256 eoaPk = 500;
         address eoa = vm.addr(eoaPk);
         bytes32 selfActorId = bytes32(bytes20(eoa));
@@ -355,27 +355,79 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         bytes32 newActorId = bytes32(bytes20(vm.addr(501)));
         _implicitAuthorizeActor(eoa, eoaPk, newActorId, address(k1Authenticator));
 
-        // Revoke self-actorId using the new explicit key
+        // Revoke self-actorId using the new explicit key (sets the default-EOA revoke flag)
         _revokeActor(eoa, 501, selfActorId);
 
         assertFalse(accountConfiguration.isActor(eoa, selfActorId));
         assertTrue(accountConfiguration.isActor(eoa, newActorId));
 
+        // A revoked default EOA reports as an all-zero (empty) config — no sentinel.
         IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);
-        assertEq(cfg.authenticator, accountConfiguration.REVOKED_AUTHENTICATOR());
+        assertEq(cfg.authenticator, address(0));
         assertEq(cfg.scope, 0);
     }
 
-    function test_implicitEOA_canBeExplicitlyRegistered() public {
+    function test_implicitEOA_liveReportsAsEcrecoverOwner() public view {
+        // A live default EOA (no createAccount, flag unset) synthesizes a native ecrecover owner config.
         uint256 eoaPk = 500;
         address eoa = vm.addr(eoaPk);
         bytes32 selfActorId = bytes32(bytes20(eoa));
 
-        _implicitAuthorizeActorWithScope(eoa, eoaPk, selfActorId, address(k1Authenticator), 0x01);
+        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);
+        assertEq(cfg.authenticator, accountConfiguration.K1_AUTHENTICATOR());
+        assertEq(cfg.scope, 0);
+    }
 
+    function test_selfActorId_canScopeViaK1() public {
+        // The account's own key can be downgraded to a scoped actor by authorizing the self-actorId as a K1 actor.
+        // With a single k1 path the config alone decides the scope, so there is no implicit full-owner escape.
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+        bytes32 selfActorId = bytes32(bytes20(eoa));
+        assertTrue(accountConfiguration.isActor(eoa, selfActorId));
+
+        _implicitAuthorizeActorWithScope(eoa, eoaPk, selfActorId, address(k1Authenticator), 0x02);
+
+        assertTrue(accountConfiguration.isActor(eoa, selfActorId));
         IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);
         assertEq(cfg.authenticator, address(k1Authenticator));
-        assertEq(cfg.scope, 0x01);
+        assertEq(cfg.scope, 0x02);
+
+        // The same key now authenticates with its downgraded scope (0x02), never full owner (0x00).
+        bytes32 hash = keccak256("scoped self");
+        (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        assertEq(scope, 0x02);
+    }
+
+    function test_selfActorId_doubleAuthorizeReverts() public {
+        // Once the self-actorId has an explicit entry it cannot be re-authorized without revoking first.
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+        bytes32 selfActorId = bytes32(bytes20(eoa));
+
+        _implicitAuthorizeActorWithScope(eoa, eoaPk, selfActorId, address(k1Authenticator), 0x02);
+
+        // Second authorize for the same actorId reverts (existing entry). Signed by the now-scoped self key.
+        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
+        changes[0] = IAccountConfiguration.ActorChange({
+            actorId: selfActorId,
+            changeType: 0x01,
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    authenticator: accountConfiguration.K1_AUTHENTICATOR(),
+                    scope: 0x00,
+                    expiry: 0,
+                    policyType: 0x00
+                }),
+                bytes("")
+            )
+        });
+        uint64 seq = accountConfiguration.getChangeSequences(eoa).local;
+        bytes32 digest = _computeActorChangeBatchDigest(eoa, uint64(block.chainid), seq, changes);
+        bytes memory auth = _buildK1Auth(eoaPk, digest);
+
+        vm.expectRevert();
+        accountConfiguration.applySignedActorChanges(eoa, uint64(block.chainid), changes, auth);
     }
 
     function test_implicitEOA_crossChainActorChange() public {
@@ -398,61 +450,157 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         // chainId=0 for multichain
         uint64 seq = accountConfiguration.getChangeSequences(eoa).multichain;
         bytes32 digest = _computeActorChangeBatchDigest(eoa, 0, seq, changes);
-        bytes memory auth = _buildImplicitEOAAuth(eoaPk, digest);
+        bytes memory auth = _buildK1Auth(eoaPk, digest);
 
         accountConfiguration.applySignedActorChanges(eoa, 0, changes, auth);
         assertTrue(accountConfiguration.isActor(eoa, newActorId));
     }
 
-    // ── EOA self-actorId revoke/add with explicit registration ──
+    // ── Default EOA self-actorId semantics ──
     //
-    // The self-actorId for an account is bytes32(bytes20(account)).
-    // Revoking this actorId sets a sentinel (authenticator=REVOKED_AUTHENTICATOR, scope=0)
-    // instead of deleting, to block the implicit authorization.
+    // The self-actorId for an account is bytes32(bytes20(account)). Without an explicit entry it is the implicit
+    // default EOA (full owner), gated by the AccountState flag. It may also be configured as an explicit actor like
+    // any other (e.g. to scope the account's own key), which sets the flag and disables the implicit address(0)
+    // path. The flag is never cleared, so a managed self-actorId is operated through its explicit entry/prefix.
+    // createAccount and importAccount disable the implicit default EOA by default.
 
-    function test_selfActorId_addKey() public {
+    function test_selfActorId_revokedByDefaultOnCreate() public {
         (address account,) = _createK1Account(ACTOR_PK);
         bytes32 selfActorId = bytes32(bytes20(account));
 
-        _authorizeActor(account, ACTOR_PK, selfActorId, address(k1Authenticator));
-        assertTrue(accountConfiguration.isActor(account, selfActorId));
-    }
-
-    function test_selfActorId_revokeSetsNonZeroSentinel() public {
-        (address account,) = _createK1Account(ACTOR_PK);
-        bytes32 selfActorId = bytes32(bytes20(account));
-
-        _authorizeActor(account, ACTOR_PK, selfActorId, address(k1Authenticator));
-        assertTrue(accountConfiguration.isActor(account, selfActorId));
-
-        _revokeActor(account, ACTOR_PK, selfActorId);
-
+        // createAccount disables the default EOA, so the self-actorId is not a live actor.
         assertFalse(accountConfiguration.isActor(account, selfActorId));
 
         IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, selfActorId);
-        assertEq(cfg.authenticator, accountConfiguration.REVOKED_AUTHENTICATOR());
+        assertEq(cfg.authenticator, address(0));
         assertEq(cfg.scope, 0);
     }
 
-    function test_selfActorId_canReauthorizeAfterSentinel() public {
+    function test_selfActorId_reEnableOnCreatedAccount() public {
         (address account,) = _createK1Account(ACTOR_PK);
         bytes32 selfActorId = bytes32(bytes20(account));
-
-        _authorizeActor(account, ACTOR_PK, selfActorId, address(k1Authenticator));
-        _revokeActor(account, ACTOR_PK, selfActorId);
         assertFalse(accountConfiguration.isActor(account, selfActorId));
 
-        // Re-authorization is allowed from the revoked sentinel state.
-        _authorizeActor(account, ACTOR_PK, selfActorId, address(k1Authenticator));
+        // An owner re-enables the default EOA by authorizing the self-actorId with the canonical owner shape.
+        _authorizeActor(account, ACTOR_PK, selfActorId, accountConfiguration.K1_AUTHENTICATOR());
+
         assertTrue(accountConfiguration.isActor(account, selfActorId));
+        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, selfActorId);
+        assertEq(cfg.authenticator, accountConfiguration.K1_AUTHENTICATOR());
+        assertEq(cfg.scope, 0);
     }
 
-    function test_selfActorId_batchAddAndRevoke() public {
-        (address account,) = _createK1Account(ACTOR_PK);
-        bytes32 selfActorId = bytes32(bytes20(account));
+    function test_selfActorId_revokeThenReEnable() public {
+        // An EOA account (not created) starts with a live default EOA.
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+        bytes32 selfActorId = bytes32(bytes20(eoa));
+        assertTrue(accountConfiguration.isActor(eoa, selfActorId));
 
-        // Add self-actorId and a second key, then revoke self-actorId — all in two batches
-        _authorizeActor(account, ACTOR_PK, selfActorId, address(k1Authenticator));
+        // Add a second key, then revoke the default EOA via the flag.
+        bytes32 newActorId = bytes32(bytes20(vm.addr(501)));
+        _implicitAuthorizeActor(eoa, eoaPk, newActorId, address(k1Authenticator));
+        _revokeActor(eoa, 501, selfActorId);
+        assertFalse(accountConfiguration.isActor(eoa, selfActorId));
+
+        // The default EOA can no longer authenticate while revoked: its own k1 sig finds no config and the flag
+        // disables the implicit full-owner fallback.
+        bytes32 hash = keccak256("while revoked");
+        vm.expectRevert();
+        accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+
+        // Re-enable by authorizing the self-actorId as a native k1 owner using the second key.
+        _authorizeActor(eoa, 501, selfActorId, accountConfiguration.K1_AUTHENTICATOR());
+        assertTrue(accountConfiguration.isActor(eoa, selfActorId));
+
+        // The own key is a full owner again — now resolved through its explicit self config (the flag stays set, so
+        // it is the config, not the implicit fallback, that authorizes it).
+        (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        assertEq(scope, 0);
+    }
+
+    function test_e2e_eoaToPasskeyThenReEnableK1() public {
+        // Full lifecycle: use the default EOA, hand the account to a "passkey", then re-enable the K1 key.
+        //
+        // The new owner is registered through an authenticator (K1 here as a stand-in for a passkey/P256 device
+        // key); the revoke-self + re-enable-self mechanics are authenticator-agnostic, so a real passkey owner
+        // behaves identically — only changes[0].data.authenticator differs.
+        uint256 eoaPk = 500; // the account's own K1 key (the default EOA)
+        address eoa = vm.addr(eoaPk);
+        bytes32 selfActorId = bytes32(bytes20(eoa));
+
+        uint256 devicePk = 600; // the "passkey" device key
+        bytes32 deviceActorId = bytes32(bytes20(vm.addr(devicePk)));
+
+        // ── Phase 0: the default EOA is live and authenticates with its own k1 signature (implicit full owner). ──
+        assertTrue(accountConfiguration.isActor(eoa, selfActorId));
+        bytes32 h0 = keccak256("phase 0");
+        (uint8 scope0,,) = accountConfiguration.authenticateActor(eoa, h0, _buildK1Auth(eoaPk, h0));
+        assertEq(scope0, 0);
+
+        // ── Phase 1: in one batch signed by the EOA, add the passkey as a full owner and revoke the default EOA. ──
+        IAccountConfiguration.ActorChange[] memory switchChanges = new IAccountConfiguration.ActorChange[](2);
+        switchChanges[0] = IAccountConfiguration.ActorChange({
+            actorId: deviceActorId,
+            changeType: 0x01,
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
+        });
+        switchChanges[1] = IAccountConfiguration.ActorChange({actorId: selfActorId, changeType: 0x02, data: ""});
+
+        uint64 seq1 = accountConfiguration.getChangeSequences(eoa).local;
+        bytes32 d1 = _computeActorChangeBatchDigest(eoa, uint64(block.chainid), seq1, switchChanges);
+        accountConfiguration.applySignedActorChanges(
+            eoa, uint64(block.chainid), switchChanges, _buildK1Auth(eoaPk, d1)
+        );
+
+        // The EOA is now disabled; the passkey is the live owner.
+        assertFalse(accountConfiguration.isActor(eoa, selfActorId));
+        assertTrue(accountConfiguration.isActor(eoa, deviceActorId));
+
+        bytes32 h1 = keccak256("phase 1");
+        vm.expectRevert();
+        accountConfiguration.authenticateActor(eoa, h1, _buildK1Auth(eoaPk, h1));
+        (uint8 scope1,,) = accountConfiguration.authenticateActor(eoa, h1, _buildK1Auth(devicePk, h1));
+        assertEq(scope1, 0);
+
+        // ── Phase 2: the passkey re-enables the K1 key by authorizing the self-actorId as a native k1 owner. ──
+        IAccountConfiguration.ActorChange[] memory reEnable = new IAccountConfiguration.ActorChange[](1);
+        reEnable[0] = IAccountConfiguration.ActorChange({
+            actorId: selfActorId,
+            changeType: 0x01,
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    authenticator: accountConfiguration.K1_AUTHENTICATOR(),
+                    scope: 0x00,
+                    expiry: 0,
+                    policyType: 0x00
+                }),
+                bytes("")
+            )
+        });
+
+        uint64 seq2 = accountConfiguration.getChangeSequences(eoa).local;
+        bytes32 d2 = _computeActorChangeBatchDigest(eoa, uint64(block.chainid), seq2, reEnable);
+        accountConfiguration.applySignedActorChanges(eoa, uint64(block.chainid), reEnable, _buildK1Auth(devicePk, d2));
+
+        // The K1 key is a full owner again — now resolved through its explicit self config rather than the
+        // implicit fallback (the flag is never cleared), so the same k1 signature authenticates.
+        assertTrue(accountConfiguration.isActor(eoa, selfActorId));
+        bytes32 h2 = keccak256("phase 2");
+        (uint8 scope2,,) = accountConfiguration.authenticateActor(eoa, h2, _buildK1Auth(eoaPk, h2));
+        assertEq(scope2, 0);
+    }
+
+    function test_selfActorId_batchRevokeViaFlag() public {
+        // EOA account: add a key and revoke the default EOA in a single batch signed by the default EOA.
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+        bytes32 selfActorId = bytes32(bytes20(eoa));
 
         bytes32 newActorId = bytes32(bytes20(vm.addr(NEW_ACTOR_PK)));
 
@@ -469,33 +617,31 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         });
         changes[1] = IAccountConfiguration.ActorChange({actorId: selfActorId, changeType: 0x02, data: ""});
 
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
-        bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(ACTOR_PK, digest);
+        uint64 seq = accountConfiguration.getChangeSequences(eoa).local;
+        bytes32 digest = _computeActorChangeBatchDigest(eoa, uint64(block.chainid), seq, changes);
+        bytes memory auth = _buildK1Auth(eoaPk, digest);
 
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
+        accountConfiguration.applySignedActorChanges(eoa, uint64(block.chainid), changes, auth);
 
-        assertFalse(accountConfiguration.isActor(account, selfActorId));
-        assertTrue(accountConfiguration.isActor(account, newActorId));
+        assertFalse(accountConfiguration.isActor(eoa, selfActorId));
+        assertTrue(accountConfiguration.isActor(eoa, newActorId));
 
-        // Self-actorId has sentinel, not zeroed
-        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, selfActorId);
-        assertEq(cfg.authenticator, accountConfiguration.REVOKED_AUTHENTICATOR());
+        // A revoked default EOA reports as an all-zero (empty) config — no sentinel.
+        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);
+        assertEq(cfg.authenticator, address(0));
         assertEq(cfg.scope, 0);
     }
 
     function test_selfActorId_revokedCannotSignActorChanges() public {
-        (address account,) = _createK1Account(ACTOR_PK);
-        bytes32 selfActorId = bytes32(bytes20(account));
+        // EOA account: default EOA adds a second key, then revokes itself.
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+        bytes32 selfActorId = bytes32(bytes20(eoa));
 
-        _authorizeActor(account, ACTOR_PK, selfActorId, address(k1Authenticator));
-
-        // Add a second key so the account isn't bricked, then revoke self-actorId
         bytes32 newActorId = bytes32(bytes20(vm.addr(NEW_ACTOR_PK)));
-        _authorizeActor(account, ACTOR_PK, newActorId, address(k1Authenticator));
-        _revokeActor(account, ACTOR_PK, selfActorId);
+        _implicitAuthorizeActor(eoa, eoaPk, newActorId, address(k1Authenticator));
+        _revokeActor(eoa, NEW_ACTOR_PK, selfActorId);
 
-        // The initial key (ACTOR_PK) is still active — use it to prove it can sign
         bytes32 thirdActorId = bytes32(bytes20(vm.addr(302)));
         IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
         changes[0] = IAccountConfiguration.ActorChange({
@@ -509,14 +655,20 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             )
         });
 
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
-        bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
+        uint64 seq = accountConfiguration.getChangeSequences(eoa).local;
+        bytes32 digest = _computeActorChangeBatchDigest(eoa, uint64(block.chainid), seq, changes);
 
-        // Signing with NEW_ACTOR_PK still works (actor not revoked)
+        // The revoked default EOA can no longer authenticate.
+        vm.expectRevert();
         accountConfiguration.applySignedActorChanges(
-            account, uint64(block.chainid), changes, _buildK1Auth(NEW_ACTOR_PK, digest)
+            eoa, uint64(block.chainid), changes, _buildK1Auth(eoaPk, digest)
         );
-        assertTrue(accountConfiguration.isActor(account, thirdActorId));
+
+        // But the still-active second key can sign.
+        accountConfiguration.applySignedActorChanges(
+            eoa, uint64(block.chainid), changes, _buildK1Auth(NEW_ACTOR_PK, digest)
+        );
+        assertTrue(accountConfiguration.isActor(eoa, thirdActorId));
     }
 
     function test_revokedKey_cannotSignActorChanges() public {
@@ -632,7 +784,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildImplicitEOAAuth(pk, digest);
+        bytes memory auth = _buildK1Auth(pk, digest);
 
         accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
     }

@@ -11,13 +11,14 @@ contract AccountConfiguration is IAccountConfiguration {
     // STRUCTS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @dev Packed into a single storage slot (23 bytes).
+    /// @dev Packed into a single storage slot (24 bytes).
     ///      localSequence > 0 doubles as the account initialized flag.
     struct AccountState {
         uint64 multichainSequence; // 8 bytes
         uint64 localSequence; // 8 bytes – also serves as initialized flag
         uint40 unlocksAt; // 5 bytes
         uint16 unlockDelay; // 2 bytes
+        uint8 flags; // 1 byte – bitfield; bit 0 = default EOA revoked (see FLAG_REVOKE_DEFAULT_EOA)
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -90,12 +91,32 @@ contract AccountConfiguration is IAccountConfiguration {
     /// @notice Actor can change account actors
     uint8 public constant SCOPE_CHANGE_ACTORS = 0x08;
 
-    /// @dev Authenticator namespace: 0=implicit EOA, 1=ecrecover EOA, 2..max-1=custom, max=revoked.
-    /// @notice Explicit authenticator for native EOA signatures via ecrecover.
-    address public constant ECRECOVER_AUTHENTICATOR = address(1);
+    /// @dev Authenticator namespace: 1 = the canonical secp256k1 ("K1") verifier (native ecrecover); 2..max = custom
+    ///      IAuthenticator contracts. address(0) is reserved as the "no actor configured" storage sentinel and is
+    ///      never a valid authenticator selector.
+    /// @notice The single secp256k1 authenticator. The default EOA and every k1 actor share this one identity; the
+    ///         actor config alone distinguishes a full-owner EOA from a scoped key. Signed with a K1_AUTHENTICATOR
+    ///         (20) || r‖s‖v auth blob.
+    address public constant K1_AUTHENTICATOR = address(1);
 
-    /// @notice Sentinel authenticator written on self-actorId revocation to block implicit re-authorization.
-    address public constant REVOKED_AUTHENTICATOR = address(type(uint160).max);
+    // ----------------------------------------------------------------------------------------------------------------
+    // ACCOUNT STATE FLAGS
+    // ----------------------------------------------------------------------------------------------------------------
+
+    /// @notice AccountState.flags bit: when set, the account's implicit default-EOA path is disabled. The default
+    ///         EOA is a K1_AUTHENTICATOR signature whose recovered signer equals the account; with no explicit
+    ///         config it returns a hardcoded full owner, gated on this flag alone (a single SLOAD).
+    ///         To prevent that full-owner result from bypassing an explicit, possibly scoped, self-actorId
+    ///         configuration, the invariant "an explicit self-actorId entry exists => this flag is set" must hold.
+    ///         The bit is set by createAccount/importAccount (disabled by default), by authorizing the self-actorId
+    ///         (the explicit entry supersedes the implicit path), and by revoking it. Once set it is not cleared:
+    ///         a managed self-actorId is operated through its explicit entry, not the zero-storage implicit path.
+    uint8 public constant FLAG_REVOKE_DEFAULT_EOA = 0x01;
+
+    /// @dev secp256k1 half-order (n/2). Per EIP-2, only the lower-half `s` value is accepted to reject signature
+    ///      malleability. Equal to (secp256k1n - 1) / 2.
+    uint256 internal constant SECP256K1_HALF_ORDER =
+        0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0;
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // STORAGE
@@ -147,7 +168,11 @@ contract AccountConfiguration is IAccountConfiguration {
 
         // Mark the account initialized: localSequence doubles as the initialized flag, so setting it to 1 blocks
         // importAccount (which requires localSequence == 0) from running against an already-created account.
+        // Created accounts have contract code at a CREATE2 address, so the default EOA path (recovered == account)
+        // is unreachable; disable it by default so the account is canonically ECDSA-owner-free (quantum-safe by
+        // default). This folds into the same slot write as localSequence, costing no extra SSTORE.
         _accountState[account].localSequence = 1;
+        _accountState[account].flags = FLAG_REVOKE_DEFAULT_EOA;
 
         // Create account code at the CREATE2 address derived from the packed actors commitment.
         bytes memory deploymentCode = _buildDeploymentCode(bytecode);
@@ -165,11 +190,6 @@ contract AccountConfiguration is IAccountConfiguration {
         external
         onlyUnlocked(account)
     {
-        // importAccount targets genuine contract accounts. Reject EIP-7702 delegated accounts (code 0xef0100 || addr):
-        // a delegated EOA's auth is its (mutable) delegate and it already has the implicit-EOA / delegation paths.
-        // Codeless EOAs are rejected naturally by the ERC-1271 check below (a no-code staticcall returns no data).
-        require(!_isDelegated(account));
-
         require(_accountState[account].localSequence == 0);
         _accountState[account].localSequence = 1;
 
@@ -177,6 +197,13 @@ contract AccountConfiguration is IAccountConfiguration {
         (bool success, bytes memory result) =
             account.staticcall(abi.encodeWithSelector(ERC1271_SELECTOR, digest, signature));
         require(success && result.length == 32 && abi.decode(result, (bytes4)) == ERC1271_SELECTOR);
+
+        // Disable the implicit default-EOA path (parity with createAccount). Set *after* the ERC-1271 check: for an
+        // EIP-7702 delegated EOA its own k1 signature (the implicit full owner) is the only authenticator available
+        // at import time, so it must stay live for that check. An owner who wants to keep using the key can include
+        // the self-actorId as an explicit k1 actor in initialActors (still a full owner, now via its config), or
+        // re-enable it later. Folds into the same slot as localSequence.
+        _accountState[account].flags = FLAG_REVOKE_DEFAULT_EOA;
 
         _initializeAccount(account, initialActors);
         emit AccountImported(account);
@@ -305,14 +332,24 @@ contract AccountConfiguration is IAccountConfiguration {
     // ----------------------------------------------------------------------------------------------------------------
 
     function isActor(address account, bytes32 actorId) public view returns (bool) {
-        address authenticator = _actorConfig[actorId][account].authenticator;
-        if (authenticator >= ECRECOVER_AUTHENTICATOR && authenticator != REVOKED_AUTHENTICATOR) return true;
-        // Implicit EOA: self-actorId with truly empty slot
-        return authenticator == address(0) && actorId == bytes32(bytes20(account));
+        // An explicit entry (self-actorId or any other actor) is always live.
+        if (_actorConfig[actorId][account].authenticator >= K1_AUTHENTICATOR) return true;
+        // No explicit entry: the self-actorId is the implicit default EOA, live unless disabled via the flag.
+        if (actorId == bytes32(bytes20(account))) return !_isDefaultEoaRevoked(account);
+        return false;
     }
 
+    /// @dev With an explicit entry, returns it verbatim (self-actorId or any other actor). Without one, the
+    ///      self-actorId is the implicit default EOA: a live one (flag unset) reports as a native ecrecover owner
+    ///      (scope 0); a disabled one — or any unknown actor — reports as the all-zero (empty) config. This keeps
+    ///      live-vs-disabled unambiguous without a sentinel.
     function getActorConfig(address account, bytes32 actorId) external view returns (ActorConfig memory) {
-        return _actorConfig[actorId][account];
+        ActorConfig memory config = _actorConfig[actorId][account];
+        if (config.authenticator != address(0)) return config;
+        if (actorId == bytes32(bytes20(account)) && !_isDefaultEoaRevoked(account)) {
+            return ActorConfig({authenticator: K1_AUTHENTICATOR, scope: 0, expiry: 0, policyType: POLICY_NONE});
+        }
+        return config;
     }
 
     /// @notice Resolves the policy gate target and signed commitment for an actor.
@@ -349,16 +386,6 @@ contract AccountConfiguration is IAccountConfiguration {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // INTERNAL FUNCTIONS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-
-    /// @dev True if `account` is an EIP-7702 delegated account, i.e. its code begins with the delegation
-    ///      indicator 0xef0100. The 0xef prefix is reserved (EIP-3541), so no normal contract code starts with it.
-    function _isDelegated(address account) internal view returns (bool delegated) {
-        assembly ("memory-safe") {
-            mstore(0x00, 0)
-            extcodecopy(account, 0x1d, 0, 3)
-            delegated := eq(mload(0x00), 0xef0100)
-        }
-    }
 
     /// @notice Returns true if the account is locked and clears storage if unlocked
     /// @dev Side effects to clear locked state
@@ -400,9 +427,9 @@ contract AccountConfiguration is IAccountConfiguration {
         internal
         nonZero(account)
     {
-        require(config.authenticator >= ECRECOVER_AUTHENTICATOR && config.authenticator != REVOKED_AUTHENTICATOR);
+        require(config.authenticator >= K1_AUTHENTICATOR);
         address existing = _actorConfig[actorId][account].authenticator;
-        require(existing == address(0) || existing == REVOKED_AUTHENTICATOR);
+        require(existing == address(0));
 
         // A policy-bearing actor must be scope-restricted and may not hold CONFIG scope: the policy gate only
         // covers SENDER-context calls, so a CONFIG-scoped (or unrestricted) key could authorize new, unrestricted
@@ -417,6 +444,11 @@ contract AccountConfiguration is IAccountConfiguration {
         (address manager, bytes32 commitment) = _slicePolicy(config.policyType, policyData);
         if (commitment != bytes32(0)) _policyCommitment[actorId][account] = commitment;
         if (manager != address(0)) _policyManager[actorId][account] = manager;
+
+        // The self-actorId may be configured like any other actor (e.g. to scope the account's own key). Doing so
+        // disables the implicit default-EOA path so its hardcoded full-owner result can never bypass this
+        // (possibly scoped) explicit configuration. Maintains the entry-exists => flag-set invariant.
+        if (actorId == bytes32(bytes20(account))) _accountState[account].flags |= FLAG_REVOKE_DEFAULT_EOA;
 
         emit ActorAuthorized(account, actorId, config, manager, commitment);
     }
@@ -444,15 +476,13 @@ contract AccountConfiguration is IAccountConfiguration {
 
     function _revokeActor(address account, bytes32 actorId) internal nonZero(account) {
         require(isActor(account, actorId));
-        if (actorId == bytes32(bytes20(account))) {
-            _actorConfig[actorId][account] =
-                ActorConfig({authenticator: REVOKED_AUTHENTICATOR, scope: 0, expiry: 0, policyType: POLICY_NONE});
-        } else {
-            delete _actorConfig[actorId][account];
-        }
+        delete _actorConfig[actorId][account];
         // Policy state is keyed by (account, actorId) and cleared exactly on revoke.
         delete _policyCommitment[actorId][account];
         delete _policyManager[actorId][account];
+        // For the self-actorId, also set the flag: deleting the explicit entry would otherwise re-expose the
+        // implicit full-owner path. This keeps the default EOA disabled (entry-exists => flag-set).
+        if (actorId == bytes32(bytes20(account))) _accountState[account].flags |= FLAG_REVOKE_DEFAULT_EOA;
         emit ActorRevoked(account, actorId);
     }
 
@@ -543,9 +573,7 @@ contract AccountConfiguration is IAccountConfiguration {
         view
         returns (uint8 scope, uint8 policyType, address policyTarget)
     {
-        if (authenticator == address(0)) return _authenticateImplicitEOA(account, hash, data);
-        if (authenticator == ECRECOVER_AUTHENTICATOR) return _authenticateEcrecover(account, hash, data);
-        require(authenticator != REVOKED_AUTHENTICATOR);
+        if (authenticator == K1_AUTHENTICATOR) return _authenticateK1(account, hash, data);
 
         bytes32 actorId = IAuthenticator(authenticator).authenticate(hash, data);
         require(actorId != bytes32(0));
@@ -557,21 +585,14 @@ contract AccountConfiguration is IAccountConfiguration {
         return (config.scope, config.policyType, _resolvePolicyTarget(account, actorId, config.policyType));
     }
 
-    /// @dev Implicit EOA: native ecrecover, requires self-actorId slot to be empty. Implicit EOAs are always
-    ///      unrestricted owners with no policy.
-    function _authenticateImplicitEOA(address account, bytes32 hash, bytes calldata data)
-        internal
-        view
-        returns (uint8, uint8, address)
-    {
-        require(_actorConfig[bytes32(bytes20(account))][account].authenticator == address(0));
-        address recovered = _recoverSigner(hash, data);
-        require(recovered == account);
-        return (0, POLICY_NONE, address(0));
-    }
-
-    /// @dev Explicit EOA actor via native ecrecover authenticator (address(1)).
-    function _authenticateEcrecover(address account, bytes32 hash, bytes calldata data)
+    /// @dev The single secp256k1 ("K1") path. Recovers the signer (EIP-2 enforced), then resolves the actor:
+    ///        - signer == account && default EOA live  -> implicit full owner (one SLOAD: the flag);
+    ///        - otherwise the signer's actorId must carry an explicit K1 config (scoped self, re-enabled owner, or
+    ///          any other k1 actor).
+    ///      Flag-first ordering keeps the common implicit-owner and other-actor paths at a single SLOAD; only a
+    ///      managed self key (flag set + explicit entry) costs two. The "explicit self entry => flag set" invariant
+    ///      guarantees a live (flag-unset) self never has a config to shadow, so the full-owner short-circuit is safe.
+    function _authenticateK1(address account, bytes32 hash, bytes calldata data)
         internal
         view
         returns (uint8, uint8, address)
@@ -579,12 +600,19 @@ contract AccountConfiguration is IAccountConfiguration {
         address recovered = _recoverSigner(hash, data);
         require(recovered != address(0));
 
+        if (recovered == account && !_isDefaultEoaRevoked(account)) return (0, POLICY_NONE, address(0));
+
         bytes32 actorId = bytes32(bytes20(recovered));
         ActorConfig memory config = _actorConfig[actorId][account];
-        require(config.authenticator == ECRECOVER_AUTHENTICATOR);
+        require(config.authenticator == K1_AUTHENTICATOR);
         // Expiry is read from the same slot; an expired actor fails authentication. 0 = no expiry.
         require(config.expiry == 0 || block.timestamp <= config.expiry);
         return (config.scope, config.policyType, _resolvePolicyTarget(account, actorId, config.policyType));
+    }
+
+    /// @dev True if the account's default (implicit) EOA has been revoked via the AccountState flag.
+    function _isDefaultEoaRevoked(address account) internal view returns (bool) {
+        return _accountState[account].flags & FLAG_REVOKE_DEFAULT_EOA != 0;
     }
 
     /// @dev Resolves an actor's policy gate target: address(0) when ungated (policyType == 0x00), otherwise the
@@ -599,7 +627,12 @@ contract AccountConfiguration is IAccountConfiguration {
         require(data.length == 65);
         bytes32 r = bytes32(data[:32]);
         bytes32 s = bytes32(data[32:64]);
-        return ecrecover(hash, uint8(data[64]), r, s);
+        uint8 v = uint8(data[64]);
+        // EIP-2: reject the malleable high-s half of each signature and non-canonical v to enforce a single
+        // canonical encoding per signature.
+        require(uint256(s) <= SECP256K1_HALF_ORDER);
+        require(v == 27 || v == 28);
+        return ecrecover(hash, v, r, s);
     }
 
     // ----------------------------------------------------------------------------------------------------------------

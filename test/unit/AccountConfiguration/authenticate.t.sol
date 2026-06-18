@@ -157,7 +157,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         address eoa = vm.addr(eoaPk);
 
         bytes32 hash = keccak256("implicit eoa authenticate");
-        bytes memory auth = _buildImplicitEOAAuth(eoaPk, hash);
+        bytes memory auth = _buildK1Auth(eoaPk, hash);
 
         // No createAccount or importAccount — the EOA is implicitly authorized
         (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, hash, auth);
@@ -180,7 +180,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         assertFalse(accountConfiguration.isActor(eoa, randomActorId));
     }
 
-    function test_authenticate_implicitEOA_revokedBySentinel() public {
+    function test_authenticate_implicitEOA_revokedByFlag() public {
         uint256 eoaPk = 500;
         address eoa = vm.addr(eoaPk);
         bytes32 selfActorId = bytes32(bytes20(eoa));
@@ -189,31 +189,47 @@ contract AuthenticateTest is AccountConfigurationTest {
         bytes32 newActorId = bytes32(bytes20(vm.addr(501)));
         _implicitAuthorizeActor(eoa, eoaPk, newActorId, address(k1Authenticator));
 
-        // Revoke the self-actorId (writes sentinel) using the new explicit key
+        // Revoke the self-actorId (sets the default-EOA revoke flag) using the new explicit key
         _revokeActor(eoa, 501, selfActorId);
 
         assertFalse(accountConfiguration.isActor(eoa, selfActorId));
 
         // Implicit path is now blocked
-        bytes32 hash = keccak256("after sentinel");
+        bytes32 hash = keccak256("after revoke");
         vm.expectRevert();
-        accountConfiguration.authenticateActor(eoa, hash, _buildImplicitEOAAuth(eoaPk, hash));
+        accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
     }
 
-    function test_authenticate_explicitEOA_selfActor() public {
+    function test_authenticate_selfActorScopedDowngradesOwnKey() public {
+        // Scoping the account's own key (self-actorId as an explicit k1 actor) downgrades it: the same key now
+        // authenticates with the reduced scope. There is a single k1 path, so there is no implicit full-owner
+        // escape — the config alone decides the scope.
         uint256 eoaPk = 500;
         address eoa = vm.addr(eoaPk);
         bytes32 selfActorId = bytes32(bytes20(eoa));
 
-        _implicitAuthorizeActor(eoa, eoaPk, selfActorId, accountConfiguration.ECRECOVER_AUTHENTICATOR());
+        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
+        changes[0] = IAccountConfiguration.ActorChange({
+            actorId: selfActorId,
+            changeType: 0x01,
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    authenticator: accountConfiguration.K1_AUTHENTICATOR(),
+                    scope: 0x02,
+                    expiry: 0,
+                    policyType: 0x00
+                }),
+                bytes("")
+            )
+        });
+        uint64 seq = accountConfiguration.getChangeSequences(eoa).local;
+        bytes32 digest = _computeActorChangeBatchDigest(eoa, uint64(block.chainid), seq, changes);
+        accountConfiguration.applySignedActorChanges(eoa, uint64(block.chainid), changes, _buildK1Auth(eoaPk, digest));
 
-        bytes32 hash = keccak256("explicit self-actor");
-        (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, hash, _buildExplicitEOAAuth(eoaPk, hash));
-        assertEq(scope, 0);
-
-        // Explicit self-actor registration disables implicit auth path.
-        vm.expectRevert();
-        accountConfiguration.authenticateActor(eoa, hash, _buildImplicitEOAAuth(eoaPk, hash));
+        // The own key now returns the downgraded scope (0x02), never full owner (0x00).
+        bytes32 hash = keccak256("scoped self auth");
+        (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        assertEq(scope, 0x02);
     }
 
     function test_authenticate_explicitEOA_nonSelfActor() public {
@@ -222,31 +238,67 @@ contract AuthenticateTest is AccountConfigurationTest {
 
         uint256 bobPk = 501;
         bytes32 bobActorId = bytes32(bytes20(vm.addr(bobPk)));
-        _implicitAuthorizeActor(eoa, eoaPk, bobActorId, accountConfiguration.ECRECOVER_AUTHENTICATOR());
+        _implicitAuthorizeActor(eoa, eoaPk, bobActorId, accountConfiguration.K1_AUTHENTICATOR());
 
         bytes32 hash = keccak256("explicit non-self actor");
-        (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, hash, _buildExplicitEOAAuth(bobPk, hash));
+        (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(bobPk, hash));
         assertEq(scope, 0);
     }
 
-    function test_authenticate_explicitEOA_unregisteredFails() public {
+    function test_authenticate_unregisteredK1KeyFails() public {
+        // A k1 signature from a key that is neither the account itself nor a registered actor fails. (A k1 sig from
+        // the account's own key would instead resolve to the implicit default EOA — covered elsewhere.)
         uint256 eoaPk = 500;
         address eoa = vm.addr(eoaPk);
 
-        bytes32 hash = keccak256("explicit unregistered");
+        bytes32 hash = keccak256("unregistered k1 key");
         vm.expectRevert();
-        accountConfiguration.authenticateActor(eoa, hash, _buildExplicitEOAAuth(eoaPk, hash));
+        accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(999, hash));
     }
 
-    function test_authenticate_revokedAuthenticatorPrefixReverts() public {
+    function test_authenticate_unknownAuthenticatorPrefixReverts() public {
         uint256 eoaPk = 500;
         address eoa = vm.addr(eoaPk);
 
-        bytes32 hash = keccak256("revoked authenticator prefix");
-        bytes memory auth = abi.encodePacked(accountConfiguration.REVOKED_AUTHENTICATOR());
+        bytes32 hash = keccak256("unknown authenticator prefix");
+        // An authenticator address with no code cannot resolve an actor, so authentication reverts.
+        bytes memory auth = abi.encodePacked(address(type(uint160).max));
 
         vm.expectRevert();
         accountConfiguration.authenticateActor(eoa, hash, auth);
+    }
+
+    // ── EIP-2 signature malleability ──
+
+    function test_authenticate_rejectsHighSMalleability() public {
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+        bytes32 hash = keccak256("malleability");
+
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(eoaPk, hash);
+
+        // The canonical (low-s) signature authenticates.
+        accountConfiguration.authenticateActor(eoa, hash, abi.encodePacked(k1Authenticator, r, s, v));
+
+        // Its high-s twin (s' = n - s, v flipped) recovers the same address but is rejected per EIP-2.
+        uint256 n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141;
+        bytes32 highS = bytes32(n - uint256(s));
+        uint8 flippedV = v == 27 ? 28 : 27;
+
+        vm.expectRevert();
+        accountConfiguration.authenticateActor(eoa, hash, abi.encodePacked(k1Authenticator, r, highS, flippedV));
+    }
+
+    function test_authenticate_rejectsNonCanonicalV() public {
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+        bytes32 hash = keccak256("bad v");
+
+        (, bytes32 r, bytes32 s) = vm.sign(eoaPk, hash);
+
+        // v outside {27, 28} is rejected.
+        vm.expectRevert();
+        accountConfiguration.authenticateActor(eoa, hash, abi.encodePacked(k1Authenticator, r, s, uint8(29)));
     }
 
     // ── Helpers ──
@@ -333,7 +385,7 @@ contract AuthenticateTest is AccountConfigurationTest {
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildImplicitEOAAuth(pk, digest);
+        bytes memory auth = _buildK1Auth(pk, digest);
 
         accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
     }
