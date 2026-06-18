@@ -247,4 +247,20 @@ contract ImportAccountTest is AccountConfigurationTest {
         (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, h, _buildK1Auth(eoaPk, h));
         assertEq(scope, 0);
     }
+
+    function test_importAccount_revertsOnCodelessAccount() public {
+        // A codeless address (e.g. a fresh EOA or counterfactual address) has no ERC-1271 logic to vouch.
+        // The staticcall returns success with empty data; the magic-value check fails. Squatting prevented —
+        // a SETDELEGATE/CREATE2 counterfactual cannot be imported until its delegate code is actually placed.
+        uint256 ownerPk = 700;
+        address codeless = vm.addr(ownerPk);
+        require(codeless.code.length == 0);
+
+        IAccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(codeless);
+        bytes32 digest = _computeImportDigest(codeless, actors);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerPk, digest);
+
+        vm.expectRevert();
+        accountConfiguration.importAccount(codeless, actors, abi.encodePacked(r, s, v));
+    }
 }

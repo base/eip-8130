@@ -193,7 +193,13 @@ contract AccountConfiguration is IAccountConfiguration {
     }
 
     /// @notice Import an existing account to AccountConfiguration management.
-    /// @dev Verifies via ERC-1271. Accounts must have bytecode.
+    /// @dev Verifies via ERC-1271. The callback is the sole binding between `account` and `initialActors`, so any
+    ///      address whose code answers `isValidSignature` honestly may be imported — already-deployed contract
+    ///      accounts, EIP-7702 delegated EOAs (whose delegate's ERC-1271 vouches), and accounts deployed via an
+    ///      EIP-7819 SETDELEGATE factory (whose delegate runs a bootstrap-aware ERC-1271 that validates
+    ///      `initialActors` against state primed by the factory in the same tx frame — see examples/factory).
+    ///      Codeless addresses cannot be imported (a no-code staticcall returns empty data, failing the magic
+    ///      check below), which prevents squatting on counterfactual addresses.
     /// @dev Custom hash used to partially mitigate phishing attacks on eth_signTypedData.
     function importAccount(address account, InitialActor[] calldata initialActors, bytes calldata signature)
         external
@@ -201,18 +207,22 @@ contract AccountConfiguration is IAccountConfiguration {
     {
         // Import is a one-time bootstrap for accounts with no 8130 state yet
         require(_accountState[account].localSequence == 0 && _accountState[account].multichainSequence == 0);
-        _accountState[account].localSequence = 1;
 
         bytes32 digest = _computeImportDigest(account, initialActors);
+        // STATICCALL — a view callback cannot write state, so no reentrancy is possible and the localSequence
+        // write can be deferred until after the check. Deferring it keeps `getChangeSequences(this).local == 0`
+        // observable during the callback, which a bootstrap-aware delegate (see examples/factory) branches on.
         (bool success, bytes memory result) =
             account.staticcall(abi.encodeWithSelector(ERC1271_SELECTOR, digest, signature));
         require(success && result.length == 32 && abi.decode(result, (bytes4)) == ERC1271_SELECTOR);
 
-        // Disable the implicit default-EOA path (parity with createAccount). Set *after* the ERC-1271 check: for an
-        // EIP-7702 delegated EOA its own k1 signature (the implicit full owner) is the only authenticator available
-        // at import time, so it must stay live for that check. An owner who wants to keep using the key can include
-        // the self-actorId as an explicit k1 actor in initialActors (still a full owner, now via its config), or
-        // re-enable it later. Folds into the same slot as localSequence.
+        // Mark initialized (localSequence doubles as the initialized flag) and disable the implicit default-EOA path
+        // (parity with createAccount). Both writes land after the ERC-1271 check: for an EIP-7702 delegated EOA its
+        // own k1 signature (the implicit full owner) is the only authenticator available at import time, so it must
+        // stay live for that check. An owner who wants to keep using the key can include the self-actorId as an
+        // explicit k1 actor in initialActors (still a full owner, now via its config), or re-enable it later. Both
+        // fold into the same packed AccountState slot.
+        _accountState[account].localSequence = 1;
         _accountState[account].flags = FLAG_REVOKE_DEFAULT_EOA;
 
         _initializeAccount(account, initialActors);
