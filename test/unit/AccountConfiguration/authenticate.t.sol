@@ -214,10 +214,7 @@ contract AuthenticateTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 IAccountConfiguration.ActorConfig({
-                    authenticator: accountConfiguration.K1_AUTHENTICATOR(),
-                    scope: 0x02,
-                    expiry: 0,
-                    policyType: 0x00
+                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: 0x02, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
             )

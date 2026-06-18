@@ -64,9 +64,7 @@ contract UpgradeableAccount is DefaultAccount, UUPSUpgradeable {
         if (_currentImplementation() != fromImplementation) revert UpgradeFromMismatch();
 
         bytes32 digest = keccak256(
-            abi.encode(
-                SIGNED_UPGRADE_TYPEHASH, address(this), fromImplementation, toImplementation, keccak256(data)
-            )
+            abi.encode(SIGNED_UPGRADE_TYPEHASH, address(this), fromImplementation, toImplementation, keccak256(data))
         );
 
         (uint8 scope,,) = ACCOUNT_CONFIGURATION.authenticateActor(address(this), digest, auth);

@@ -414,10 +414,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 IAccountConfiguration.ActorConfig({
-                    authenticator: accountConfiguration.K1_AUTHENTICATOR(),
-                    scope: 0x00,
-                    expiry: 0,
-                    policyType: 0x00
+                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
             )
@@ -554,9 +551,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         uint64 seq1 = accountConfiguration.getChangeSequences(eoa).local;
         bytes32 d1 = _computeActorChangeBatchDigest(eoa, uint64(block.chainid), seq1, switchChanges);
-        accountConfiguration.applySignedActorChanges(
-            eoa, uint64(block.chainid), switchChanges, _buildK1Auth(eoaPk, d1)
-        );
+        accountConfiguration.applySignedActorChanges(eoa, uint64(block.chainid), switchChanges, _buildK1Auth(eoaPk, d1));
 
         // The EOA is now disabled; the passkey is the live owner.
         assertFalse(accountConfiguration.isActor(eoa, selfActorId));
@@ -575,10 +570,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 IAccountConfiguration.ActorConfig({
-                    authenticator: accountConfiguration.K1_AUTHENTICATOR(),
-                    scope: 0x00,
-                    expiry: 0,
-                    policyType: 0x00
+                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
             )
@@ -660,9 +652,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         // The revoked default EOA can no longer authenticate.
         vm.expectRevert();
-        accountConfiguration.applySignedActorChanges(
-            eoa, uint64(block.chainid), changes, _buildK1Auth(eoaPk, digest)
-        );
+        accountConfiguration.applySignedActorChanges(eoa, uint64(block.chainid), changes, _buildK1Auth(eoaPk, digest));
 
         // But the still-active second key can sign.
         accountConfiguration.applySignedActorChanges(
