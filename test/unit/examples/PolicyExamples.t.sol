@@ -2,6 +2,7 @@
 pragma solidity ^0.8.30;
 
 import {IAccountConfiguration} from "../../../src/interfaces/IAccountConfiguration.sol";
+import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../../src/interfaces/ITransactionContext.sol";
 import {DefaultAccount, Call, EXTERNAL_CALLER_AUTHENTICATOR} from "../../../src/accounts/DefaultAccount.sol";
 
 import {PolicyManager} from "../../../src/examples/policies/PolicyManager.sol";
@@ -78,9 +79,10 @@ contract PolicyExamplesTest is AccountConfigurationTest {
 
     function test_erc20SpendLimit_withinAllowance() public {
         bytes32 actorId = _installSpendLimit(500e18, 1);
+        _mockActingActor(actorId);
 
         vm.prank(account);
-        manager.execute(actorId, address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 300e18)));
+        manager.execute(address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 300e18)));
 
         assertEq(token.balanceOf(bob), 300e18);
         assertEq(token.balanceOf(account), 700e18);
@@ -88,25 +90,27 @@ contract PolicyExamplesTest is AccountConfigurationTest {
 
     function test_erc20SpendLimit_revertsWhenPeriodExceeded() public {
         bytes32 actorId = _installSpendLimit(500e18, 1);
+        _mockActingActor(actorId);
 
         vm.prank(account);
-        manager.execute(actorId, address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 300e18)));
+        manager.execute(address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 300e18)));
 
         vm.expectRevert(abi.encodeWithSelector(RecurringAllowance.ExceededAllowance.selector, 600e18, 500e18));
         vm.prank(account);
-        manager.execute(actorId, address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 300e18)));
+        manager.execute(address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 300e18)));
     }
 
     function test_erc20SpendLimit_resetsNextPeriod() public {
         bytes32 actorId = _installSpendLimit(500e18, 1);
+        _mockActingActor(actorId);
 
         vm.prank(account);
-        manager.execute(actorId, address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 500e18)));
+        manager.execute(address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 500e18)));
 
         // Next period: the budget refreshes.
         vm.warp(block.timestamp + WEEK + 1);
         vm.prank(account);
-        manager.execute(actorId, address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 400e18)));
+        manager.execute(address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 400e18)));
 
         assertEq(token.balanceOf(bob), 900e18);
     }
@@ -115,12 +119,11 @@ contract PolicyExamplesTest is AccountConfigurationTest {
 
     function test_selectorGating_allowsCommittedSelector() public {
         bytes32 actorId = _installSelectorGate();
+        _mockActingActor(actorId);
 
         vm.prank(account);
         manager.execute(
-            actorId,
-            address(gatePolicy),
-            abi.encode(SelectorGatingPolicy.Action(0, abi.encodeCall(MockTarget.setValue, (42))))
+            address(gatePolicy), abi.encode(SelectorGatingPolicy.Action(0, abi.encodeCall(MockTarget.setValue, (42))))
         );
 
         assertEq(target.value(), 42);
@@ -128,38 +131,37 @@ contract PolicyExamplesTest is AccountConfigurationTest {
 
     function test_selectorGating_revertsUncommittedSelector() public {
         bytes32 actorId = _installSelectorGate();
+        _mockActingActor(actorId);
 
         bytes memory badCall = abi.encodeCall(MockTarget.forbidden, (99));
         vm.expectRevert(
             abi.encodeWithSelector(SelectorGatingPolicy.SelectorNotAllowed.selector, MockTarget.forbidden.selector)
         );
         vm.prank(account);
-        manager.execute(actorId, address(gatePolicy), abi.encode(SelectorGatingPolicy.Action(0, badCall)));
+        manager.execute(address(gatePolicy), abi.encode(SelectorGatingPolicy.Action(0, badCall)));
     }
 
     // ── Authorization boundary ──
 
     function test_execute_revertsForUnauthorizedCaller() public {
         bytes32 actorId = _installSpendLimit(500e18, 1);
+        // The protocol reports this actor, but a stranger account has no commitment for it, so execute rejects it.
+        _mockActingActor(actorId);
 
-        // A stranger has no policy for this actorId, so getPolicy resolves to nothing.
-        vm.expectRevert(
-            abi.encodeWithSelector(PolicyManager.CommitmentNotAuthorized.selector, actorId, address(0), bytes32(0))
-        );
+        vm.expectRevert(abi.encodeWithSelector(PolicyManager.NoActivePolicy.selector, actorId));
         vm.prank(stranger);
-        manager.execute(actorId, address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 1)));
+        manager.execute(address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 1)));
     }
 
     function test_execute_revertsAfterRevoke() public {
         bytes32 actorId = _installSpendLimit(500e18, 1);
         _revokePolicyActor(actorId);
+        _mockActingActor(actorId);
 
-        // Revoke cleared the policy slots; the per-call getPolicy check now resolves to nothing.
-        vm.expectRevert(
-            abi.encodeWithSelector(PolicyManager.CommitmentNotAuthorized.selector, actorId, address(0), bytes32(0))
-        );
+        // Revoke cleared the policy slots; the per-call commitment read now resolves to zero.
+        vm.expectRevert(abi.encodeWithSelector(PolicyManager.NoActivePolicy.selector, actorId));
         vm.prank(account);
-        manager.execute(actorId, address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 1)));
+        manager.execute(address(spendPolicy), abi.encode(ERC20SpendLimitPolicy.Transfer(bob, 1)));
     }
 
     function test_install_revertsForNonAccountCaller() public {
@@ -194,6 +196,16 @@ contract PolicyExamplesTest is AccountConfigurationTest {
     }
 
     // ── Helpers ──
+
+    /// @dev Simulate the EIP-8130 protocol dispatch context: make the transaction-context precompile report
+    ///      `actorId` as the authenticated acting actor for subsequent calls (the manager reads this in execute).
+    function _mockActingActor(bytes32 actorId) internal {
+        vm.mockCall(
+            TX_CONTEXT_ADDRESS,
+            abi.encodeWithSelector(ITransactionContext.getTransactionSenderActorId.selector),
+            abi.encode(actorId)
+        );
+    }
 
     /// @dev Account with a K1 root actor (can authorize actors) and the manager as an execution-enabled actor.
     function _createAccountWithRootAndManager() internal returns (address) {

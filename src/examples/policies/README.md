@@ -18,12 +18,16 @@ gates identically on any non-zero `policyType` and does not interpret the value;
    commitment and confirms `getPolicy` resolves to `(this, commitment)` — so an install can only succeed for a
    policy the account actually signed for this manager. The committed `policyConfig` is then handed to the
    policy's install hook, which stores it keyed by commitment.
-3. **Use.** When the session key transacts, the protocol dispatches its call _as the account_, so it arrives at
-   `PolicyManager.execute(actorId, ...)` with `msg.sender == account`. The manager re-reads `getPolicy(account,
-   actorId)` on every call and requires it to resolve to `(this, commitment)`, so a revoked or expired key stops
-   immediately. It then invokes the policy, which enforces the committed policy against the per-use action and
-   returns an `executeBatch` call plan that the manager — an execution-enabled actor (`EXTERNAL_CALLER_AUTHENTICATOR`)
-   — forwards to the account.
+3. **Use.** When the session key transacts, the protocol gate resolves the key's allowed target
+   (`policy_manager(account, actorId)`) and reverts any call whose `call.to` isn't that address before dispatch, so
+   the key's call can only arrive at `PolicyManager.execute(policy, executionData)` with `msg.sender == account`.
+   Because reaching this manager already proves it is the key's gate, `execute` does not re-check the target: it
+   reads the acting `actorId` from the [transaction-context precompile](../../interfaces/ITransactionContext.sol)
+   (`getTransactionSenderActorId()`) and needs only the live `getPolicyCommitment(account, actorId)` (a single
+   SLOAD) to locate the installed binding — a revoked or expired key has a zero commitment and stops immediately.
+   It then invokes the policy, which enforces the committed policy against the per-use action and returns an
+   `executeBatch` call plan that the manager — an execution-enabled actor (`EXTERNAL_CALLER_AUTHENTICATOR`) —
+   forwards to the account.
 
 ```
 session key ──(8130 gate: only PolicyManager)──▶ PolicyManager.execute
@@ -36,7 +40,7 @@ session key ──(8130 gate: only PolicyManager)──▶ PolicyManager.execute
 
 | Contract | Role |
 |----------|------|
-| `PolicyManager` | Minimal manager: install verifies the account's signed `getPolicy` commitment; `execute` → policy → `account.executeBatch`. |
+| `PolicyManager` | Minimal manager: install verifies the account's signed commitment; `execute` reads the acting actor from the transaction-context precompile, reads its live commitment, then policy → `account.executeBatch`. |
 | `Policy` | Base hook: `onInstall` (store committed config) + `onExecute` (enforce + build call plan). |
 | `ERC20SpendLimitPolicy` | Recurring (e.g. weekly) per-binding ERC-20 spend limit. |
 | `SelectorGatingPolicy` | Restrict a key to one target and a fixed set of function selectors. |

@@ -5,6 +5,7 @@ import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
 import {Address} from "openzeppelin/utils/Address.sol";
 
 import {IAccountConfiguration} from "../../interfaces/IAccountConfiguration.sol";
+import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../interfaces/ITransactionContext.sol";
 import {Policy} from "./Policy.sol";
 
 /// @title PolicyManager
@@ -23,8 +24,9 @@ import {Policy} from "./Policy.sol";
 ///      Commitment binding: the account authorizes a {PolicyBinding}; its `keccak256` is the `commitment`. When the
 ///      account authorizes the session-key actor it stores a non-zero `policyType`, `policy_manager = address(this)`, and
 ///      `policy_commitment = commitment` in the Account Configuration contract. At {install} the manager reads that
-///      binding back via {IAccountConfiguration.getPolicy} and requires the target and commitment to match, so an
-///      install can only succeed for a policy the account actually signed for this manager.
+///      binding back via the single-SLOAD {IAccountConfiguration.getPolicyManager} / {IAccountConfiguration.getPolicyCommitment}
+///      accessors and requires the target and commitment to match, so an install can only succeed for a policy the
+///      account actually signed for this manager.
 ///
 ///      Scope: install-by-direct-account-call and execute only. Signature-based install, replacement, and
 ///      uninstall are intentionally omitted from this reference.
@@ -73,6 +75,9 @@ contract PolicyManager is ReentrancyGuard {
     error UnauthorizedAccount(address caller, address account);
     error OutsideValidityWindow(uint40 validAfter, uint40 validUntil, uint256 timestamp);
     error CommitmentNotAuthorized(bytes32 actorId, address target, bytes32 commitment);
+    /// @dev The acting actor (from the transaction-context precompile) has no live policy commitment for the
+    ///      caller account — i.e. it is not a gated actor of this account, or it has been revoked/expired.
+    error NoActivePolicy(bytes32 actorId);
 
     /// @notice Computes the commitment (binding identifier) for a binding.
     ///
@@ -90,9 +95,10 @@ contract PolicyManager is ReentrancyGuard {
     /// @notice Installs a policy binding the account has authorized for a specific actor.
     ///
     /// @dev MUST be called by `binding.account`. The manager re-derives the binding's `commitment` and confirms the
-    ///      account signed it for this manager by reading {IAccountConfiguration.getPolicy} for `actorId`: the
-    ///      resolved target must be this manager and the resolved commitment must equal the binding's. The committed
-    ///      `policyConfig` is then handed to the policy's install hook, which stores it keyed by commitment.
+    ///      account signed it for this manager by reading the resolved policy manager and commitment for `actorId`
+    ///      (via the granular accessors): the resolved target must be this manager and the resolved commitment must
+    ///      equal the binding's. The committed `policyConfig` is then handed to the policy's install hook, which
+    ///      stores it keyed by commitment.
     ///
     /// @param actorId The session-key actor the account configured with this policy (non-zero policyType).
     /// @param binding The account-authorized binding.
@@ -103,8 +109,11 @@ contract PolicyManager is ReentrancyGuard {
 
         commitment = _commitment(binding);
 
-        // The account must have signed this exact commitment for this manager when authorizing `actorId`.
-        (, address target, bytes32 signedCommitment) = ACCOUNT_CONFIGURATION.getPolicy(binding.account, actorId);
+        // The account must have signed this exact commitment for this manager when authorizing `actorId`. Read the
+        // gate target and signed commitment via the single-SLOAD granular accessors: the manager never needs the
+        // policyType byte, so this avoids the extra ActorConfig SLOAD that getPolicy performs.
+        address target = ACCOUNT_CONFIGURATION.getPolicyManager(binding.account, actorId);
+        bytes32 signedCommitment = ACCOUNT_CONFIGURATION.getPolicyCommitment(binding.account, actorId);
         if (target != address(this) || signedCommitment != commitment) {
             revert CommitmentNotAuthorized(actorId, target, signedCommitment);
         }
@@ -123,24 +132,26 @@ contract PolicyManager is ReentrancyGuard {
 
     /// @notice Exercises an installed policy and forwards the resulting call plan to the account.
     ///
-    /// @dev Authorization is resolved per call against the live signed policy: in EIP-8130 the protocol dispatches a
-    ///      gated session key's call as the account (`msg.sender == account`) and the manager identifies the acting
-    ///      key via the transaction-context precompile. Here the caller supplies `actorId`, and the manager requires
-    ///      `getPolicy(account, actorId)` to resolve to itself with a non-zero `commitment` — so a revoked or expired
-    ///      actor (whose policy slots are cleared) can no longer execute, without relying on a cached record. The
-    ///      manager then drives the account as an execution-enabled actor via the policy-built `accountCallData`.
+    /// @dev Identity comes from the protocol, not the caller. In EIP-8130 the protocol resolves a gated actor's
+    ///      allowed target — `policy_manager(account, actorId)` — and reverts any call whose `call.to` is not that
+    ///      address (`ActorPolicyViolation`) before dispatch. So simply *reaching* this function as a dispatched
+    ///      call proves this manager is the acting key's configured gate; re-checking the target here would only
+    ///      duplicate that protocol guarantee. The manager therefore reads the acting `actorId` from the
+    ///      transaction-context precompile and takes the account from `msg.sender` (the protocol sets
+    ///      `msg.sender == sender == account` at a dispatched `call.to`, and using `msg.sender` confines execution
+    ///      to that direct dispatch path). It then needs only the live signed `commitment` (a single SLOAD) to
+    ///      locate the installed binding — a revoked or expired actor has a zero commitment and is rejected.
     ///
-    /// @param actorId       The session-key actor whose signed policy authorizes this call.
     /// @param policy        Policy contract for the binding.
     /// @param executionData Per-use action parameters interpreted by the policy.
-    function execute(bytes32 actorId, address policy, bytes calldata executionData) external nonReentrant {
+    function execute(address policy, bytes calldata executionData) external nonReentrant {
         address account = msg.sender;
+        bytes32 actorId = _actingActorId();
 
-        // Re-read the live signed policy every call; the key must still be gated to this manager.
-        (, address target, bytes32 commitment) = ACCOUNT_CONFIGURATION.getPolicy(account, actorId);
-        if (target != address(this) || commitment == bytes32(0)) {
-            revert CommitmentNotAuthorized(actorId, target, commitment);
-        }
+        // Single-SLOAD read of the live signed commitment for the acting actor. Zero means the actor is not a gated
+        // key of this account (or was revoked/expired): there is no binding to enforce, so reject.
+        bytes32 commitment = ACCOUNT_CONFIGURATION.getPolicyCommitment(account, actorId);
+        if (commitment == bytes32(0)) revert NoActivePolicy(actorId);
 
         PolicyRecord storage record = _policies[policy][commitment];
         if (!record.installed) revert PolicyNotInstalled(commitment);
@@ -157,6 +168,17 @@ contract PolicyManager is ReentrancyGuard {
 
         account.functionCall(accountCallData);
         emit PolicyExecuted(account, policy, commitment, account);
+    }
+
+    /// @dev Reads the authenticated actor of the in-flight EIP-8130 transaction from the transaction-context
+    ///      precompile. A low-level STATICCALL is used because the precompile carries no EXTCODESIZE (mirroring the
+    ///      native precompiles); outside a protocol-dispatched call — or on a non-8130 chain — the call yields no
+    ///      data and this returns bytes32(0), which the commitment check in {execute} rejects.
+    function _actingActorId() internal view returns (bytes32 actorId) {
+        (bool ok, bytes memory ret) = TX_CONTEXT_ADDRESS.staticcall(
+            abi.encodeWithSelector(ITransactionContext.getTransactionSenderActorId.selector)
+        );
+        if (ok && ret.length == 32) actorId = abi.decode(ret, (bytes32));
     }
 
     function _commitment(PolicyBinding calldata binding) internal pure returns (bytes32) {
