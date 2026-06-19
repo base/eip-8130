@@ -119,10 +119,24 @@ interface IAccountConfiguration {
 
     /// @notice Resolves an actor's policy sub-type, gate target, and signed commitment:
     ///         0x00 -> (0x00, address(0), bytes32(0)); non-zero -> (policyType, manager, commitment).
+    /// @dev Convenience aggregator for off-chain consumers. On-chain consumers (notably the policy manager
+    ///      validating a dispatched 8130 tx) should prefer the single-SLOAD `getPolicyCommitment` /
+    ///      `getPolicyManager` accessors below.
     function getPolicy(address account, bytes32 actorId)
         external
         view
         returns (uint8 policyType, address target, bytes32 commitment);
+
+    /// @notice Resolves an actor's signed policy commitment, or bytes32(0) if ungated / no actor.
+    /// @dev Single SLOAD. The invariant maintained by _authorizeActor/_revokeActor is that this slot is
+    ///      non-zero iff the actor has a non-zero policyType, across both the inline-k1 self and the
+    ///      _actorConfig homes (manager/commitment share a single keyspace keyed by actorId). Intended for
+    ///      the policy manager's per-tx validation read.
+    function getPolicyCommitment(address account, bytes32 actorId) external view returns (bytes32);
+
+    /// @notice Resolves an actor's policy gate target (manager), or address(0) if ungated / no actor.
+    /// @dev Single SLOAD. Same invariant as `getPolicyCommitment`.
+    function getPolicyManager(address account, bytes32 actorId) external view returns (address);
 
     function getChangeSequences(address account) external view returns (ChangeSequences memory);
 

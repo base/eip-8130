@@ -342,7 +342,7 @@ contract AccountConfiguration is IAccountConfiguration {
     // ----------------------------------------------------------------------------------------------------------------
 
     function isActor(address account, bytes32 actorId) public view returns (bool) {
-        // A populated _actorConfig entry is always live: any non-self actor, or a non-k1 ("PQ") self authenticator.
+        // A populated _actorConfig entry is always live: any non-self actor, or a non-k1 self authenticator.
         if (_actorConfig[actorId][account].authenticator >= K1_AUTHENTICATOR) return true;
         // No _actorConfig entry: the self-actorId's k1 key lives inline in AccountState, live unless the flag is set.
         if (actorId == bytes32(bytes20(account))) return !_isDefaultEoaRevoked(account);
@@ -370,11 +370,13 @@ contract AccountConfiguration is IAccountConfiguration {
     }
 
     /// @notice Resolves an actor's policy sub-type, gate target, and signed commitment.
-    /// @dev Enforcement is at execution: this resolves the actor's policy sub-type, where a policy-bearing actor may
-    ///      call, and the commitment a target validates presented parameters against. 0x00 -> (0, 0, 0); non-zero ->
-    ///      (policyType, manager, commitment). The policy manager/commitment are keyed by actorId, so the inline k1
-    ///      self and a non-k1 self share that keyspace; mutual exclusion guarantees at most one is live, so the
-    ///      active gate is read by actorId.
+    /// @dev Convenience aggregator for off-chain consumers. Enforcement is at execution: this resolves the actor's
+    ///      policy sub-type, where a policy-bearing actor may call, and the commitment a target validates presented
+    ///      parameters against. 0x00 -> (0, 0, 0); non-zero -> (policyType, manager, commitment). The policy
+    ///      manager/commitment are keyed by actorId, so the inline k1 self and a non-k1 self share that keyspace;
+    ///      mutual exclusion guarantees at most one is live, so the active gate is read by actorId.
+    ///      On-chain consumers (notably the policy manager validating a dispatched 8130 tx) should prefer the
+    ///      single-SLOAD `getPolicyCommitment` / `getPolicyManager` accessors.
     /// @return policyType The actor's policy sub-type byte (0x00 = none).
     /// @return target The actor's policy gate target (manager), or address(0) if ungated.
     /// @return commitment The actor's signed policy commitment, or bytes32(0) if ungated.
@@ -394,6 +396,23 @@ contract AccountConfiguration is IAccountConfiguration {
         }
         if (policyType == POLICY_NONE) return (POLICY_NONE, address(0), bytes32(0));
         return (policyType, _policyManager[actorId][account], _policyCommitment[actorId][account]);
+    }
+
+    /// @notice Resolves an actor's signed policy commitment, or bytes32(0) if ungated / no actor.
+    /// @dev Single SLOAD. Intended for a policy manager's per-tx validation read on the protocol-dispatched
+    ///      8130 tx path: the manager already knows its own address and policy sub-type, so the commitment is
+    ///      the only state it needs from this contract to validate. The invariant maintained by
+    ///      _authorizeActor / _revokeActor is that this slot is non-zero iff the actor has a non-zero
+    ///      policyType, across both the inline-k1 self and the _actorConfig homes (manager/commitment share a
+    ///      single keyspace keyed by actorId), so a zero return unambiguously means "no policy / no actor".
+    function getPolicyCommitment(address account, bytes32 actorId) external view returns (bytes32) {
+        return _policyCommitment[actorId][account];
+    }
+
+    /// @notice Resolves an actor's policy gate target (manager), or address(0) if ungated / no actor.
+    /// @dev Single SLOAD. Same invariant as `getPolicyCommitment`.
+    function getPolicyManager(address account, bytes32 actorId) external view returns (address) {
+        return _policyManager[actorId][account];
     }
 
     function getChangeSequences(address account) external view returns (ChangeSequences memory) {
@@ -477,7 +496,7 @@ contract AccountConfiguration is IAccountConfiguration {
 
         if (actorId == bytes32(bytes20(account))) {
             // Self-actorId is routed by authenticator type and the two homes are mutually exclusive: the k1 self
-            // lives inline in AccountState; a non-k1 ("PQ") self lives in _actorConfig. Authorizing one clears the
+            // lives inline in AccountState; a non-k1 self lives in _actorConfig. Authorizing one clears the
             // other so a k1 and a non-k1 self are never simultaneously live.
             AccountState storage st = _accountState[account];
             if (config.authenticator == K1_AUTHENTICATOR) {
@@ -662,7 +681,7 @@ contract AccountConfiguration is IAccountConfiguration {
     /// @dev The single secp256k1 ("K1") path. Recovers the signer (EIP-2 enforced), then resolves the actor:
     ///        - signer == account -> the inline self config in AccountState (one SLOAD): the flag gates the whole
     ///          key (set => revert), and when live the scope/policy/expiry come from the inline fields (all-zero =
-    ///          full owner; non-zero = a scoped self). A non-k1 ("PQ") self is unreachable here by construction (it
+    ///          full owner; non-zero = a scoped self). A non-k1 self is unreachable here by construction (it
     ///          requires its own authenticator), and mutual exclusion keeps the flag set whenever one is live.
     ///        - otherwise the signer's actorId must carry an explicit K1 config in _actorConfig (any other k1 actor).
     ///      Both the common self and other-actor paths cost a single SLOAD.
