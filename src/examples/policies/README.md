@@ -40,7 +40,7 @@ session key ──(8130 gate: only PolicyManager)──▶ PolicyManager.execute
 
 | Contract | Role |
 |----------|------|
-| `PolicyManager` | Minimal manager: install verifies the account's signed commitment; `execute` (account-acting) reads the acting actor from the transaction-context precompile; `executeFor` / `executeForMany` (external-caller) let an authorized outside party drive one or many accounts. All paths run the policy → `account.executeBatch`. |
+| `PolicyManager` | Minimal manager: install (permissionless) verifies the account's signed commitment; `execute` (account-acting) reads the acting actor from the transaction-context precompile; `executeFor` / `executeForMany` (external-caller) let an authorized outside party drive one or many accounts. All paths run the policy → `account.executeBatch`. |
 | `Policy` | Base hook: `onInstall` (store committed config) + `onExecute` (enforce + build call plan). |
 | `SessionPolicy` | Unified "session key" policy: combines a target allowlist, per-target selector rules, per-selector recipient allowlists, and per-token (and native-ETH) recurring/one-time spend limits — all enforced atomically on each call. |
 | `RecurringAllowance` | Periodic-allowance accounting library (ported from base/account-policies); used by `SessionPolicy` for spend accounting. |
@@ -126,8 +126,11 @@ caller, not the protocol.
   and skipped** (emitting `PullSkipped`) rather than reverting the whole batch — one delinquent subscriber doesn't
   block the rest.
 
-**Opt-in (per account, once).** The account authorizes the provider as a *policy-only* actor — it has no authority
-of its own, it only carries a binding the manager enforces:
+**Opt-in (per account, once).** The account's only on-chain obligation is a single **off-chain signature** over an
+actor change. Because `applySignedActorChanges` is signature-gated and `install` is permissionless (gated by the
+signed commitment, not by `msg.sender`), the provider can submit everything itself — apply the signed change,
+`install`, then `executeFor` — so the account never needs to send a transaction. The account authorizes the provider
+as a *policy-only* actor — it has no authority of its own, it only carries a binding the manager enforces:
 
 ```solidity
 // actorId = bytes20(provider). The provider never signs an 8130 tx; it acts by being msg.sender.

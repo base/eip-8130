@@ -94,7 +94,6 @@ contract PolicyManager is ReentrancyGuard {
 
     error PolicyNotInstalled(bytes32 commitment);
     error PolicyAlreadyInstalled(bytes32 commitment);
-    error UnauthorizedAccount(address caller, address account);
     error OutsideValidityWindow(uint40 validAfter, uint40 validUntil, uint256 timestamp);
     error CommitmentNotAuthorized(bytes32 actorId, address target, bytes32 commitment);
     /// @dev The acting actor has no live policy commitment for the account — i.e. it is not a gated actor of this
@@ -121,24 +120,30 @@ contract PolicyManager is ReentrancyGuard {
 
     /// @notice Installs a policy binding the account has authorized for a specific actor.
     ///
-    /// @dev MUST be called by `binding.account`. The manager re-derives the binding's `commitment` and confirms the
-    ///      account signed it for this manager by reading the resolved policy manager and commitment for `actorId`
-    ///      (via the granular accessors): the resolved target must be this manager and the resolved commitment must
-    ///      equal the binding's. The committed `policyConfig` is then handed to the policy's install hook, which
-    ///      stores it keyed by commitment.
+    /// @dev Permissionless: callable by anyone, not just `binding.account`. The account's *authorization* is the
+    ///      gate, not the caller — the manager re-derives the binding's `commitment` and requires the account to have
+    ///      signed exactly it for this manager when configuring `actorId` (the resolved policy manager must be this
+    ///      contract and the resolved commitment must equal the binding's). An install can therefore only ever
+    ///      materialize a binding the account already committed to, so anyone may submit it (e.g. a subscription
+    ///      provider self-serving install after the account signs the actor change off-chain). The committed
+    ///      `policyConfig` is then handed to the policy's install hook, which stores it keyed by commitment.
     ///
-    /// @param actorId The session-key actor the account configured with this policy (non-zero policyType).
+    ///      Install is one-shot per commitment: a second install of the same `(policy, commitment)` reverts
+    ///      {PolicyAlreadyInstalled}, so it can never reset an installed binding's accounting (e.g. spend counters).
+    ///      Changing any binding field yields a different commitment — a separate, independently-accounted binding,
+    ///      not a reset of the old one.
+    ///
+    /// @param actorId The actor the account configured with this policy (non-zero policyType).
     /// @param binding The account-authorized binding.
     ///
     /// @return commitment The binding's commitment.
     function install(bytes32 actorId, PolicyBinding calldata binding) external returns (bytes32 commitment) {
-        if (msg.sender != binding.account) revert UnauthorizedAccount(msg.sender, binding.account);
-
         commitment = _commitment(binding);
 
         // The account must have signed this exact commitment for this manager when authorizing `actorId`. Read the
         // gate target and signed commitment via the single-SLOAD granular accessors: the manager never needs the
-        // policyType byte, so this avoids the extra ActorConfig SLOAD that getPolicy performs.
+        // policyType byte, so this avoids the extra ActorConfig SLOAD that getPolicy performs. This (not msg.sender)
+        // is the authorization gate, which is why install is permissionless.
         address target = ACCOUNT_CONFIGURATION.getPolicyManager(binding.account, actorId);
         bytes32 signedCommitment = ACCOUNT_CONFIGURATION.getPolicyCommitment(binding.account, actorId);
         if (target != address(this) || signedCommitment != commitment) {

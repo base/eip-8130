@@ -62,11 +62,32 @@ contract PolicyManagerTest is AccountConfigurationTest {
 
     // ── Install authorization ──
 
-    function test_install_revertsForNonAccountCaller() public {
+    function test_install_isPermissionless_anyCallerForAuthorizedBinding() public {
+        // Install is gated by the account's signed commitment, not by msg.sender: once the account has authorized the
+        // actor's commitment, a third party (e.g. a subscription provider) can submit the install itself.
         PolicyManager.PolicyBinding memory binding = _binding(1);
-        vm.expectRevert(abi.encodeWithSelector(PolicyManager.UnauthorizedAccount.selector, stranger, account));
+        bytes32 actorId = _sessionActorId(1);
+        bytes32 commitment = manager.commitmentOf(binding);
+        _authorizePolicyActor(actorId, commitment);
+
         vm.prank(stranger);
-        manager.install(bytes32(0), binding);
+        manager.install(actorId, binding);
+
+        assertTrue(manager.getPolicyRecord(address(policy), commitment).installed);
+    }
+
+    function test_install_revertsWhenAlreadyInstalled() public {
+        // One-shot per commitment: re-installing the same binding cannot reset its accounting.
+        PolicyManager.PolicyBinding memory binding = _binding(1);
+        bytes32 actorId = _sessionActorId(1);
+        bytes32 commitment = manager.commitmentOf(binding);
+        _authorizePolicyActor(actorId, commitment);
+        vm.prank(account);
+        manager.install(actorId, binding);
+
+        vm.expectRevert(abi.encodeWithSelector(PolicyManager.PolicyAlreadyInstalled.selector, commitment));
+        vm.prank(account);
+        manager.install(actorId, binding);
     }
 
     function test_install_revertsWhenCommitmentNotAuthorized() public {
