@@ -62,5 +62,49 @@ selectors whose ABI is known: `SessionPolicy` hardcodes the standard ERC-20 set 
 consumed for those selectors on a limited token, native-ETH limits from each call's `value`, and every other
 selector is governed by target/selector gating alone.
 
+#### Worked example
+
+Configure one session key that (1) has full, uncapped access to one ERC-20 (the "MyApp" token), (2) may spend at
+most **$5 of USDC per month**, and (3) may call the MyApp app contract as much as it wants, but only through two
+chosen selectors. Three call scopes + one spend limit:
+
+```solidity
+address MYAPP_TOKEN; // the "MyApp" ERC-20
+address USDC;        // 6 decimals
+address MYAPP;       // the MyApp app contract
+bytes4  selStake = MyApp.stake.selector;
+bytes4  selClaim = MyApp.claim.selector;
+
+// Spend limits: ONLY USDC ($5/month). MyApp token has no entry, so it is uncapped.
+SessionPolicy.TokenLimit[] memory limits = new SessionPolicy.TokenLimit[](1);
+limits[0] = SessionPolicy.TokenLimit({token: USDC, limit: 5e6, period: 30 days});
+
+SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](3);
+
+// (a) MyApp token: full access — empty rules => any selector; no TokenLimit => no spend cap.
+scopes[0] = SessionPolicy.CallScope({target: MYAPP_TOKEN, selectorRules: new SessionPolicy.SelectorRule[](0)});
+
+// (b) USDC: `transfer` only, so the $5/month cap can't be sidestepped by another selector.
+SessionPolicy.SelectorRule[] memory usdcRules = new SessionPolicy.SelectorRule[](1);
+usdcRules[0] = SessionPolicy.SelectorRule({selector: IERC20.transfer.selector, recipients: new address[](0)});
+scopes[1] = SessionPolicy.CallScope({target: USDC, selectorRules: usdcRules});
+
+// (c) MyApp contract: two chosen selectors, unlimited calls.
+SessionPolicy.SelectorRule[] memory appRules = new SessionPolicy.SelectorRule[](2);
+appRules[0] = SessionPolicy.SelectorRule({selector: selStake, recipients: new address[](0)});
+appRules[1] = SessionPolicy.SelectorRule({selector: selClaim, recipients: new address[](0)});
+scopes[2] = SessionPolicy.CallScope({target: MYAPP, selectorRules: appRules});
+
+bytes memory policyConfig = abi.encode(SessionPolicy.Config({tokenLimits: limits, callScopes: scopes}));
+```
+
+With that installed, the key may transfer any amount of the MyApp token, spend up to $5 of USDC per rolling month
+(refreshing the next month), and call `stake` / `claim` on MyApp without limit — while a USDC transfer over budget
+reverts `ExceededAllowance`, a third MyApp selector reverts `SelectorNotAllowed`, and any other contract reverts
+`TargetNotAllowed`. Two choices to note: modeling "full token access" as *any selector* also permits `approve` /
+`transferFrom` on that token (use a single `transfer` rule to restrict to transfers); and USDC is pinned to
+`transfer` precisely so the cap is airtight. End-to-end test:
+[`test_workedExample_fullTokenAccess_monthlyUsdc_appSelectors`](../../../test/unit/examples/SessionPolicy.t.sol).
+
 > Out of scope for this reference: signature-based install, replacement, and uninstall. See
 > [base/account-policies](https://github.com/base/account-policies) for a fuller policy framework.
