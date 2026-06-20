@@ -8,6 +8,16 @@ import {IAccountConfiguration} from "../../interfaces/IAccountConfiguration.sol"
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../interfaces/ITransactionContext.sol";
 import {Policy} from "./Policy.sol";
 
+/// @dev Recommended `authenticator` for an actor that represents an *external caller* governed by a policy (e.g. a
+///      subscription provider): an address that may act ONLY through its policy manager's external entrypoints, never
+///      directly. Distinct from `EXTERNAL_CALLER_AUTHENTICATOR` (which grants direct `executeBatch`): this is a
+///      no-code, hash-derived sentinel, so the actor is recognized by AccountConfiguration (non-zero authenticator)
+///      yet cannot drive the account directly and cannot authenticate an 8130 transaction (its `authenticate()` would
+///      call into empty code and fail). Only the account-side authorization (and these examples/tests) ever reference
+///      it; neither the account nor the manager runtime reads it — `executeFor` authorizes purely on
+///      `actorId == bytes20(msg.sender)`, `policy_manager == this`, and a non-zero commitment.
+address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak256("externalPolicyCaller"))));
+
 /// @title PolicyManager
 ///
 /// @notice Minimal, self-contained reference policy manager for EIP-8130 actor policies.
@@ -21,6 +31,15 @@ import {Policy} from "./Policy.sol";
 ///        here is the account itself. That is the authorization boundary: only a gated session-key transaction
 ///        (routed through the account) can invoke {execute}.
 ///
+///      Two acting models, two entrypoints:
+///      - {execute}: the *account itself* acts (a gated session key, dispatched by the protocol as the account). The
+///        acting identity comes from the transaction-context precompile and `account == msg.sender`.
+///      - {executeFor} / {executeForMany}: an *external caller* acts on behalf of one or more accounts that authorized
+///        it (e.g. a subscription provider pulling from many accounts in one transaction). Identity is the caller
+///        itself (`actorId == bytes20(msg.sender)`) and `account` is an explicit argument. Because there is no
+///        protocol routing on this path, these re-add the `policy_manager == address(this)` check that {execute}
+///        omits.
+///
 ///      Commitment binding: the account authorizes a {PolicyBinding}; its `keccak256` is the `commitment`. When the
 ///      account authorizes the session-key actor it stores a non-zero `policyType`, `policy_manager = address(this)`, and
 ///      `policy_commitment = commitment` in the Account Configuration contract. At {install} the manager reads that
@@ -28,8 +47,8 @@ import {Policy} from "./Policy.sol";
 ///      accessors and requires the target and commitment to match, so an install can only succeed for a policy the
 ///      account actually signed for this manager.
 ///
-///      Scope: install-by-direct-account-call and execute only. Signature-based install, replacement, and
-///      uninstall are intentionally omitted from this reference.
+///      Scope: install-by-direct-account-call, plus account-acting {execute} and external-caller {executeFor} /
+///      {executeForMany}. Signature-based install, replacement, and uninstall are intentionally omitted.
 contract PolicyManager is ReentrancyGuard {
     using Address for address;
 
@@ -69,15 +88,23 @@ contract PolicyManager is ReentrancyGuard {
 
     event PolicyInstalled(address indexed account, address indexed policy, bytes32 indexed commitment);
     event PolicyExecuted(address indexed account, address indexed policy, bytes32 indexed commitment, address caller);
+    /// @dev Emitted by {executeForMany} when one account in a best-effort batch is skipped (its per-account
+    ///      enforcement reverted, e.g. revoked/expired binding, over budget, or a failing account call).
+    event PullSkipped(address indexed account, address indexed policy, bytes32 indexed actorId);
 
     error PolicyNotInstalled(bytes32 commitment);
     error PolicyAlreadyInstalled(bytes32 commitment);
     error UnauthorizedAccount(address caller, address account);
     error OutsideValidityWindow(uint40 validAfter, uint40 validUntil, uint256 timestamp);
     error CommitmentNotAuthorized(bytes32 actorId, address target, bytes32 commitment);
-    /// @dev The acting actor (from the transaction-context precompile) has no live policy commitment for the
-    ///      caller account — i.e. it is not a gated actor of this account, or it has been revoked/expired.
+    /// @dev The acting actor has no live policy commitment for the account — i.e. it is not a gated actor of this
+    ///      account, was revoked/expired, or (on the external path) the account did not gate this manager for it.
     error NoActivePolicy(bytes32 actorId);
+    /// @dev {executeForMany} array length mismatch between `accounts` and `executionData`.
+    error LengthMismatch();
+    /// @dev The per-account self-call boundary used by {executeForMany} was invoked by someone other than this
+    ///      contract.
+    error OnlySelf();
 
     /// @notice Computes the commitment (binding identifier) for a binding.
     ///
@@ -153,6 +180,98 @@ contract PolicyManager is ReentrancyGuard {
         bytes32 commitment = ACCOUNT_CONFIGURATION.getPolicyCommitment(account, actorId);
         if (commitment == bytes32(0)) revert NoActivePolicy(actorId);
 
+        // No manager-match check here: on the protocol-dispatched path the 8130 gate already guarantees this manager
+        // is the acting key's configured target (see the dev note above). The external entrypoints below re-add it.
+        _enforce(account, policy, commitment, executionData, account);
+    }
+
+    /// @notice External-caller variant of {execute}: an external party drives a policy that an `account` authorized
+    ///         for it. Used when the actor is not a key *on* the account but a separate party (e.g. a subscription
+    ///         provider) the account opted into.
+    ///
+    /// @dev The acting identity is the caller itself — `actorId == bytes20(msg.sender)` — and `account` is explicit.
+    ///      There is no protocol routing on this path, so unlike {execute} this re-verifies that the account gated
+    ///      *this* manager for the caller (`policy_manager(account, actorId) == address(this)`); the caller cannot
+    ///      forge the identity because it is derived from `msg.sender`. The account must also have registered this
+    ///      manager as an execution-enabled actor (`EXTERNAL_CALLER_AUTHENTICATOR`) for the forwarded `executeBatch`
+    ///      to be accepted.
+    ///
+    /// @param account       Account the call plan will execute against (it authorized the caller).
+    /// @param policy        Policy contract for the binding.
+    /// @param executionData Per-use action parameters interpreted by the policy.
+    function executeFor(address account, address policy, bytes calldata executionData) external nonReentrant {
+        _enforceExternal(account, bytes32(bytes20(msg.sender)), policy, executionData, msg.sender);
+    }
+
+    /// @notice Best-effort cross-account batch of {executeFor}: one external caller, many accounts, one transaction.
+    ///
+    /// @dev Each account is enforced in its own self-call so a single failure (revoked/expired binding, over budget,
+    ///      a reverting account call) is isolated and skipped — it does not roll back the accounts that succeeded.
+    ///      Failures emit {PullSkipped}; `results[i]` reports per-account success. The acting `actorId` is the caller
+    ///      (`bytes20(msg.sender)`) for every entry.
+    ///
+    /// @param accounts      Accounts to pull from (each must have authorized the caller for `policy`).
+    /// @param policy        Policy contract shared across the batch.
+    /// @param executionData Per-account action parameters, parallel to `accounts`.
+    ///
+    /// @return results Per-account success flags, parallel to `accounts`.
+    function executeForMany(address[] calldata accounts, address policy, bytes[] calldata executionData)
+        external
+        nonReentrant
+        returns (bool[] memory results)
+    {
+        if (accounts.length != executionData.length) revert LengthMismatch();
+        bytes32 actorId = bytes32(bytes20(msg.sender));
+        address caller = msg.sender;
+        results = new bool[](accounts.length);
+        for (uint256 i; i < accounts.length; i++) {
+            // Self-call gives each account its own revert boundary: a failure rolls back only this entry's effects
+            // (its spend accounting + account call) and is caught, so the rest of the batch still settles.
+            try this.enforceExternalSelf(accounts[i], actorId, policy, executionData[i], caller) {
+                results[i] = true;
+            } catch {
+                emit PullSkipped(accounts[i], policy, actorId);
+            }
+        }
+    }
+
+    /// @notice Self-call boundary used by {executeForMany} for per-account revert isolation. Not for external use.
+    ///
+    /// @dev Only callable by this contract (from within {executeForMany}), so the `(account, actorId, caller)` tuple
+    ///      it trusts can only be supplied by the manager itself — never spoofed by an outside caller.
+    function enforceExternalSelf(
+        address account,
+        bytes32 actorId,
+        address policy,
+        bytes calldata executionData,
+        address caller
+    ) external {
+        if (msg.sender != address(this)) revert OnlySelf();
+        _enforceExternal(account, actorId, policy, executionData, caller);
+    }
+
+    /// @dev External-path validation shared by {executeFor} and {enforceExternalSelf}: re-add the manager-match check
+    ///      the protocol path can omit, resolve the live commitment, then run the common enforcement.
+    function _enforceExternal(
+        address account,
+        bytes32 actorId,
+        address policy,
+        bytes calldata executionData,
+        address caller
+    ) internal {
+        if (ACCOUNT_CONFIGURATION.getPolicyManager(account, actorId) != address(this)) {
+            revert NoActivePolicy(actorId);
+        }
+        bytes32 commitment = ACCOUNT_CONFIGURATION.getPolicyCommitment(account, actorId);
+        if (commitment == bytes32(0)) revert NoActivePolicy(actorId);
+        _enforce(account, policy, commitment, executionData, caller);
+    }
+
+    /// @dev Common enforcement for both acting models: validate the installed binding's lifecycle window, run the
+    ///      policy hook, and forward the returned call plan to the account.
+    function _enforce(address account, address policy, bytes32 commitment, bytes calldata executionData, address caller)
+        internal
+    {
         PolicyRecord storage record = _policies[policy][commitment];
         if (!record.installed) revert PolicyNotInstalled(commitment);
 
@@ -163,11 +282,11 @@ contract PolicyManager is ReentrancyGuard {
             revert OutsideValidityWindow(record.validAfter, record.validUntil, block.timestamp);
         }
 
-        bytes memory accountCallData = Policy(policy).onExecute(commitment, account, executionData, account);
+        bytes memory accountCallData = Policy(policy).onExecute(commitment, account, executionData, caller);
         if (accountCallData.length == 0) return;
 
         account.functionCall(accountCallData);
-        emit PolicyExecuted(account, policy, commitment, account);
+        emit PolicyExecuted(account, policy, commitment, caller);
     }
 
     /// @dev Reads the authenticated actor of the in-flight EIP-8130 transaction from the transaction-context

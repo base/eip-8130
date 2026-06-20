@@ -40,7 +40,7 @@ session key ──(8130 gate: only PolicyManager)──▶ PolicyManager.execute
 
 | Contract | Role |
 |----------|------|
-| `PolicyManager` | Minimal manager: install verifies the account's signed commitment; `execute` reads the acting actor from the transaction-context precompile, reads its live commitment, then policy → `account.executeBatch`. |
+| `PolicyManager` | Minimal manager: install verifies the account's signed commitment; `execute` (account-acting) reads the acting actor from the transaction-context precompile; `executeFor` / `executeForMany` (external-caller) let an authorized outside party drive one or many accounts. All paths run the policy → `account.executeBatch`. |
 | `Policy` | Base hook: `onInstall` (store committed config) + `onExecute` (enforce + build call plan). |
 | `SessionPolicy` | Unified "session key" policy: combines a target allowlist, per-target selector rules, per-selector recipient allowlists, and per-token (and native-ETH) recurring/one-time spend limits — all enforced atomically on each call. |
 | `RecurringAllowance` | Periodic-allowance accounting library (ported from base/account-policies); used by `SessionPolicy` for spend accounting. |
@@ -105,6 +105,47 @@ reverts `ExceededAllowance`, a third MyApp selector reverts `SelectorNotAllowed`
 `transferFrom` on that token (use a single `transfer` rule to restrict to transfers); and USDC is pinned to
 `transfer` precisely so the cap is airtight. End-to-end test:
 [`test_workedExample_fullTokenAccess_monthlyUsdc_appSelectors`](../../../test/unit/examples/SessionPolicy.t.sol).
+
+### External callers (subscriptions)
+
+The flows above are *account-acting*: a session key on the account transacts, the protocol dispatches as the
+account, and `execute` learns the acting actor from the transaction-context precompile. But sometimes the actor
+isn't a key on the account at all — e.g. a **subscription provider** that wants to make **one** batch call pulling
+from many accounts, rather than each account running its own session key. For that, identity must come from the
+caller, not the protocol.
+
+`executeFor(account, policy, executionData)` is the external-caller entrypoint:
+
+- **Identity is the caller:** `actorId = bytes20(msg.sender)`, and `account` is an explicit argument. The caller
+  can't forge the identity because it's derived from `msg.sender`.
+- **No protocol routing, so the manager re-checks itself:** it re-adds the `policy_manager(account, actorId) ==
+  address(this)` check that the account-acting `execute` omits (the 8130 gate guarantees routing only on the
+  dispatched path). So a provider can only pull through the exact manager the account authorized.
+- **One identity, many accounts:** `executeForMany(accounts[], policy, executionData[])` runs each account in its
+  own self-call so a single failure (revoked/expired binding, over budget, a reverting account call) is **isolated
+  and skipped** (emitting `PullSkipped`) rather than reverting the whole batch — one delinquent subscriber doesn't
+  block the rest.
+
+**Opt-in (per account, once).** The account authorizes the provider as a *policy-only* actor — it has no authority
+of its own, it only carries a binding the manager enforces:
+
+```solidity
+// actorId = bytes20(provider). The provider never signs an 8130 tx; it acts by being msg.sender.
+IAccountConfiguration.ActorConfig({
+    authenticator: EXTERNAL_POLICY_AUTHENTICATOR, // recognized actor; NO direct executeBatch; not 8130-usable
+    scope:         0x02,                          // SCOPE_SENDER — required non-zero (a policy actor can't be scopeless),
+                                                  //   but inert here since the sentinel can't authenticate a tx
+    expiry:        0,
+    policyType:    0x01                           // gated; policy_manager = manager, policy_commitment = own salt
+});
+```
+
+Critically, the provider must **not** be registered with `EXTERNAL_CALLER_AUTHENTICATOR` — that sentinel grants
+*direct, unrestricted* `executeBatch` and would let the provider bypass the policy entirely. `EXTERNAL_POLICY_AUTHENTICATOR`
+is a no-code sentinel: the actor is recognized (non-zero authenticator) but can neither drive the account directly
+nor authenticate an 8130 transaction. Give the provider its **own salt** so its commitment — and therefore its
+spend budget — is isolated from any session keys on the account. End-to-end tests:
+[`ExternalPolicyCaller.t.sol`](../../../test/unit/examples/ExternalPolicyCaller.t.sol).
 
 > Out of scope for this reference: signature-based install, replacement, and uninstall. See
 > [base/account-policies](https://github.com/base/account-policies) for a fuller policy framework.
