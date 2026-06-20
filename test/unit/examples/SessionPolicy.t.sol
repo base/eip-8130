@@ -35,6 +35,10 @@ contract SessionMockTarget {
     function other(uint256 v) external {
         value = v;
     }
+
+    function adminOnly(uint256 v) external {
+        value = v;
+    }
 }
 
 /// @notice Exercises the unified {SessionPolicy}: target allowlist, per-target selector rules, recipient
@@ -270,6 +274,78 @@ contract SessionPolicyTest is AccountConfigurationTest {
         manager.execute(
             address(policy), _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (mallory, 1)))
         );
+    }
+
+    // ── Worked example ──
+    //
+    // A single session key that: (1) has full, uncapped access to one ERC-20 (the "MyApp" token); (2) may spend at
+    // most $5 of USDC per month; and (3) may call the MyApp app contract as much as it wants, but only through two
+    // chosen selectors. This is the example documented in the policies README.
+
+    function test_workedExample_fullTokenAccess_monthlyUsdc_appSelectors() public {
+        // A second ERC-20 plays the role of USDC (6 decimals); `token` (minted in setUp) is the MyApp token.
+        SessionMockERC20 usdc = new SessionMockERC20();
+        usdc.mint(account, 1_000e6);
+        uint40 monthPeriod = 30 days;
+        uint256 fiveUsdc = 5e6; // $5 at 6 decimals
+
+        // Spend limits: only USDC ($5/month). The MyApp token has no entry, so its transfers are uncapped.
+        SessionPolicy.TokenLimit[] memory limits = new SessionPolicy.TokenLimit[](1);
+        limits[0] = SessionPolicy.TokenLimit({token: address(usdc), limit: fiveUsdc, period: monthPeriod});
+
+        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](3);
+        // (a) MyApp token: full access — any selector, and no spend cap (no TokenLimit above).
+        scopes[0] = _anySelectorScope(address(token));
+        // (b) USDC: transfer only, so the $5/month cap can't be sidestepped by another selector.
+        SessionPolicy.SelectorRule[] memory usdcRules = new SessionPolicy.SelectorRule[](1);
+        usdcRules[0] = SessionPolicy.SelectorRule({selector: TRANSFER, recipients: _noRecipients()});
+        scopes[1] = SessionPolicy.CallScope({target: address(usdc), selectorRules: usdcRules});
+        // (c) MyApp app contract: two chosen selectors, unlimited calls.
+        SessionPolicy.SelectorRule[] memory appRules = new SessionPolicy.SelectorRule[](2);
+        appRules[0] =
+            SessionPolicy.SelectorRule({selector: SessionMockTarget.setValue.selector, recipients: _noRecipients()});
+        appRules[1] =
+            SessionPolicy.SelectorRule({selector: SessionMockTarget.other.selector, recipients: _noRecipients()});
+        scopes[2] = SessionPolicy.CallScope({target: address(target), selectorRules: appRules});
+
+        bytes32 actorId = _install(_config(limits, scopes));
+
+        // Uncapped MyApp token transfer.
+        _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 750_000e18)));
+        assertEq(token.balanceOf(bob), 750_000e18);
+
+        // USDC within the monthly cap.
+        _execute(actorId, address(usdc), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 3e6)));
+        assertEq(usdc.balanceOf(bob), 3e6);
+
+        // MyApp app calls, both selectors, repeatedly.
+        _execute(actorId, address(target), 0, abi.encodeCall(SessionMockTarget.setValue, (1)));
+        _execute(actorId, address(target), 0, abi.encodeCall(SessionMockTarget.other, (2)));
+        _execute(actorId, address(target), 0, abi.encodeCall(SessionMockTarget.setValue, (3)));
+        assertEq(target.value(), 3);
+
+        // A further $3 USDC this month would total $6 > $5 → rejected.
+        _mockActingActor(actorId);
+        vm.expectRevert(abi.encodeWithSelector(RecurringAllowance.ExceededAllowance.selector, 6e6, fiveUsdc));
+        vm.prank(account);
+        manager.execute(
+            address(policy), _action(address(usdc), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 3e6)))
+        );
+
+        // A selector outside the two chosen ones on MyApp → rejected.
+        _mockActingActor(actorId);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SessionPolicy.SelectorNotAllowed.selector, address(target), SessionMockTarget.adminOnly.selector
+            )
+        );
+        vm.prank(account);
+        manager.execute(address(policy), _action(address(target), 0, abi.encodeCall(SessionMockTarget.adminOnly, (9))));
+
+        // Next month: the USDC budget refreshes back to $5.
+        vm.warp(block.timestamp + monthPeriod);
+        _execute(actorId, address(usdc), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 4e6)));
+        assertEq(usdc.balanceOf(bob), 3e6 + 4e6);
     }
 
     // ── Install guards ──
