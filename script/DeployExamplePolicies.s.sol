@@ -29,7 +29,7 @@ bytes32 constant SALT = bytes32(0);
 ///      forge script script/DeployExamples.s.sol --rpc-url $RPC_URL --broadcast \
 ///        --private-key $PRIVATE_KEY --verify \
 ///        --verifier blockscout --verifier-url https://base-sepolia.blockscout.com/api/
-contract DeployExamples is Script {
+contract DeployExamplePolicies is Script {
     // ─────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────
