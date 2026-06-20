@@ -146,7 +146,7 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
         data[2] = _pull(20e6);
 
         vm.expectEmit(true, true, true, false);
-        emit PolicyManager.PullSkipped(a2, address(policy), bytes32(bytes20(provider)));
+        emit PolicyManager.ExecutionSkipped(a2, address(policy), bytes32(bytes20(provider)));
 
         vm.prank(provider);
         bool[] memory results = manager.executeForMany(accounts, address(policy), data);
@@ -157,6 +157,27 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
         // a1 and a3 settled; a2 was skipped entirely.
         assertEq(token.balanceOf(recipient), 30e6);
         assertEq(token.balanceOf(a2), 1_000e6);
+    }
+
+    function test_executeFor_revertsWhenCommitmentBelongsToAnotherAccount() public {
+        // Victim opts the provider in; commitment is installed with record.account == victim.
+        address victim = _optIn(bytes32(uint256(1)), 100e6, MONTH);
+        (, bytes32 victimCommitment) = _binding(victim, 1, 100e6, MONTH);
+
+        // Attacker points its OWN actor (actorId = bytes20(provider)) at the victim's opaque commitment + this
+        // manager. AccountConfiguration stores the commitment verbatim, so nothing stops this registration.
+        address attacker = _createAccount(bytes32(uint256(2)));
+        _authorizeProvider(attacker, address(manager), victimCommitment);
+
+        // Driving the attacker account against the victim's commitment must be rejected — otherwise the attacker
+        // could exhaust the victim's shared, commitment-keyed spend counter.
+        vm.expectRevert(abi.encodeWithSelector(PolicyManager.CommitmentAccountMismatch.selector, victim, attacker));
+        vm.prank(provider);
+        manager.executeFor(attacker, address(policy), _pull(10e6));
+
+        // Nothing moved: the attack reverted, so the victim's shared spend counter and balances are untouched.
+        assertEq(token.balanceOf(recipient), 0);
+        assertEq(policy.getCurrentSpend(victimCommitment, address(token)).spend, 0);
     }
 
     function test_executeForMany_revertsOnLengthMismatch() public {

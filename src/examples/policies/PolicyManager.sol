@@ -88,14 +88,17 @@ contract PolicyManager is ReentrancyGuard {
 
     event PolicyInstalled(address indexed account, address indexed policy, bytes32 indexed commitment);
     event PolicyExecuted(address indexed account, address indexed policy, bytes32 indexed commitment, address caller);
-    /// @dev Emitted by {executeForMany} when one account in a best-effort batch is skipped (its per-account
-    ///      enforcement reverted, e.g. revoked/expired binding, over budget, or a failing account call).
-    event PullSkipped(address indexed account, address indexed policy, bytes32 indexed actorId);
+    /// @dev Emitted by {executeForMany} when one account in a best-effort batch is skipped because its per-account
+    ///      enforcement reverted (e.g. revoked/expired binding, over budget, or a failing account call).
+    event ExecutionSkipped(address indexed account, address indexed policy, bytes32 indexed actorId);
 
     error PolicyNotInstalled(bytes32 commitment);
     error PolicyAlreadyInstalled(bytes32 commitment);
     error OutsideValidityWindow(uint40 validAfter, uint40 validUntil, uint256 timestamp);
     error CommitmentNotAuthorized(bytes32 actorId, address target, bytes32 commitment);
+    /// @dev The executing account is not the account the commitment was installed for. Commitments are opaque in
+    ///      AccountConfiguration, so this binds execution (and the commitment-keyed policy state) to its owner.
+    error CommitmentAccountMismatch(address expected, address actual);
     /// @dev The acting actor has no live policy commitment for the account — i.e. it is not a gated actor of this
     ///      account, was revoked/expired, or (on the external path) the account did not gate this manager for it.
     error NoActivePolicy(bytes32 actorId);
@@ -137,7 +140,11 @@ contract PolicyManager is ReentrancyGuard {
     /// @param binding The account-authorized binding.
     ///
     /// @return commitment The binding's commitment.
-    function install(bytes32 actorId, PolicyBinding calldata binding) external returns (bytes32 commitment) {
+    function install(bytes32 actorId, PolicyBinding calldata binding)
+        external
+        nonReentrant
+        returns (bytes32 commitment)
+    {
         commitment = _commitment(binding);
 
         // The account must have signed this exact commitment for this manager when authorizing `actorId`. Read the
@@ -212,8 +219,8 @@ contract PolicyManager is ReentrancyGuard {
     ///
     /// @dev Each account is enforced in its own self-call so a single failure (revoked/expired binding, over budget,
     ///      a reverting account call) is isolated and skipped — it does not roll back the accounts that succeeded.
-    ///      Failures emit {PullSkipped}; `results[i]` reports per-account success. The acting `actorId` is the caller
-    ///      (`bytes20(msg.sender)`) for every entry.
+    ///      Failures emit {ExecutionSkipped}; `results[i]` reports per-account success. The acting `actorId` is the
+    ///      caller (`bytes20(msg.sender)`) for every entry.
     ///
     /// @param accounts      Accounts to pull from (each must have authorized the caller for `policy`).
     /// @param policy        Policy contract shared across the batch.
@@ -235,7 +242,7 @@ contract PolicyManager is ReentrancyGuard {
             try this.enforceExternalSelf(accounts[i], actorId, policy, executionData[i], caller) {
                 results[i] = true;
             } catch {
-                emit PullSkipped(accounts[i], policy, actorId);
+                emit ExecutionSkipped(accounts[i], policy, actorId);
             }
         }
     }
@@ -279,6 +286,12 @@ contract PolicyManager is ReentrancyGuard {
     {
         PolicyRecord storage record = _policies[policy][commitment];
         if (!record.installed) revert PolicyNotInstalled(commitment);
+
+        // Bind execution to the commitment's owning account. Commitments are opaque in AccountConfiguration, so a
+        // different account could store a victim's commitment value in its own actor config and otherwise drive — and
+        // exhaust — the victim's commitment-keyed policy state (e.g. a shared spend counter). `record.account` is
+        // fixed at install to the account named in the commitment preimage, so this always holds for legitimate use.
+        if (record.account != account) revert CommitmentAccountMismatch(record.account, account);
 
         if (
             (record.validAfter != 0 && block.timestamp < record.validAfter)
