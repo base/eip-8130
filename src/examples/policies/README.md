@@ -42,11 +42,25 @@ session key ──(8130 gate: only PolicyManager)──▶ PolicyManager.execute
 |----------|------|
 | `PolicyManager` | Minimal manager: install verifies the account's signed commitment; `execute` reads the acting actor from the transaction-context precompile, reads its live commitment, then policy → `account.executeBatch`. |
 | `Policy` | Base hook: `onInstall` (store committed config) + `onExecute` (enforce + build call plan). |
-| `ERC20SpendLimitPolicy` | Recurring (e.g. weekly) per-binding ERC-20 spend limit. |
-| `SelectorGatingPolicy` | Restrict a key to one target and a fixed set of function selectors. |
-| `RecurringAllowance` | Periodic-allowance accounting library (ported from base/account-policies). |
+| `SessionPolicy` | Unified "session key" policy: combines a target allowlist, per-target selector rules, per-selector recipient allowlists, and per-token (and native-ETH) recurring/one-time spend limits — all enforced atomically on each call. |
+| `RecurringAllowance` | Periodic-allowance accounting library (ported from base/account-policies); used by `SessionPolicy` for spend accounting. |
 
-A key that needs limits on two tokens installs two bindings; the manager routes each by commitment.
+A key that needs several independent bindings installs each separately; the manager routes each by commitment.
+
+### `SessionPolicy`: one policy, many dimensions
+
+The manager validates exactly **one** `(policy, commitment)` per `execute` call, so installing several focused
+policies cannot *jointly* gate the **same** call (each binding is checked in isolation). `SessionPolicy` is the
+pattern for "this one call must satisfy target **and** selector **and** recipient **and** spend-limit": it decodes
+its committed config into commitment-keyed mappings at install, so each `onExecute` resolves every dimension with
+O(1) SLOADs. Per-call cost therefore tracks the constraints actually configured, so configure only the dimensions a
+given key needs.
+
+Recipient allowlists and spend-limit accounting require decoding a call's arguments, which is only possible for
+selectors whose ABI is known: `SessionPolicy` hardcodes the standard ERC-20 set (`transfer`, `transferFrom`,
+`approve`). A recipient allowlist may only be attached to one of those (enforced at install); spend limits are
+consumed for those selectors on a limited token, native-ETH limits from each call's `value`, and every other
+selector is governed by target/selector gating alone.
 
 > Out of scope for this reference: signature-based install, replacement, and uninstall. See
 > [base/account-policies](https://github.com/base/account-policies) for a fuller policy framework.

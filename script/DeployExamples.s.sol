@@ -5,16 +5,14 @@ import {Script, console} from "forge-std/Script.sol";
 
 import {AccountConfiguration} from "../src/AccountConfiguration.sol";
 import {PolicyManager} from "../src/examples/policies/PolicyManager.sol";
-import {ERC20SpendLimitPolicy} from "../src/examples/policies/ERC20SpendLimitPolicy.sol";
-import {SelectorGatingPolicy} from "../src/examples/policies/SelectorGatingPolicy.sol";
+import {SessionPolicy} from "../src/examples/policies/SessionPolicy.sol";
 
 /// @dev Nick's deterministic deployment proxy — same address on every EVM chain.
 address constant CREATE2_FACTORY = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
 
 bytes32 constant SALT = bytes32(0);
 
-/// @notice Deploys the EIP-8130 example policy contracts: the reference {PolicyManager} and the example policies
-///         ({ERC20SpendLimitPolicy}, {SelectorGatingPolicy}).
+/// @notice Deploys the EIP-8130 example policy contracts: the reference {PolicyManager} and the {SessionPolicy}.
 ///
 ///         These are UNAUDITED reference implementations and are deployed separately from the canonical system
 ///         contracts (see Deploy.s.sol) so the two concerns stay independent — integrators should not assume these
@@ -61,12 +59,8 @@ contract DeployExamples is Script {
         return abi.encodePacked(type(PolicyManager).creationCode, abi.encode(accountConfig));
     }
 
-    function _erc20SpendLimitInit(address policyManager) internal pure returns (bytes memory) {
-        return abi.encodePacked(type(ERC20SpendLimitPolicy).creationCode, abi.encode(policyManager));
-    }
-
-    function _selectorGatingInit(address policyManager) internal pure returns (bytes memory) {
-        return abi.encodePacked(type(SelectorGatingPolicy).creationCode, abi.encode(policyManager));
+    function _sessionPolicyInit(address policyManager) internal pure returns (bytes memory) {
+        return abi.encodePacked(type(SessionPolicy).creationCode, abi.encode(policyManager));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -82,8 +76,7 @@ contract DeployExamples is Script {
         console.log("");
         console.log("=== Example policies ===");
         console.log("PolicyManager:           ", policyManager);
-        console.log("ERC20SpendLimitPolicy:   ", _addr(_erc20SpendLimitInit(policyManager)));
-        console.log("SelectorGatingPolicy:    ", _addr(_selectorGatingInit(policyManager)));
+        console.log("SessionPolicy:           ", _addr(_sessionPolicyInit(policyManager)));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -99,8 +92,7 @@ contract DeployExamples is Script {
         vm.startBroadcast();
 
         address policyManager = _create2(_policyManagerInit(accountConfig));
-        address erc20SpendLimit = _create2(_erc20SpendLimitInit(policyManager));
-        address selectorGating = _create2(_selectorGatingInit(policyManager));
+        address sessionPolicy = _create2(_sessionPolicyInit(policyManager));
 
         vm.stopBroadcast();
 
@@ -108,7 +100,6 @@ contract DeployExamples is Script {
         console.log("");
         console.log("=== Example policies ===");
         console.log("PolicyManager:           ", policyManager);
-        console.log("ERC20SpendLimitPolicy:   ", erc20SpendLimit);
-        console.log("SelectorGatingPolicy:    ", selectorGating);
+        console.log("SessionPolicy:           ", sessionPolicy);
     }
 }
