@@ -14,10 +14,13 @@ gates identically on any non-zero `policyType` and does not interpret the value;
    `policy_manager = PolicyManager`, and `policy_commitment = keccak256` of an account-authorized
    [`PolicyBinding`](./PolicyManager.sol). The Account Configuration contract exposes this via
    [`getPolicy(account, actorId)`](../../interfaces/IAccountConfiguration.sol).
-2. **Install.** The account calls `PolicyManager.install(actorId, binding)`. The manager re-derives the
-   commitment and confirms `getPolicy` resolves to `(this, commitment)` — so an install can only succeed for a
-   policy the account actually signed for this manager. The committed `policyConfig` is then handed to the
-   policy's install hook, which stores it keyed by commitment.
+2. **Install.** Anyone (the account itself, the session key, or a third party) calls
+   `PolicyManager.install(actorId, binding)`. The manager re-derives the commitment and confirms `getPolicy`
+   resolves to `(this, commitment)` — so an install can only succeed for a policy the account actually signed for
+   this manager, which is what makes the call permissionless. The committed `policyConfig` is then handed to the
+   policy's install hook, which stores it keyed by commitment. Install is one-shot per commitment, so it can never
+   reset an installed binding's accounting (e.g. spend counters); changing any binding field yields a different
+   commitment — a separate, independently-accounted binding.
 3. **Use.** When the session key transacts, the protocol gate resolves the key's allowed target
    (`policy_manager(account, actorId)`) and reverts any call whose `call.to` isn't that address before dispatch, so
    the key's call can only arrive at `PolicyManager.execute(policy, executionData)` with `msg.sender == account`.

@@ -47,8 +47,9 @@ address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak2
 ///      accessors and requires the target and commitment to match, so an install can only succeed for a policy the
 ///      account actually signed for this manager.
 ///
-///      Scope: install-by-direct-account-call, plus account-acting {execute} and external-caller {executeFor} /
-///      {executeForMany}. Signature-based install, replacement, and uninstall are intentionally omitted.
+///      Scope: permissionless {install} (gated by the account's signed commitment, not the caller), account-acting
+///      {execute}, and external-caller {executeFor} / {executeForMany}. Signature-based install, replacement, and
+///      uninstall are intentionally omitted.
 contract PolicyManager is ReentrancyGuard {
     using Address for address;
 
