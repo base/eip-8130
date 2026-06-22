@@ -145,6 +145,41 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         assertEq(accountConfiguration.getPolicyManager(eoa, selfActorId), address(0));
     }
 
+    function test_getPolicyAccessors_clearedOnReauthorizeToNone() public {
+        // Upsert path: re-authorizing a policy-bearing actor down to POLICY_NONE must clear both policy slots, so no
+        // stale (manager, commitment) leaks and the "commitment non-zero iff policyType non-zero" invariant holds.
+        (address account,) = _createK1Account(ROOT_PK);
+        bytes32 sessionActorId = bytes32(bytes20(vm.addr(SESSION_PK)));
+
+        _authorizePolicyActor(account, ROOT_PK, sessionActorId, DUMMY_MANAGER, DUMMY_COMMITMENT);
+        assertEq(accountConfiguration.getPolicyCommitment(account, sessionActorId), DUMMY_COMMITMENT);
+        assertEq(accountConfiguration.getPolicyManager(account, sessionActorId), DUMMY_MANAGER);
+
+        // Overwrite the same actor as ungated (policyType == POLICY_NONE).
+        _authorizeUngatedActor(account, ROOT_PK, sessionActorId, address(k1Authenticator));
+
+        assertEq(accountConfiguration.getPolicyCommitment(account, sessionActorId), bytes32(0));
+        assertEq(accountConfiguration.getPolicyManager(account, sessionActorId), address(0));
+        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, sessionActorId);
+        assertEq(cfg.policyType, 0x00);
+        assertEq(cfg.scope, 0x00);
+    }
+
+    function test_getPolicyAccessors_updatedOnReauthorizeToNewManager() public {
+        // Upsert to a *different* (manager, commitment) must replace, not merge.
+        (address account,) = _createK1Account(ROOT_PK);
+        bytes32 sessionActorId = bytes32(bytes20(vm.addr(SESSION_PK)));
+
+        _authorizePolicyActor(account, ROOT_PK, sessionActorId, DUMMY_MANAGER, DUMMY_COMMITMENT);
+
+        address newManager = address(0xBEEF);
+        bytes32 newCommitment = bytes32(uint256(0xD00D));
+        _authorizePolicyActor(account, ROOT_PK, sessionActorId, newManager, newCommitment);
+
+        assertEq(accountConfiguration.getPolicyManager(account, sessionActorId), newManager);
+        assertEq(accountConfiguration.getPolicyCommitment(account, sessionActorId), newCommitment);
+    }
+
     // ── Isolation (correct mapping key derivation) ──
 
     function test_getPolicyAccessors_isolatedAcrossActors() public {

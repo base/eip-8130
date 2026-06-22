@@ -250,16 +250,19 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         assertTrue(accountConfiguration.isActor(account, thirdActorId));
     }
 
-    function test_revertsOnDuplicateActorAuthorization() public {
+    function test_reauthorizeNonSelfActor_upsertsInPlace() public {
+        // authorizeActor is an upsert: re-authorizing an already-configured (non-self) actor overwrites its config
+        // in place rather than reverting. Here the owner actor is re-scoped from unrestricted (0x00) to CHANGE_ACTORS.
         (address account, bytes32 actorActorId) = _createK1Account(ACTOR_PK);
 
+        uint8 newScope = accountConfiguration.SCOPE_CHANGE_ACTORS();
         IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
         changes[0] = IAccountConfiguration.ActorChange({
             actorId: actorActorId,
             changeType: 0x01,
             data: abi.encode(
                 IAccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: newScope, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
             )
@@ -269,8 +272,33 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(ACTOR_PK, digest);
 
-        vm.expectRevert();
         accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
+
+        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, actorActorId);
+        assertEq(cfg.scope, newScope);
+        assertEq(cfg.authenticator, address(k1Authenticator));
+    }
+
+    function test_reauthorizeLiveK1Self_rescopesWithoutPriorRevoke() public {
+        // Re-authorizing the inline k1 self is now an in-place upsert — no prior revoke required, even when the self
+        // is live with a non-trivial scope. (Previously this reverted unless the self was revoked or all-zero.)
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+        bytes32 selfActorId = bytes32(bytes20(eoa));
+
+        // First: the implicit owner (all-zero inline, live) scopes the self to CHANGE_ACTORS so it can keep signing.
+        uint8 changeActors = accountConfiguration.SCOPE_CHANGE_ACTORS();
+        _rescopeSelf(eoa, eoaPk, changeActors);
+        assertEq(accountConfiguration.getActorConfig(eoa, selfActorId).scope, changeActors);
+
+        // Second: re-scope the now-live, non-trivially-scoped self again (no revoke in between).
+        uint8 newScope = changeActors | 0x02; // CHANGE_ACTORS | SENDER
+        _rescopeSelf(eoa, eoaPk, newScope);
+
+        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);
+        assertEq(cfg.scope, newScope);
+        assertEq(cfg.authenticator, accountConfiguration.K1_AUTHENTICATOR());
+        assertTrue(accountConfiguration.isActor(eoa, selfActorId));
     }
 
     function test_revertsOnRevokingNonExistentActor() public {
@@ -707,6 +735,24 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
     }
 
     // ── Helpers ──
+
+    /// @dev Authorize/overwrite the EOA's own inline k1 self-actorId with the given scope, signed by the EOA key.
+    function _rescopeSelf(address eoa, uint256 eoaPk, uint8 scope) internal {
+        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
+        changes[0] = IAccountConfiguration.ActorChange({
+            actorId: bytes32(bytes20(eoa)),
+            changeType: 0x01,
+            data: abi.encode(
+                IAccountConfiguration.ActorConfig({
+                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: scope, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
+        });
+        uint64 seq = accountConfiguration.getChangeSequences(eoa).local;
+        bytes32 digest = _computeActorChangeBatchDigest(eoa, uint64(block.chainid), seq, changes);
+        accountConfiguration.applySignedActorChanges(eoa, uint64(block.chainid), changes, _buildK1Auth(eoaPk, digest));
+    }
 
     function _authorizeActor(address account, uint256 pk, bytes32 newActorId, address authenticator) internal {
         _authorizeActorWithScope(account, pk, newActorId, authenticator, 0x00);

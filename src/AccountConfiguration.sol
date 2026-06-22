@@ -171,6 +171,13 @@ contract AccountConfiguration is IAccountConfiguration {
     {
         account = computeAddress(userSalt, bytecode, initialActors);
 
+        // Block re-initialization of an already-bootstrapped account. localSequence doubles as the initialized flag,
+        // so a prior createAccount/import set it to 1; multichainSequence guards an account that established 8130
+        // state via a global (chainId 0) change. This must be explicit: now that authorizeActor is an upsert it no
+        // longer reverts on a duplicate initial actor, and the create2 below is intentionally swallowed (pop), so a
+        // duplicate createAccount would otherwise silently re-initialize.
+        require(_accountState[account].localSequence == 0 && _accountState[account].multichainSequence == 0);
+
         // Mark the account initialized: localSequence doubles as the initialized flag, so setting it to 1 blocks
         // importAccount (which requires localSequence == 0) from running against an already-created account.
         // Created accounts have contract code at a CREATE2 address, so the default EOA path (recovered == account)
@@ -180,7 +187,6 @@ contract AccountConfiguration is IAccountConfiguration {
         _accountState[account].localSequence = 1;
         _accountState[account].flags = FLAG_REVOKE_DEFAULT_EOA;
 
-        // Initialize account actors (reverts naturally on duplicate via _authorizeActor)
         _initializeAccount(account, initialActors);
 
         // Create account code at the CREATE2 address derived from the packed actors commitment.
@@ -500,19 +506,15 @@ contract AccountConfiguration is IAccountConfiguration {
             // other so a k1 and a non-k1 self are never simultaneously live.
             AccountState storage st = _accountState[account];
             if (config.authenticator == K1_AUTHENTICATOR) {
-                // Re-authorize guard: only from a disabled self (flag set) or the unconfigured implicit owner
-                // (all-zero inline). Reconfiguring a live, non-trivially-scoped self requires revoking it first.
-                require(
-                    _isDefaultEoaRevoked(account)
-                        || (st.defaultEOAScope == 0 && st.defaultEOAPolicyType == 0 && st.defaultEOAExpiry == 0)
-                );
+                // Upsert: overwrite a live self in place (no re-auth guard); the end state equals revoke-then-
+                // authorize. Re-enabling a previously revoked self is just the flag clear below.
                 delete _actorConfig[actorId][account]; // mutual exclusion: drop any non-k1 self
                 st.defaultEOAScope = config.scope;
                 st.defaultEOAPolicyType = config.policyType;
                 st.defaultEOAExpiry = config.expiry;
                 st.flags &= ~FLAG_REVOKE_DEFAULT_EOA; // enable the inline self
             } else {
-                require(_actorConfig[actorId][account].authenticator == address(0));
+                // Upsert: overwrite any existing non-k1 self in place.
                 _actorConfig[actorId][account] = config;
                 // Mutual exclusion: disable and clear the inline k1 self.
                 st.flags |= FLAG_REVOKE_DEFAULT_EOA;
@@ -531,9 +533,12 @@ contract AccountConfiguration is IAccountConfiguration {
             return;
         }
 
-        // Non-self actor: single _actorConfig home.
-        require(_actorConfig[actorId][account].authenticator == address(0));
+        // Non-self actor: single _actorConfig home. Upsert: overwrite in place. Reset the policy slots first so an
+        // actor moving policy-bearing -> none (or to a different manager) can't leak stale policy state, preserving
+        // the "policy_commitment non-zero iff policyType non-zero" invariant.
         _actorConfig[actorId][account] = config;
+        delete _policyCommitment[actorId][account];
+        delete _policyManager[actorId][account];
         if (commitment != bytes32(0)) _policyCommitment[actorId][account] = commitment;
         if (manager != address(0)) _policyManager[actorId][account] = manager;
 
