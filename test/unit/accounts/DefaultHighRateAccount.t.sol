@@ -4,7 +4,6 @@ pragma solidity ^0.8.30;
 import {DefaultHighRateAccount} from "../../../src/accounts/DefaultHighRateAccount.sol";
 import {Call} from "../../../src/accounts/DefaultAccount.sol";
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
-import {IAccountConfiguration} from "../../../src/interfaces/IAccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 contract HighRateMockTarget {
@@ -34,8 +33,8 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
         address signer = vm.addr(pk);
         actorId = bytes32(bytes20(signer));
 
-        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
-        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, authenticator: address(k1Authenticator)});
+        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](1);
+        actors[0] = AccountConfiguration.InitialActor({actorId: actorId, authenticator: address(k1Authenticator)});
 
         bytes memory bytecode = _computeERC1167Bytecode(highRateImplementation);
         account = accountConfiguration.createAccount(bytes32(uint256(0xbeef)), bytecode, actors);

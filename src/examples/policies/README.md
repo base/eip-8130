@@ -13,7 +13,7 @@ gates identically on any non-zero `policyType` and does not interpret the value;
 1. **Authorize + commit.** The account authorizes the session key with `policyType = 0x01`,
    `policy_manager = PolicyManager`, and `policy_commitment = keccak256` of an account-authorized
    [`PolicyBinding`](./PolicyManager.sol). The Account Configuration contract exposes this via
-   [`getPolicy(account, actorId)`](../../interfaces/IAccountConfiguration.sol).
+   [`getPolicy(account, actorId)`](../../AccountConfiguration.sol).
 2. **Install.** Anyone (the account itself, the session key, or a third party) calls
    `PolicyManager.install(actorId, binding)`. The manager re-derives the commitment and confirms `getPolicy`
    resolves to `(this, commitment)` — so an install can only succeed for a policy the account actually signed for
@@ -29,7 +29,7 @@ gates identically on any non-zero `policyType` and does not interpret the value;
    (`getTransactionSenderActorId()`) and needs only the live `getPolicyCommitment(account, actorId)` (a single
    SLOAD) to locate the installed binding — a revoked or expired key has a zero commitment and stops immediately.
    It then invokes the policy, which enforces the committed policy against the per-use action and returns an
-   `executeBatch` call plan that the manager — an execution-enabled actor (`EXTERNAL_CALLER_AUTHENTICATOR`) —
+   `executeBatch` call plan that the manager — an execution-enabled actor (`TRUSTED_EXECUTOR`) —
    forwards to the account.
 
 ```
@@ -137,7 +137,7 @@ as a *policy-only* actor — it has no authority of its own, it only carries a b
 
 ```solidity
 // actorId = bytes20(provider). The provider never signs an 8130 tx; it acts by being msg.sender.
-IAccountConfiguration.ActorConfig({
+AccountConfiguration.ActorConfig({
     authenticator: EXTERNAL_POLICY_AUTHENTICATOR, // recognized actor; NO direct executeBatch; not 8130-usable
     scope:         0x02,                          // SCOPE_SENDER — required non-zero (a policy actor can't be scopeless),
                                                   //   but inert here since the sentinel can't authenticate a tx
@@ -146,7 +146,7 @@ IAccountConfiguration.ActorConfig({
 });
 ```
 
-Critically, the provider must **not** be registered with `EXTERNAL_CALLER_AUTHENTICATOR` — that sentinel grants
+Critically, the provider must **not** be registered with `TRUSTED_EXECUTOR` — that sentinel grants
 *direct, unrestricted* `executeBatch` and would let the provider bypass the policy entirely. `EXTERNAL_POLICY_AUTHENTICATOR`
 is a no-code sentinel: the actor is recognized (non-zero authenticator) but can neither drive the account directly
 nor authenticate an 8130 transaction. Give the provider its **own salt** so its commitment — and therefore its

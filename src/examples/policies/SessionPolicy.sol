@@ -13,9 +13,8 @@ import {RecurringAllowance} from "./RecurringAllowance.sol";
 ///         check: a call-target allowlist, per-target function-selector rules, optional per-selector recipient
 ///         allowlists, and per-token (and native-ETH) recurring/one-time spend limits.
 ///
-/// @dev Why one policy instead of composing several? The {PolicyManager} validates exactly one (policy, commitment)
-///      per call, so separate policies cannot jointly gate the *same* call. This policy enforces every dimension
-///      atomically on each call.
+/// @dev A single policy (rather than several composed) because {PolicyManager} validates one (policy, commitment)
+///      per call; bundling every dimension here lets them all gate the same call atomically.
 ///
 ///      Storage model: the committed {Config} is decoded once in {onInstall} and flattened into commitment-keyed
 ///      mappings, so {onExecute} resolves every check with O(1) SLOADs (no array scans). Per-call cost therefore
@@ -95,13 +94,17 @@ contract SessionPolicy is Policy {
     }
 
     /// @dev commitment => target => scope.
-    mapping(bytes32 => mapping(address => TargetScope)) internal _targetScope;
+    mapping(bytes32 commitment => mapping(address target => TargetScope)) internal _targetScope;
     /// @dev commitment => target => selector => rule.
-    mapping(bytes32 => mapping(address => mapping(bytes4 => SelRule))) internal _selectorRule;
+    mapping(bytes32 commitment => mapping(address target => mapping(bytes4 selector => SelRule))) internal
+        _selectorRule;
     /// @dev commitment => target => selector => recipient => allowed.
-    mapping(bytes32 => mapping(address => mapping(bytes4 => mapping(address => bool)))) internal _recipientAllowed;
+    mapping(
+        bytes32 commitment
+            => mapping(address target => mapping(bytes4 selector => mapping(address recipient => bool allowed)))
+    ) internal _recipientAllowed;
     /// @dev commitment => token (address(0) = native) => spend cap.
-    mapping(bytes32 => mapping(address => TokenSpend)) internal _tokenSpend;
+    mapping(bytes32 commitment => mapping(address token => TokenSpend)) internal _tokenSpend;
     /// @dev Recurring-allowance usage, keyed by keccak256(commitment, token).
     RecurringAllowance.State internal _usage;
 

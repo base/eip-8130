@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
 import {Address} from "openzeppelin/utils/Address.sol";
+import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
 
-import {IAccountConfiguration} from "../../interfaces/IAccountConfiguration.sol";
+import {AccountConfiguration} from "../../AccountConfiguration.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../interfaces/ITransactionContext.sol";
 import {Policy} from "./Policy.sol";
 
 /// @dev Recommended `authenticator` for an actor that represents an *external caller* governed by a policy (e.g. a
 ///      subscription provider): an address that may act ONLY through its policy manager's external entrypoints, never
-///      directly. Distinct from `EXTERNAL_CALLER_AUTHENTICATOR` (which grants direct `executeBatch`): this is a
+///      directly. Distinct from `TRUSTED_EXECUTOR` (which grants direct `executeBatch`): this is a
 ///      no-code, hash-derived sentinel, so the actor is recognized by AccountConfiguration (non-zero authenticator)
 ///      yet cannot drive the account directly and cannot authenticate an 8130 transaction (its `authenticate()` would
 ///      call into empty code and fail). Only the account-side authorization (and these examples/tests) ever reference
@@ -24,7 +24,7 @@ address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak2
 ///
 /// @dev Role in the EIP-8130 flow:
 ///      - The manager is registered as an execution-enabled actor on the account (an actor whose authenticator is
-///        `EXTERNAL_CALLER_AUTHENTICATOR`), so it may drive the account via `executeBatch`.
+///        `TRUSTED_EXECUTOR`), so it may drive the account via `executeBatch`.
 ///      - A restricted session-key actor is configured with a non-zero `policyType` and `policy_manager =
 ///        address(this)`, so the protocol gate forces every call that actor makes to land on this manager.
 ///      - When the session key transacts, the protocol dispatches its call *as the account*, so `msg.sender`
@@ -43,21 +43,20 @@ address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak2
 ///      Commitment binding: the account authorizes a {PolicyBinding}; its `keccak256` is the `commitment`. When the
 ///      account authorizes the session-key actor it stores a non-zero `policyType`, `policy_manager = address(this)`, and
 ///      `policy_commitment = commitment` in the Account Configuration contract. At {install} the manager reads that
-///      binding back via the single-SLOAD {IAccountConfiguration.getPolicyManager} / {IAccountConfiguration.getPolicyCommitment}
+///      binding back via the single-SLOAD {AccountConfiguration.getPolicyManager} / {AccountConfiguration.getPolicyCommitment}
 ///      accessors and requires the target and commitment to match, so an install can only succeed for a policy the
 ///      account actually signed for this manager.
 ///
 ///      Scope: permissionless {install} (gated by the account's signed commitment, not the caller), account-acting
-///      {execute}, and external-caller {executeFor} / {executeForMany}. Signature-based install, replacement, and
-///      uninstall are intentionally omitted.
+///      {execute}, and external-caller {executeFor} / {executeForMany}.
 contract PolicyManager is ReentrancyGuard {
     using Address for address;
 
     /// @notice The EIP-8130 Account Configuration system contract used to resolve signed policy commitments.
-    IAccountConfiguration public immutable ACCOUNT_CONFIGURATION;
+    AccountConfiguration public immutable ACCOUNT_CONFIGURATION;
 
     constructor(address accountConfiguration) {
-        ACCOUNT_CONFIGURATION = IAccountConfiguration(accountConfiguration);
+        ACCOUNT_CONFIGURATION = AccountConfiguration(accountConfiguration);
     }
 
     /// @notice Policy binding authorized by the account. Its hash is the policy commitment.
@@ -206,7 +205,7 @@ contract PolicyManager is ReentrancyGuard {
     ///      There is no protocol routing on this path, so unlike {execute} this re-verifies that the account gated
     ///      *this* manager for the caller (`policy_manager(account, actorId) == address(this)`); the caller cannot
     ///      forge the identity because it is derived from `msg.sender`. The account must also have registered this
-    ///      manager as an execution-enabled actor (`EXTERNAL_CALLER_AUTHENTICATOR`) for the forwarded `executeBatch`
+    ///      manager as an execution-enabled actor (`TRUSTED_EXECUTOR`) for the forwarded `executeBatch`
     ///      to be accepted.
     ///
     /// @param account       Account the call plan will execute against (it authorized the caller).

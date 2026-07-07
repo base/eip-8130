@@ -2,7 +2,6 @@
 pragma solidity ^0.8.30;
 
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
-import {IAccountConfiguration} from "../../../src/interfaces/IAccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 contract AccountLockTest is AccountConfigurationTest {
@@ -84,7 +83,7 @@ contract AccountLockTest is AccountConfigurationTest {
         (address account,) = _createK1Account(ACTOR_PK);
 
         vm.prank(account);
-        vm.expectRevert();
+        vm.expectRevert(AccountConfiguration.NotLocked.selector);
         accountConfiguration.initiateUnlock();
     }
 
@@ -94,7 +93,7 @@ contract AccountLockTest is AccountConfigurationTest {
         _lockAccount(account, 1 hours);
 
         vm.prank(account);
-        vm.expectRevert();
+        vm.expectRevert(AccountConfiguration.AccountIsLocked.selector);
         accountConfiguration.lock(2 hours);
     }
 
@@ -103,12 +102,12 @@ contract AccountLockTest is AccountConfigurationTest {
 
         _lockAccount(account, 1 hours);
 
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: bytes32(bytes20(vm.addr(400))),
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -119,7 +118,7 @@ contract AccountLockTest is AccountConfigurationTest {
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(ACTOR_PK, digest);
 
-        vm.expectRevert();
+        vm.expectRevert(AccountConfiguration.AccountIsLocked.selector);
         accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
     }
 
@@ -138,12 +137,12 @@ contract AccountLockTest is AccountConfigurationTest {
         vm.warp(1000 + 1 hours);
         assertFalse(accountConfiguration.isLocked(account));
 
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: bytes32(bytes20(vm.addr(500))),
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")

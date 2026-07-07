@@ -4,7 +4,6 @@ pragma solidity ^0.8.30;
 import {Test, console} from "forge-std/Test.sol";
 
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
-import {IAccountConfiguration} from "../../../src/interfaces/IAccountConfiguration.sol";
 import {DefaultAccount} from "../../../src/accounts/DefaultAccount.sol";
 import {IAuthenticator} from "../../../src/interfaces/IAuthenticator.sol";
 import {P256Authenticator} from "../../../src/authenticators/P256Authenticator.sol";
@@ -52,9 +51,9 @@ contract GasBenchmarkTest is Test {
             uint256 pkA = 0xA001;
             address signerA = vm.addr(pkA);
             bytes32 actorIdA = bytes32(bytes20(signerA));
-            IAccountConfiguration.InitialActor[] memory actorsA = new IAccountConfiguration.InitialActor[](1);
+            AccountConfiguration.InitialActor[] memory actorsA = new AccountConfiguration.InitialActor[](1);
             actorsA[0] =
-                IAccountConfiguration.InitialActor({actorId: actorIdA, authenticator: config.K1_AUTHENTICATOR()});
+                AccountConfiguration.InitialActor({actorId: actorIdA, authenticator: config.K1_AUTHENTICATOR()});
             bytes memory bytecode =
                 abi.encodePacked(hex"363d3d373d3d3d363d73", defaultImpl, hex"5af43d82803e903d91602b57fd5bf3");
             config.createAccount(bytes32("benchA"), bytecode, actorsA);

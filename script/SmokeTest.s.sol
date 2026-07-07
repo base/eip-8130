@@ -4,7 +4,6 @@ pragma solidity ^0.8.30;
 import {Script, console} from "forge-std/Script.sol";
 
 import {AccountConfiguration} from "../src/AccountConfiguration.sol";
-import {IAccountConfiguration} from "../src/interfaces/IAccountConfiguration.sol";
 import {IAuthenticator} from "../src/interfaces/IAuthenticator.sol";
 
 /// @notice End-to-end smoke test against a live deployment.
@@ -46,8 +45,8 @@ contract SmokeTest is Script {
         internal
         returns (address)
     {
-        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
-        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, authenticator: k1Authenticator});
+        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](1);
+        actors[0] = AccountConfiguration.InitialActor({actorId: actorId, authenticator: k1Authenticator});
 
         bytes memory bytecode =
             abi.encodePacked(hex"363d3d373d3d3d363d73", defaultImpl, hex"5af43d82803e903d91602b57fd5bf3");
@@ -62,7 +61,7 @@ contract SmokeTest is Script {
         internal
         view
     {
-        IAccountConfiguration.ActorConfig memory actorCfg = config.getActorConfig(account, actorId);
+        AccountConfiguration.ActorConfig memory actorCfg = config.getActorConfig(account, actorId);
         require(actorCfg.authenticator != address(0), "actor not authorized");
         require(actorCfg.authenticator == k1Authenticator, "wrong authenticator");
     }

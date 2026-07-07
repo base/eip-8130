@@ -5,19 +5,28 @@ import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
 
 import {DefaultAccount} from "./DefaultAccount.sol";
 
-/// @notice UUPS-upgradeable variant of DefaultAccount.
-///
-///         Adds upgradeToAndCall from Solady's UUPSUpgradeable. Everything else
-///         (executeBatch, isValidSignature, caller authorization) is inherited.
+/// @notice UUPS-upgradeable version of {DefaultAccount}: the general-purpose deployed account, holding no
+///         ERC-4337 surface by default. executeBatch, isValidSignature, and caller authorization are inherited
+///         unchanged; upgrade to a {Default4337Account}-derived implementation (or any future capability) as needed.
 ///
 ///         Deploy behind an UpgradeableProxy instead of ERC-1167.
 ///         7702 accounts don't need this — they can re-delegate anytime.
 ///
-///         Two upgrade paths:
-///           1. Self-call to upgradeToAndCall (e.g. via executeBatch) — gated by _authorizeUpgrade.
-///           2. upgradeBySignature — an owner-signed, relayable upgrade with compare-and-swap replay
-///              protection that is safe to broadcast across every chain the account lives on.
+///         Upgrades are authorized via upgradeBySignature — a CONFIG-key-signed, relayable upgrade with
+///         compare-and-swap replay protection that is safe to broadcast across every chain the account lives on.
+///         See {_authorizeUpgrade} for how the signature requirement is enforced on the actual implementation
+///         change.
 contract UpgradeableAccount is DefaultAccount, UUPSUpgradeable {
+    /// @dev AccountConfiguration scope granting authority to change account configuration ("CONFIG"). An account
+    ///      gates upgrades on this scope so the same key that manages the account's actors can also manage its
+    ///      implementation.
+    uint8 internal constant SCOPE_CONFIG = 0x08;
+
+    /// @dev One-shot flag set by {upgradeBySignature} immediately before its internal self-call to
+    ///      `upgradeToAndCall`, and consumed by {_authorizeUpgrade} to confirm a CONFIG-scoped signature has
+    ///      already authorized this specific upgrade.
+    bool private _upgradeAuthorized;
+
     /// @dev Typehash binding a signed upgrade to (account, from, to, dataHash). chainId is intentionally omitted:
     ///      the same owner signature applies on every chain whose current implementation equals
     ///      `fromImplementation` (compare-and-swap), and is naturally skipped on chains that have diverged.
@@ -27,13 +36,16 @@ contract UpgradeableAccount is DefaultAccount, UUPSUpgradeable {
 
     /// @dev The current implementation does not match the signed `fromImplementation` (compare-and-swap failed).
     error UpgradeFromMismatch();
-    /// @dev The authenticated actor is not an unrestricted owner (scope != 0).
-    error UpgradeNotOwner();
+    /// @dev The authenticated actor may not authorize upgrades (not an unrestricted owner and lacks CONFIG scope).
+    error UpgradeUnauthorized();
 
     constructor(address accountConfiguration) DefaultAccount(accountConfiguration) {}
 
-    function _authorizeUpgrade(address) internal view override {
-        require(msg.sender == address(this));
+    /// @dev {upgradeBySignature} is the only place that sets {_upgradeAuthorized}, so satisfying this confirms a
+    ///      CONFIG-scoped signature has already authorized the implementation change being applied.
+    function _authorizeUpgrade(address) internal override {
+        require(_upgradeAuthorized);
+        _upgradeAuthorized = false;
     }
 
     /// @notice Upgrade the implementation using an owner signature, with compare-and-swap replay protection.
@@ -67,11 +79,13 @@ contract UpgradeableAccount is DefaultAccount, UUPSUpgradeable {
             abi.encode(SIGNED_UPGRADE_TYPEHASH, address(this), fromImplementation, toImplementation, keccak256(data))
         );
 
+        // A CONFIG key authorizes the upgrade: an unrestricted owner (scope 0) or an actor with SCOPE_CONFIG.
         (uint8 scope,,) = ACCOUNT_CONFIGURATION.authenticateActor(address(this), digest, auth);
-        if (scope != 0) revert UpgradeNotOwner();
+        if (scope != 0 && scope & SCOPE_CONFIG == 0) revert UpgradeUnauthorized();
 
         // Reuse Solady's tested upgrade path (proxiableUUID check, Upgraded event, optional init delegatecall).
-        // The self-call re-enters with msg.sender == address(this), satisfying _authorizeUpgrade.
+        // The flag set above is what satisfies _authorizeUpgrade for this call.
+        _upgradeAuthorized = true;
         this.upgradeToAndCall(toImplementation, data);
     }
 

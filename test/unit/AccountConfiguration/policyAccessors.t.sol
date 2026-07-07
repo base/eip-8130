@@ -2,7 +2,6 @@
 pragma solidity ^0.8.30;
 
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
-import {IAccountConfiguration} from "../../../src/interfaces/IAccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 /// @notice Unit tests for the granular policy accessors `getPolicyCommitment` and `getPolicyManager`, plus
@@ -131,7 +130,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         bytes32 selfActorId = bytes32(bytes20(eoa));
 
         // Pre-authorize a separate unrestricted-owner key. Once we downgrade the self-actorId to
-        // SCOPE_SENDER + policy below, it no longer carries SCOPE_CHANGE_ACTORS and can't sign the revoke.
+        // SCOPE_SENDER + policy below, it no longer carries SCOPE_CONFIG and can't sign the revoke.
         bytes32 ownerActorId = bytes32(bytes20(vm.addr(SESSION_PK)));
         _authorizeUngatedActor(eoa, EOA_PK, ownerActorId, address(k1Authenticator));
 
@@ -160,7 +159,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
 
         assertEq(accountConfiguration.getPolicyCommitment(account, sessionActorId), bytes32(0));
         assertEq(accountConfiguration.getPolicyManager(account, sessionActorId), address(0));
-        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, sessionActorId);
+        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, sessionActorId);
         assertEq(cfg.policyType, 0x00);
         assertEq(cfg.scope, 0x00);
     }
@@ -235,13 +234,13 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         address policyManager,
         bytes32 commitment
     ) internal {
-        IAccountConfiguration.ActorConfig memory cfg = IAccountConfiguration.ActorConfig({
+        AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
             authenticator: address(k1Authenticator), scope: SCOPE_SENDER, expiry: 0, policyType: POLICY_GATED
         });
         bytes memory policyData = abi.encodePacked(policyManager, commitment);
 
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: actorId, changeType: AUTHORIZE_ACTOR, data: abi.encode(cfg, policyData)
         });
 
@@ -260,7 +259,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         internal
     {
         bytes32 selfActorId = bytes32(bytes20(eoa));
-        IAccountConfiguration.ActorConfig memory cfg = IAccountConfiguration.ActorConfig({
+        AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
             authenticator: accountConfiguration.K1_AUTHENTICATOR(),
             scope: SCOPE_SENDER,
             expiry: 0,
@@ -268,8 +267,8 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         });
         bytes memory policyData = abi.encodePacked(policyManager, commitment);
 
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: selfActorId, changeType: AUTHORIZE_ACTOR, data: abi.encode(cfg, policyData)
         });
 
@@ -279,12 +278,12 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
     }
 
     function _authorizeUngatedActor(address account, uint256 pk, bytes32 newActorId, address authenticator) internal {
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: AUTHORIZE_ACTOR,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: authenticator, scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -296,8 +295,8 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
     }
 
     function _revokeActor(address account, uint256 pk, bytes32 actorId) internal {
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({actorId: actorId, changeType: REVOKE_ACTOR, data: ""});
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({actorId: actorId, changeType: REVOKE_ACTOR, data: ""});
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));

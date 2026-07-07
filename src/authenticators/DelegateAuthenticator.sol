@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {IAuthenticator} from "../interfaces/IAuthenticator.sol";
 import {AccountConfiguration} from "../AccountConfiguration.sol";
+import {IAuthenticator} from "../interfaces/IAuthenticator.sol";
 
 /// @notice Delegates authentication to another account's actor configuration.
 ///         actorId = bytes32(bytes20(delegate_address)). Only 1 hop permitted.

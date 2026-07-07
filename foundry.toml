@@ -1,4 +1,5 @@
 [profile.default]
+solc = "0.8.30"
 optimizer = true
 via_ir = true
 evm_version = "osaka"

@@ -2,7 +2,6 @@
 pragma solidity ^0.8.30;
 
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
-import {IAccountConfiguration} from "../../../src/interfaces/IAccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 contract AuthenticateTest is AccountConfigurationTest {
@@ -89,7 +88,7 @@ contract AuthenticateTest is AccountConfigurationTest {
 
         // Past expiry: authentication fails.
         vm.warp(uint256(expiry) + 1);
-        vm.expectRevert();
+        vm.expectRevert(AccountConfiguration.ActorExpired.selector);
         accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
     }
 
@@ -108,7 +107,7 @@ contract AuthenticateTest is AccountConfigurationTest {
     function test_getActorConfig_returnsAuthenticatorAndScopes() public {
         (address account, bytes32 actorId) = _createK1Account(ACTOR_PK);
 
-        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, actorId);
+        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, actorId);
         assertEq(cfg.authenticator, address(k1Authenticator));
         assertEq(cfg.scope, 0x00);
     }
@@ -117,7 +116,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         (address account,) = _createK1Account(ACTOR_PK);
 
         bytes32 unknownActorId = bytes32(bytes20(vm.addr(999)));
-        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, unknownActorId);
+        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, unknownActorId);
         assertEq(cfg.authenticator, address(0));
         assertEq(cfg.scope, 0);
     }
@@ -196,7 +195,7 @@ contract AuthenticateTest is AccountConfigurationTest {
 
         // Implicit path is now blocked
         bytes32 hash = keccak256("after revoke");
-        vm.expectRevert();
+        vm.expectRevert(AccountConfiguration.DefaultEoaRevoked.selector);
         accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
     }
 
@@ -208,12 +207,12 @@ contract AuthenticateTest is AccountConfigurationTest {
         address eoa = vm.addr(eoaPk);
         bytes32 selfActorId = bytes32(bytes20(eoa));
 
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: selfActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: 0x02, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -282,7 +281,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         bytes32 highS = bytes32(n - uint256(s));
         uint8 flippedV = v == 27 ? 28 : 27;
 
-        vm.expectRevert();
+        vm.expectRevert(AccountConfiguration.InvalidSignature.selector);
         accountConfiguration.authenticateActor(eoa, hash, abi.encodePacked(k1Authenticator, r, highS, flippedV));
     }
 
@@ -294,7 +293,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         (, bytes32 r, bytes32 s) = vm.sign(eoaPk, hash);
 
         // v outside {27, 28} is rejected.
-        vm.expectRevert();
+        vm.expectRevert(AccountConfiguration.InvalidSignature.selector);
         accountConfiguration.authenticateActor(eoa, hash, abi.encodePacked(k1Authenticator, r, s, uint8(29)));
     }
 
@@ -311,12 +310,12 @@ contract AuthenticateTest is AccountConfigurationTest {
         address authenticator,
         uint8 scope
     ) internal {
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: authenticator, scope: scope, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -337,12 +336,12 @@ contract AuthenticateTest is AccountConfigurationTest {
         address authenticator,
         uint48 expiry
     ) internal {
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: authenticator, scope: 0x00, expiry: expiry, policyType: 0x00
                 }),
                 bytes("")
@@ -357,8 +356,8 @@ contract AuthenticateTest is AccountConfigurationTest {
     }
 
     function _revokeActor(address account, uint256 pk, bytes32 actorId) internal {
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({actorId: actorId, changeType: 0x02, data: ""});
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({actorId: actorId, changeType: 0x02, data: ""});
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
@@ -368,12 +367,12 @@ contract AuthenticateTest is AccountConfigurationTest {
     }
 
     function _implicitAuthorizeActor(address account, uint256 pk, bytes32 newActorId, address authenticator) internal {
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: authenticator, scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -396,12 +395,12 @@ contract AuthenticateTest is AccountConfigurationTest {
         address policyManager,
         bytes32 commitment
     ) internal {
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: address(k1Authenticator), scope: scope, expiry: 0, policyType: policyType
                 }),
                 abi.encodePacked(policyManager, commitment)

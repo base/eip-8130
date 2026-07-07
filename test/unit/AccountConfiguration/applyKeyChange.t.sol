@@ -2,7 +2,6 @@
 pragma solidity ^0.8.30;
 
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
-import {IAccountConfiguration} from "../../../src/interfaces/IAccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 contract ApplyConfigChangeActorTest is AccountConfigurationTest {
@@ -15,12 +14,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         address newSigner = vm.addr(NEW_ACTOR_PK);
         bytes32 newActorId = bytes32(bytes20(newSigner));
 
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -33,7 +32,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
 
-        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, newActorId);
+        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, newActorId);
         assertTrue(cfg.authenticator != address(0));
         assertEq(cfg.authenticator, address(k1Authenticator));
         assertEq(cfg.scope, 0x00);
@@ -45,12 +44,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         address newSigner = vm.addr(NEW_ACTOR_PK);
         bytes32 newActorId = bytes32(bytes20(newSigner));
 
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: address(k1Authenticator), scope: 0x04, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -63,7 +62,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
 
-        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, newActorId);
+        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, newActorId);
         assertEq(cfg.authenticator, address(k1Authenticator));
         assertEq(cfg.scope, 0x04);
     }
@@ -77,8 +76,8 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         assertTrue(accountConfiguration.isActor(account, newActorId));
 
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({actorId: newActorId, changeType: 0x02, data: ""});
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({actorId: newActorId, changeType: 0x02, data: ""});
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
@@ -95,22 +94,22 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         bytes32 actor1 = bytes32(bytes20(vm.addr(300)));
         bytes32 actor2 = bytes32(bytes20(vm.addr(301)));
 
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](2);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](2);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: actor1,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
             )
         });
-        changes[1] = IAccountConfiguration.ActorChange({
+        changes[1] = AccountConfiguration.ActorChange({
             actorId: actor2,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -145,12 +144,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         _lockAccount(account);
 
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: bytes32(bytes20(vm.addr(300))),
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -172,12 +171,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         _authorizeActor(account, ACTOR_PK, secondActorId, address(k1Authenticator));
 
         bytes32 thirdActorId = bytes32(bytes20(vm.addr(302)));
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: thirdActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -200,12 +199,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         _authorizeActorWithScope(account, ACTOR_PK, secondActorId, address(k1Authenticator), 0x02);
 
         bytes32 thirdActorId = bytes32(bytes20(vm.addr(302)));
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: thirdActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -226,16 +225,16 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         address newSigner = vm.addr(NEW_ACTOR_PK);
         bytes32 secondActorId = bytes32(bytes20(newSigner));
         _authorizeActorWithScope(
-            account, ACTOR_PK, secondActorId, address(k1Authenticator), accountConfiguration.SCOPE_CHANGE_ACTORS()
+            account, ACTOR_PK, secondActorId, address(k1Authenticator), accountConfiguration.SCOPE_CONFIG()
         );
 
         bytes32 thirdActorId = bytes32(bytes20(vm.addr(302)));
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: thirdActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -252,16 +251,16 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
     function test_reauthorizeNonSelfActor_upsertsInPlace() public {
         // authorizeActor is an upsert: re-authorizing an already-configured (non-self) actor overwrites its config
-        // in place rather than reverting. Here the owner actor is re-scoped from unrestricted (0x00) to CHANGE_ACTORS.
+        // in place rather than reverting. Here the owner actor is re-scoped from unrestricted (0x00) to CONFIG.
         (address account, bytes32 actorActorId) = _createK1Account(ACTOR_PK);
 
-        uint8 newScope = accountConfiguration.SCOPE_CHANGE_ACTORS();
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        uint8 newScope = accountConfiguration.SCOPE_CONFIG();
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: actorActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: address(k1Authenticator), scope: newScope, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -274,7 +273,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
 
-        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, actorActorId);
+        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, actorActorId);
         assertEq(cfg.scope, newScope);
         assertEq(cfg.authenticator, address(k1Authenticator));
     }
@@ -286,16 +285,16 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         address eoa = vm.addr(eoaPk);
         bytes32 selfActorId = bytes32(bytes20(eoa));
 
-        // First: the implicit owner (all-zero inline, live) scopes the self to CHANGE_ACTORS so it can keep signing.
-        uint8 changeActors = accountConfiguration.SCOPE_CHANGE_ACTORS();
-        _rescopeSelf(eoa, eoaPk, changeActors);
-        assertEq(accountConfiguration.getActorConfig(eoa, selfActorId).scope, changeActors);
+        // First: the implicit owner (all-zero inline, live) scopes the self to CONFIG so it can keep signing.
+        uint8 configScope = accountConfiguration.SCOPE_CONFIG();
+        _rescopeSelf(eoa, eoaPk, configScope);
+        assertEq(accountConfiguration.getActorConfig(eoa, selfActorId).scope, configScope);
 
         // Second: re-scope the now-live, non-trivially-scoped self again (no revoke in between).
-        uint8 newScope = changeActors | 0x02; // CHANGE_ACTORS | SENDER
+        uint8 newScope = configScope | 0x02; // CONFIG | SENDER
         _rescopeSelf(eoa, eoaPk, newScope);
 
-        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);
+        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);
         assertEq(cfg.scope, newScope);
         assertEq(cfg.authenticator, accountConfiguration.K1_AUTHENTICATOR());
         assertTrue(accountConfiguration.isActor(eoa, selfActorId));
@@ -306,8 +305,8 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         bytes32 nonExistentActorId = bytes32(bytes20(vm.addr(999)));
 
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({actorId: nonExistentActorId, changeType: 0x02, data: ""});
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({actorId: nonExistentActorId, changeType: 0x02, data: ""});
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
@@ -320,12 +319,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
     function test_revertsWithInvalidSignature() public {
         (address account,) = _createK1Account(ACTOR_PK);
 
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: bytes32(bytes20(vm.addr(300))),
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -352,12 +351,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         address eoa = vm.addr(eoaPk);
         bytes32 newActorId = bytes32(bytes20(vm.addr(501)));
 
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -390,7 +389,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         assertTrue(accountConfiguration.isActor(eoa, newActorId));
 
         // A revoked default EOA reports as an all-zero (empty) config — no sentinel.
-        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);
+        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);
         assertEq(cfg.authenticator, address(0));
         assertEq(cfg.scope, 0);
     }
@@ -401,7 +400,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         address eoa = vm.addr(eoaPk);
         bytes32 selfActorId = bytes32(bytes20(eoa));
 
-        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);
+        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);
         assertEq(cfg.authenticator, accountConfiguration.K1_AUTHENTICATOR());
         assertEq(cfg.scope, 0);
     }
@@ -417,7 +416,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         _implicitAuthorizeActorWithScope(eoa, eoaPk, selfActorId, address(k1Authenticator), 0x02);
 
         assertTrue(accountConfiguration.isActor(eoa, selfActorId));
-        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);
+        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);
         assertEq(cfg.authenticator, address(k1Authenticator));
         assertEq(cfg.scope, 0x02);
 
@@ -436,12 +435,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         _implicitAuthorizeActorWithScope(eoa, eoaPk, selfActorId, address(k1Authenticator), 0x02);
 
         // Second authorize for the same actorId reverts (existing entry). Signed by the now-scoped self key.
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: selfActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -460,12 +459,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         address eoa = vm.addr(eoaPk);
         bytes32 newActorId = bytes32(bytes20(vm.addr(501)));
 
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -496,7 +495,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         // createAccount disables the default EOA, so the self-actorId is not a live actor.
         assertFalse(accountConfiguration.isActor(account, selfActorId));
 
-        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, selfActorId);
+        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, selfActorId);
         assertEq(cfg.authenticator, address(0));
         assertEq(cfg.scope, 0);
     }
@@ -510,7 +509,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         _authorizeActor(account, ACTOR_PK, selfActorId, accountConfiguration.K1_AUTHENTICATOR());
 
         assertTrue(accountConfiguration.isActor(account, selfActorId));
-        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, selfActorId);
+        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, selfActorId);
         assertEq(cfg.authenticator, accountConfiguration.K1_AUTHENTICATOR());
         assertEq(cfg.scope, 0);
     }
@@ -564,18 +563,18 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         assertEq(scope0, 0);
 
         // ── Phase 1: in one batch signed by the EOA, add the passkey as a full owner and revoke the default EOA. ──
-        IAccountConfiguration.ActorChange[] memory switchChanges = new IAccountConfiguration.ActorChange[](2);
-        switchChanges[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory switchChanges = new AccountConfiguration.ActorChange[](2);
+        switchChanges[0] = AccountConfiguration.ActorChange({
             actorId: deviceActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
             )
         });
-        switchChanges[1] = IAccountConfiguration.ActorChange({actorId: selfActorId, changeType: 0x02, data: ""});
+        switchChanges[1] = AccountConfiguration.ActorChange({actorId: selfActorId, changeType: 0x02, data: ""});
 
         uint64 seq1 = accountConfiguration.getChangeSequences(eoa).local;
         bytes32 d1 = _computeActorChangeBatchDigest(eoa, uint64(block.chainid), seq1, switchChanges);
@@ -592,12 +591,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         assertEq(scope1, 0);
 
         // ── Phase 2: the passkey re-enables the K1 key by authorizing the self-actorId as a native k1 owner. ──
-        IAccountConfiguration.ActorChange[] memory reEnable = new IAccountConfiguration.ActorChange[](1);
-        reEnable[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory reEnable = new AccountConfiguration.ActorChange[](1);
+        reEnable[0] = AccountConfiguration.ActorChange({
             actorId: selfActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -624,18 +623,18 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         bytes32 newActorId = bytes32(bytes20(vm.addr(NEW_ACTOR_PK)));
 
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](2);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](2);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
             )
         });
-        changes[1] = IAccountConfiguration.ActorChange({actorId: selfActorId, changeType: 0x02, data: ""});
+        changes[1] = AccountConfiguration.ActorChange({actorId: selfActorId, changeType: 0x02, data: ""});
 
         uint64 seq = accountConfiguration.getChangeSequences(eoa).local;
         bytes32 digest = _computeActorChangeBatchDigest(eoa, uint64(block.chainid), seq, changes);
@@ -647,7 +646,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         assertTrue(accountConfiguration.isActor(eoa, newActorId));
 
         // A revoked default EOA reports as an all-zero (empty) config — no sentinel.
-        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);
+        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);
         assertEq(cfg.authenticator, address(0));
         assertEq(cfg.scope, 0);
     }
@@ -663,12 +662,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         _revokeActor(eoa, NEW_ACTOR_PK, selfActorId);
 
         bytes32 thirdActorId = bytes32(bytes20(vm.addr(302)));
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: thirdActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -700,12 +699,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         // Attempt to sign an actor change with the revoked key
         bytes32 thirdActorId = bytes32(bytes20(vm.addr(302)));
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: thirdActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -729,7 +728,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         _revokeActor(account, ACTOR_PK, newActorId);
 
-        IAccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, newActorId);
+        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, newActorId);
         assertEq(cfg.authenticator, address(0));
         assertEq(cfg.scope, 0);
     }
@@ -738,12 +737,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
     /// @dev Authorize/overwrite the EOA's own inline k1 self-actorId with the given scope, signed by the EOA key.
     function _rescopeSelf(address eoa, uint256 eoaPk, uint8 scope) internal {
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: bytes32(bytes20(eoa)),
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: scope, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -765,12 +764,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         address authenticator,
         uint8 scope
     ) internal {
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: authenticator, scope: scope, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -785,8 +784,8 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
     }
 
     function _revokeActor(address account, uint256 pk, bytes32 actorId) internal {
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({actorId: actorId, changeType: 0x02, data: ""});
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({actorId: actorId, changeType: 0x02, data: ""});
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
@@ -806,12 +805,12 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         address authenticator,
         uint8 scope
     ) internal {
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: authenticator, scope: scope, expiry: 0, policyType: 0x00
                 }),
                 bytes("")

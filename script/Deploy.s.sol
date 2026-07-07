@@ -4,9 +4,7 @@ pragma solidity ^0.8.30;
 import {Script, console} from "forge-std/Script.sol";
 
 import {AccountConfiguration} from "../src/AccountConfiguration.sol";
-import {DefaultAccount} from "../src/accounts/DefaultAccount.sol";
 import {DefaultHighRateAccount} from "../src/accounts/DefaultHighRateAccount.sol";
-import {ERC4337Account} from "../src/accounts/BackwardCompatibleERC4337Account.sol";
 import {UpgradeableAccount} from "../src/accounts/UpgradeableAccount.sol";
 import {P256Authenticator} from "../src/authenticators/P256Authenticator.sol";
 import {WebAuthnAuthenticator} from "../src/authenticators/WebAuthnAuthenticator.sol";
@@ -18,13 +16,17 @@ import {AlwaysValidAuthenticator} from "../src/authenticators/AlwaysValidAuthent
 ///      https://github.com/Arachnid/deterministic-deployment-proxy
 address constant CREATE2_FACTORY = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
 
-/// @dev Canonical ERC-4337 v0.7 EntryPoint — same address on every chain.
-address constant ENTRY_POINT = 0x0000000071727De22E5E9d8BAf0edAc6f37da032;
-
 bytes32 constant SALT = bytes32(0);
 
-/// @notice Deploys the full EIP-8130 system: the AccountConfiguration system contract, every
-///         account implementation, and every canonical authenticator.
+/// @notice Deploys the full EIP-8130 system: the AccountConfiguration system contract, the account
+///         implementations, and every canonical authenticator.
+///
+///         Only two account implementations are deployed as usable accounts:
+///           - DefaultHighRateAccount — the immutable account (deployed behind a 45-byte ERC-1167 proxy);
+///           - UpgradeableAccount     — the general upgradeable account (behind UpgradeableProxy).
+///         DefaultAccount is the base building block (inherited by both); its bytecode is embedded in the deployed
+///         implementations, so it is not deployed standalone. Default4337Account is a separate, opt-in ERC-4337
+///         building block that neither deployed account depends on by default.
 ///
 ///         All addresses are canonical: determined solely by salt + bytecode, independent of the
 ///         deployer's address or nonce, and identical on every chain.
@@ -63,16 +65,8 @@ contract Deploy is Script {
         return type(AccountConfiguration).creationCode;
     }
 
-    function _defaultAccountInit(address accountConfig) internal pure returns (bytes memory) {
-        return abi.encodePacked(type(DefaultAccount).creationCode, abi.encode(accountConfig));
-    }
-
     function _defaultHighRateInit(address accountConfig) internal pure returns (bytes memory) {
         return abi.encodePacked(type(DefaultHighRateAccount).creationCode, abi.encode(accountConfig));
-    }
-
-    function _erc4337AccountInit(address accountConfig) internal pure returns (bytes memory) {
-        return abi.encodePacked(type(ERC4337Account).creationCode, abi.encode(accountConfig, ENTRY_POINT));
     }
 
     function _upgradeableAccountInit(address accountConfig) internal pure returns (bytes memory) {
@@ -96,9 +90,7 @@ contract Deploy is Script {
         console.log("AccountConfiguration:    ", accountConfig);
         console.log("");
         console.log("=== Account implementations ===");
-        console.log("DefaultAccount:          ", _addr(_defaultAccountInit(accountConfig)));
         console.log("DefaultHighRateAccount:  ", _addr(_defaultHighRateInit(accountConfig)));
-        console.log("ERC4337Account:          ", _addr(_erc4337AccountInit(accountConfig)));
         console.log("UpgradeableAccount:      ", _addr(_upgradeableAccountInit(accountConfig)));
         console.log("");
         console.log("=== Authenticators ===");
@@ -121,10 +113,11 @@ contract Deploy is Script {
         address accountConfig = _create2(_accountConfigInit());
 
         // ── Account implementations (singletons; every account proxy delegates to one) ──
+        //    DefaultHighRateAccount is the immutable (ERC-1167) account; UpgradeableAccount is the general
+        //    upgradeable account. DefaultAccount is an inherited base building block and is not deployed
+        //    standalone; Default4337Account is a separate, opt-in building block neither depends on by default.
 
-        address defaultAccount = _create2(_defaultAccountInit(accountConfig));
         address defaultHighRate = _create2(_defaultHighRateInit(accountConfig));
-        address erc4337Account = _create2(_erc4337AccountInit(accountConfig));
         address upgradeableAccount = _create2(_upgradeableAccountInit(accountConfig));
 
         // ── Authenticators (secp256k1 is built into AccountConfiguration; no contract to deploy) ──
@@ -137,9 +130,7 @@ contract Deploy is Script {
         console.log("AccountConfiguration:    ", accountConfig);
         console.log("");
         console.log("=== Account implementations ===");
-        console.log("DefaultAccount:          ", defaultAccount);
         console.log("DefaultHighRateAccount:  ", defaultHighRate);
-        console.log("ERC4337Account:          ", erc4337Account);
         console.log("UpgradeableAccount:      ", upgradeableAccount);
         console.log("");
         console.log("=== Authenticators ===");

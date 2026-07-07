@@ -6,7 +6,6 @@ import {UpgradeableProxy} from "../../../src/accounts/UpgradeableProxy.sol";
 import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
 import {Call} from "../../../src/accounts/DefaultAccount.sol";
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
-import {IAccountConfiguration} from "../../../src/interfaces/IAccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 contract MockTarget {
@@ -54,8 +53,8 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         address signer = vm.addr(pk);
         actorId = bytes32(bytes20(signer));
 
-        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
-        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, authenticator: address(k1Authenticator)});
+        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](1);
+        actors[0] = AccountConfiguration.InitialActor({actorId: actorId, authenticator: address(k1Authenticator)});
 
         bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
         account = accountConfiguration.createAccount(bytes32(0), proxyBytecode, actors);
@@ -87,8 +86,8 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         address signer = vm.addr(ACTOR_PK);
         bytes32 actorId = bytes32(bytes20(signer));
 
-        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](1);
-        actors[0] = IAccountConfiguration.InitialActor({actorId: actorId, authenticator: address(k1Authenticator)});
+        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](1);
+        actors[0] = AccountConfiguration.InitialActor({actorId: actorId, authenticator: address(k1Authenticator)});
 
         bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
         address predicted = accountConfiguration.computeAddress(bytes32(0), proxyBytecode, actors);
@@ -147,15 +146,16 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
 
     // ── UUPS upgrade ──
 
-    function test_upgrade_success() public {
+    /// @dev A plain self-call to upgradeToAndCall must revert: {_authorizeUpgrade} is gated on the one-shot
+    ///      `_upgradeAuthorized` flag, not on `msg.sender == address(this)`, so upgrading always requires going
+    ///      through {upgradeBySignature}'s CONFIG-scoped signature check.
+    function test_upgrade_revertsFromDirectSelfCall() public {
         (address account,) = _createUpgradeableAccount(ACTOR_PK);
         UpgradeableAccountV2 v2Impl = new UpgradeableAccountV2(address(accountConfiguration));
 
         vm.prank(account);
+        vm.expectRevert();
         UpgradeableAccount(payable(account)).upgradeToAndCall(address(v2Impl), "");
-
-        assertEq(UpgradeableAccountV2(payable(account)).version(), 2);
-        assertEq(UpgradeableAccountV2(payable(account)).isValidSignature(bytes32(0), ""), bytes4(0xdeadbeef));
     }
 
     function test_upgrade_revertsFromNonSelf() public {
@@ -171,8 +171,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         (address account,) = _createUpgradeableAccount(ACTOR_PK);
         UpgradeableAccountV2 v2Impl = new UpgradeableAccountV2(address(accountConfiguration));
 
-        vm.prank(account);
-        UpgradeableAccount(payable(account)).upgradeToAndCall(address(v2Impl), "");
+        _signedUpgrade(account, ACTOR_PK, address(0), address(v2Impl), "");
 
         vm.prank(account);
         UpgradeableAccount(payable(account))
@@ -181,7 +180,12 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         assertEq(target.value(), 999);
     }
 
-    function test_upgrade_viaExecuteBatch() public {
+    /// @dev Closes the gap the plain self-call check would otherwise leave open: batching a call to
+    ///      `upgradeToAndCall` targeting `address(this)` makes that inner call's `msg.sender == address(this)`
+    ///      too, but `executeBatch` never checks CONFIG scope specifically (only that the caller is authorized to
+    ///      drive calls at all, e.g. any SENDER-scoped actor) — so this must revert regardless of who can call
+    ///      `executeBatch`.
+    function test_upgrade_viaExecuteBatch_reverts() public {
         (address account,) = _createUpgradeableAccount(ACTOR_PK);
         UpgradeableAccountV2 v2Impl = new UpgradeableAccountV2(address(accountConfiguration));
 
@@ -189,9 +193,8 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         calls[0] = Call(account, 0, abi.encodeCall(UUPSUpgradeable.upgradeToAndCall, (address(v2Impl), "")));
 
         vm.prank(account);
+        vm.expectRevert();
         UpgradeableAccount(payable(account)).executeBatch(calls);
-
-        assertEq(UpgradeableAccountV2(payable(account)).version(), 2);
     }
 
     // ── isValidSignature ──
@@ -235,12 +238,12 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
 
     function _addScopedActor(address account, uint256 ownerPk, uint256 newPk, uint8 scope) internal {
         bytes32 newActorId = bytes32(bytes20(vm.addr(newPk)));
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                IAccountConfiguration.ActorConfig({
+                AccountConfiguration.ActorConfig({
                     authenticator: address(k1Authenticator), scope: scope, expiry: 0, policyType: 0x00
                 }),
                 bytes("")
@@ -326,18 +329,30 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         UpgradeableAccount(payable(account)).upgradeBySignature(address(0), address(v2Impl), "", auth);
     }
 
-    function test_upgradeBySignature_revertsNonOwnerScope() public {
+    function test_upgradeBySignature_revertsNonConfigScope() public {
         (address account,) = _createUpgradeableAccount(ACTOR_PK);
         UpgradeableAccountV2 v2Impl = new UpgradeableAccountV2(address(accountConfiguration));
 
-        // Authorize a SIGNER-scoped (non-owner) key, then have it sign an upgrade.
+        // Authorize a SIGNER-scoped key (lacks CONFIG), then have it sign an upgrade.
         _addScopedActor(account, ACTOR_PK, SCOPED_PK, accountConfiguration.SCOPE_SIGNER());
 
         bytes32 digest = _upgradeDigest(account, address(0), address(v2Impl), "");
         bytes memory auth = _buildK1Auth(SCOPED_PK, digest);
 
-        vm.expectRevert(UpgradeableAccount.UpgradeNotOwner.selector);
+        vm.expectRevert(UpgradeableAccount.UpgradeUnauthorized.selector);
         UpgradeableAccount(payable(account)).upgradeBySignature(address(0), address(v2Impl), "", auth);
+    }
+
+    function test_upgradeBySignature_configKeySucceeds() public {
+        (address account,) = _createUpgradeableAccount(ACTOR_PK);
+        UpgradeableAccountV2 v2Impl = new UpgradeableAccountV2(address(accountConfiguration));
+
+        // A CONFIG key (SCOPE_CONFIG) is authorized to upgrade, even though it is not an unrestricted owner.
+        _addScopedActor(account, ACTOR_PK, SCOPED_PK, accountConfiguration.SCOPE_CONFIG());
+
+        _signedUpgrade(account, SCOPED_PK, address(0), address(v2Impl), "");
+
+        assertEq(UpgradeableAccountV2(payable(account)).version(), 2);
     }
 
     function test_upgradeBySignature_revertsInvalidSignature() public {

@@ -4,6 +4,12 @@ pragma solidity ^0.8.30;
 /// @notice Generates runtime bytecode for an ERC-1967 proxy with a hardcoded default
 ///         implementation. Works immediately on deployment — no initialization required.
 ///
+///         This is the per-account bytecode half of the upgradeable path; {UpgradeableAccount} is the
+///         implementation half (the singleton this proxy delegates to). Pass an {UpgradeableAccount} as the
+///         default implementation — only implementations carrying UUPS logic can ever write the slot this proxy
+///         reads. Immutable accounts ({DefaultAccount}, {Default4337Account}, {DefaultHighRateAccount}) use a
+///         45-byte ERC-1167 proxy instead.
+///
 ///         Proxy logic:
 ///           1. SLOAD the ERC-1967 implementation slot
 ///           2. If non-zero, delegatecall to that address (upgraded path)

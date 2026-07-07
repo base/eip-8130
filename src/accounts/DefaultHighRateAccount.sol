@@ -5,11 +5,12 @@ import {Call, DefaultAccount} from "./DefaultAccount.sol";
 
 /// @notice High-rate account variant for EIP-8130.
 ///
-///         Extends DefaultAccount with one additional constraint:
-///         blocks outbound ETH value transfers when the account is locked.
-///         Combined with lock, ETH balance only decreases through gas fees,
-///         giving mempools maximum balance predictability and enabling higher
-///         transaction rate limits.
+///         Extends the bare DefaultAccount with one additional constraint: blocks outbound ETH value transfers
+///         when the account is locked. Combined with lock, ETH balance only decreases through gas fees, giving
+///         mempools maximum balance predictability and enabling higher transaction rate limits.
+///
+///         Deployed behind a plain 45-byte ERC-1167 proxy, so its behaviour is fully fixed by its (hardcoded)
+///         implementation address.
 contract DefaultHighRateAccount is DefaultAccount {
     constructor(address accountConfiguration) DefaultAccount(accountConfiguration) {}
 

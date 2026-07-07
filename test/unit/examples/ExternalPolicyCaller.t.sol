@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {IAccountConfiguration} from "../../../src/interfaces/IAccountConfiguration.sol";
-import {EXTERNAL_CALLER_AUTHENTICATOR} from "../../../src/accounts/DefaultAccount.sol";
+import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
+import {TRUSTED_EXECUTOR} from "../../../src/accounts/DefaultAccount.sol";
 
 import {PolicyManager, EXTERNAL_POLICY_AUTHENTICATOR} from "../../../src/examples/policies/PolicyManager.sol";
 import {SessionPolicy} from "../../../src/examples/policies/SessionPolicy.sol";
@@ -243,13 +243,13 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
     }
 
     function _createAccount(bytes32 salt) internal returns (address account) {
-        IAccountConfiguration.InitialActor memory root = IAccountConfiguration.InitialActor({
+        AccountConfiguration.InitialActor memory root = AccountConfiguration.InitialActor({
             actorId: bytes32(bytes20(vm.addr(ROOT_PK))), authenticator: address(k1Authenticator)
         });
-        IAccountConfiguration.InitialActor memory mgr = IAccountConfiguration.InitialActor({
-            actorId: bytes32(bytes20(address(manager))), authenticator: EXTERNAL_CALLER_AUTHENTICATOR
+        AccountConfiguration.InitialActor memory mgr = AccountConfiguration.InitialActor({
+            actorId: bytes32(bytes20(address(manager))), authenticator: TRUSTED_EXECUTOR
         });
-        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](2);
+        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](2);
         (actors[0], actors[1]) = root.actorId < mgr.actorId ? (root, mgr) : (mgr, root);
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
@@ -260,11 +260,11 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
     /// @dev Authorize the provider as an external-policy actor: no direct authority, gated to `policyManager` with
     ///      `commitment`. The actorId is the provider's own address.
     function _authorizeProvider(address account, address policyManager, bytes32 commitment) internal {
-        IAccountConfiguration.ActorConfig memory cfg = IAccountConfiguration.ActorConfig({
+        AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
             authenticator: EXTERNAL_POLICY_AUTHENTICATOR, scope: SCOPE_SENDER, expiry: 0, policyType: POLICY_GATED
         });
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: bytes32(bytes20(provider)),
             changeType: AUTHORIZE_ACTOR,
             data: abi.encode(cfg, abi.encodePacked(policyManager, commitment))
@@ -273,14 +273,13 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
     }
 
     function _revokeProvider(address account) internal {
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
-            actorId: bytes32(bytes20(provider)), changeType: REVOKE_ACTOR, data: ""
-        });
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] =
+            AccountConfiguration.ActorChange({actorId: bytes32(bytes20(provider)), changeType: REVOKE_ACTOR, data: ""});
         _applyAsRoot(account, changes);
     }
 
-    function _applyAsRoot(address account, IAccountConfiguration.ActorChange[] memory changes) internal {
+    function _applyAsRoot(address account, AccountConfiguration.ActorChange[] memory changes) internal {
         uint64 chainId = uint64(block.chainid);
         uint64 sequence = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, chainId, sequence, changes);

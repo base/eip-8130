@@ -4,7 +4,6 @@ pragma solidity ^0.8.30;
 import {Receiver} from "solady/accounts/Receiver.sol";
 
 import {AccountConfiguration} from "../AccountConfiguration.sol";
-import {IAccountConfiguration} from "../interfaces/IAccountConfiguration.sol";
 
 struct Call {
     address target;
@@ -12,21 +11,24 @@ struct Call {
     bytes data;
 }
 
-/// @dev Sentinel address for external caller authorization. No contract exists here —
-///      if the protocol ever calls authenticate() on it, the call naturally fails.
-///      Deterministic across all chains (hash-derived, no deployment needed).
-address constant EXTERNAL_CALLER_AUTHENTICATOR = address(uint160(uint256(keccak256("externalCaller"))));
+/// @dev Sentinel `authenticator` value marking an actor as a trusted executor: an address (e.g. a PolicyManager,
+///      EntryPoint, or relayer) authorized to drive execution on the account directly by matching `msg.sender`,
+///      rather than by verifying a signature. No contract exists here — if the protocol ever calls authenticate()
+///      on it, the call naturally fails. Deterministic across all chains (hash-derived, no deployment needed).
+address constant TRUSTED_EXECUTOR = address(uint160(uint256(keccak256("trustedExecutor"))));
 
-/// @notice Default account implementation for EIP-8130.
-///         Deployed behind ERC-1167 minimal proxy (45 bytes, deterministic pattern).
+/// @notice Bare default account implementation for EIP-8130.
 ///
-///         With direct dispatch, the protocol sends calls to `to` addresses with `msg.sender = from`.
-///         This contract handles ETH transfers (via self-call) and batched operations.
+///         This is the minimal spec: it handles batched execution and ERC-1271 signature validation, and defers
+///         all authorization to the AccountConfiguration system contract.
 ///
-///         Caller authorization via AccountConfiguration:
-///           - address(this) is always authorized (hardcoded) — covers 8130 direct dispatch
-///           - External callers (EntryPoints, PolicyManagers) are registered as actors
-///             with EXTERNAL_CALLER_AUTHENTICATOR as the authenticator in AccountConfiguration
+///         Deploy this via {UpgradeableAccount} (behind an UpgradeableProxy), which layers UUPS upgradeability
+///         on top with no other change in behavior.
+///
+///         Caller authorization:
+///           - address(this) is always authorized (hardcoded) — covers 8130 self-call batches
+///           - Trusted executors (PolicyManagers, relayers, EntryPoints) are registered as actors with
+///             TRUSTED_EXECUTOR as the authenticator in AccountConfiguration
 contract DefaultAccount is Receiver {
     AccountConfiguration public immutable ACCOUNT_CONFIGURATION;
 
@@ -50,16 +52,16 @@ contract DefaultAccount is Receiver {
     //  ERC-1271
     // ══════════════════════════════════════════════
 
-    /// @notice Signature validation via AccountConfiguration's authenticator infrastructure.
+    /// @notice Signature validation via AccountConfiguration. Requires the verified actor to hold SIGNER
+    ///         scope (or be an unrestricted owner); `verifySignature` enforces this and never reverts.
     /// @param hash The digest to authenticate
     /// @param signature Auth data in authenticator || data format
     /// @return magicValue 0x1626ba7e if valid, 0xffffffff otherwise
     function isValidSignature(bytes32 hash, bytes calldata signature) external view virtual returns (bytes4) {
-        try ACCOUNT_CONFIGURATION.authenticateActor(address(this), hash, signature) returns (uint8, uint8, address) {
-            return bytes4(0x1626ba7e);
-        } catch {
-            return bytes4(0xFFFFFFFF);
-        }
+        return
+            ACCOUNT_CONFIGURATION.verifySignature(address(this), hash, signature)
+                ? bytes4(0x1626ba7e)
+                : bytes4(0xFFFFFFFF);
     }
 
     // ══════════════════════════════════════════════
@@ -76,8 +78,8 @@ contract DefaultAccount is Receiver {
 
     function _isAuthorizedCaller(address caller) internal view virtual returns (bool) {
         if (caller == address(this)) return true;
-        IAccountConfiguration.ActorConfig memory config =
+        AccountConfiguration.ActorConfig memory config =
             ACCOUNT_CONFIGURATION.getActorConfig(address(this), bytes32(bytes20(caller)));
-        return config.authenticator == EXTERNAL_CALLER_AUTHENTICATOR;
+        return config.authenticator == TRUSTED_EXECUTOR;
     }
 }

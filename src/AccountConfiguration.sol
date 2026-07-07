@@ -1,15 +1,47 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {IAccountConfiguration} from "./interfaces/IAccountConfiguration.sol";
 import {IAuthenticator} from "./interfaces/IAuthenticator.sol";
 
 /// @notice Account Configuration system contract for EIP-8130.
-///         Manages actor authorization, account creation, change sequencing, and account lock.
-contract AccountConfiguration is IAccountConfiguration {
+///         Manages actor authorization, account creation, change sequencing, and account lock. This contract is
+///         also the canonical reference for the EIP-8130 Account Configuration ABI: its public structs, events,
+///         and function signatures are the spec surface, and there is no separate interface file to keep in sync.
+contract AccountConfiguration {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // STRUCTS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+
+    struct ChangeSequences {
+        uint64 multichain; // chain_id 0
+        uint64 local; // chain_id == block.chainid; starts at 1 once initialized (created/imported), 0 = uninitialized
+    }
+
+    struct ActorConfig {
+        address authenticator;
+        uint8 scope;
+        uint48 expiry; // Unix seconds; 0 = no expiry. Actor invalid once block.timestamp > expiry
+        uint8 policyType; // 0x00 = none; any non-zero = gated to stored manager (value interpreted by the manager)
+    }
+
+    // Minimal actor used for account creation and import (always unrestricted: scope=0x00, policyType=0x00, no expiry).
+    struct InitialActor {
+        bytes32 actorId;
+        address authenticator;
+    }
+
+    struct Actor {
+        bytes32 actorId;
+        ActorConfig config;
+        // Sliced by policyType: empty (0x00); manager[20] || commitment[32] (non-zero).
+        bytes policyData;
+    }
+
+    struct ActorChange {
+        uint8 changeType; // 0x01 = authorizeActor, 0x02 = revokeActor
+        bytes32 actorId;
+        bytes data; // operation-specific: ActorConfig || policyData for authorize, empty for revoke
+    }
 
     /// @dev Packed into a single storage slot (exactly 32 bytes).
     ///      localSequence > 0 doubles as the account initialized flag.
@@ -37,9 +69,10 @@ contract AccountConfiguration is IAccountConfiguration {
     bytes4 constant ERC1271_SELECTOR = bytes4(keccak256("isValidSignature(bytes32,bytes)"));
 
     /// @dev Typehash for the importAccount ERC-1271 signature, NOT compliant with EIP-712 to mitigate phishing
-    ///      attacks. Initial actors are hashed structurally via ACTOR_TYPEHASH / ACTORCONFIG_TYPEHASH below.
+    ///      attacks. Bound to the current chainId so an import signature cannot be replayed on another chain.
+    ///      Initial actors are hashed structurally via ACTOR_TYPEHASH / ACTORCONFIG_TYPEHASH below.
     bytes32 public constant ACTOR_INITIALIZATION_TYPEHASH = keccak256(
-        "ActorInitialization(bytes32 salt,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint8 scope,uint48 expiry,uint8 policyType)"
+        "ActorInitialization(bytes32 salt,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint8 scope,uint48 expiry,uint8 policyType)"
     );
 
     /// @dev Per-actor typehash used to structurally hash each Actor within an ActorInitialization import digest.
@@ -53,7 +86,7 @@ contract AccountConfiguration is IAccountConfiguration {
 
     /// @dev Typehash for signed actor changes, NOT compliant with EIP-712 to mitigate phishing attacks.
     bytes32 public constant SIGNED_ACTOR_CHANGES_TYPEHASH = keccak256(
-        "SignedActorChanges(address account,uint64 chainId,uint64 sequence,ActorChange[] actorChanges)"
+        "SignedActorChanges(address account,uint256 chainId,uint64 sequence,ActorChange[] actorChanges)"
         "ActorChange(uint8 changeType,bytes32 actorId,bytes data)"
     );
 
@@ -97,8 +130,11 @@ contract AccountConfiguration is IAccountConfiguration {
     /// @notice Actor can pay for transactions with account as payer
     uint8 public constant SCOPE_PAYER = 0x04;
 
-    /// @notice Actor can change account actors
-    uint8 public constant SCOPE_CHANGE_ACTORS = 0x08;
+    /// @notice Actor can change account configuration (authorize/revoke actors). This is an administrative,
+    ///         root-equivalent capability: a config key can authorize brand-new unrestricted owners, so it must be
+    ///         treated as being as powerful as full ownership. Policy-bearing actors are barred from holding it
+    ///         (see _authorizeActor), since a policy could otherwise be escaped by minting a fresh unrestricted actor.
+    uint8 public constant SCOPE_CONFIG = 0x08;
 
     /// @dev Authenticator namespace: 1 = the canonical secp256k1 ("K1") verifier (native ecrecover); 2..max = custom
     ///      IAuthenticator contracts. address(0) is reserved as the "no actor configured" storage sentinel and is
@@ -127,6 +163,84 @@ contract AccountConfiguration is IAccountConfiguration {
     uint256 internal constant SECP256K1_HALF_ORDER = 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0;
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+    // EVENTS
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+
+    /// @notice Emitted when an actor is authorized (created or updated).
+    /// @param actorData Tightly packed authorization surface, mirroring the storage/wire packing:
+    ///        authenticator(20) || scope(1) || expiry(6) || policyType(1) — 28 bytes — and, only when
+    ///        policyType != 0x00, followed by the resolved policy gate: manager(20) || commitment(32).
+    ///        So the payload is 28 bytes for an unrestricted/ungated actor and 80 bytes for a policy-gated one;
+    ///        no zero policy words are emitted when there is no policy.
+    event ActorAuthorized(address indexed account, bytes32 indexed actorId, bytes actorData);
+
+    event ActorRevoked(address indexed account, bytes32 indexed actorId);
+
+    event AccountCreated(address indexed account, bytes32 userSalt, bytes32 codeHash);
+
+    event AccountImported(address indexed account);
+
+    /// @notice Protocol-injected receipt log for successful EIP-8130 delegation updates (not emitted in EVM).
+    event DelegationApplied(address indexed account, address target);
+
+    event AccountLocked(address indexed account, uint16 unlockDelay);
+
+    event AccountUnlockInitiated(address indexed account, uint40 unlocksAt);
+
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+    // ERRORS
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+
+    /// @dev An account address argument was the zero address.
+    error ZeroAccount();
+    /// @dev The account already has EIP-8130 state, so it cannot be created or imported again.
+    error AlreadyInitialized();
+    /// @dev The operation is not permitted while the account is locked.
+    error AccountIsLocked();
+    /// @dev The signed chainId is neither 0 (multichain) nor the current chain.
+    error InvalidChainId();
+    /// @dev The authenticated actor lacks the scope required to change actors.
+    error UnauthorizedActorChange();
+    /// @dev An ActorChange carried an unrecognized changeType.
+    error UnknownChangeType();
+    /// @dev The importAccount ERC-1271 signature check did not return the magic value.
+    error InvalidImportSignature();
+    /// @dev lock() was called with a zero unlock delay.
+    error ZeroUnlockDelay();
+    /// @dev initiateUnlock() was called when the account was not in the locked (unlocksAt == max) state.
+    error NotLocked();
+    /// @dev The auth blob is shorter than the 20-byte authenticator selector prefix.
+    error InvalidAuthLength();
+    /// @dev createAccount/importAccount was called with an empty initialActors set.
+    error NoInitialActors();
+    /// @dev initialActors are not strictly ascending by actorId (unsorted or duplicated).
+    error ActorsNotSortedOrDuplicate();
+    /// @dev An actor config named an authenticator below the K1 sentinel (i.e. address(0)).
+    error InvalidAuthenticator();
+    /// @dev A policy-bearing actor must be scope-restricted and must not hold change-actors scope.
+    error InvalidPolicyScope();
+    /// @dev The policyData length or embedded manager/commitment did not match the policyType.
+    error InvalidPolicyData();
+    /// @dev The referenced actor is not currently authorized on the account.
+    error UnknownActor();
+    /// @dev An authenticator resolved a zero actorId (authentication failed).
+    error AuthenticationFailed();
+    /// @dev The resolved actor is not bound to the presented authenticator.
+    error AuthenticatorMismatch();
+    /// @dev The actor's expiry has passed.
+    error ActorExpired();
+    /// @dev The signature was malformed: bad length, non-canonical v, high-s, or a zero recovery.
+    error InvalidSignature();
+    /// @dev The account's default (implicit/scoped) EOA key has been revoked.
+    error DefaultEoaRevoked();
+    /// @dev The provided account bytecode exceeds the maximum encodable length.
+    error BytecodeTooLarge();
+    /// @dev CREATE2 did not deploy code at the expected account address (e.g. bytecode too large per EIP-170,
+    ///      leading 0xEF byte per EIP-3541, or out of gas). Reverting unwinds all state writes so no orphaned
+    ///      EIP-8130 configuration is left behind.
+    error AccountDeploymentFailed();
+
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // STORAGE
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
@@ -149,12 +263,12 @@ contract AccountConfiguration is IAccountConfiguration {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     modifier onlyUnlocked(address account) {
-        if (_isLockedSideEffects(account)) revert();
+        if (_checkAndClearLock(account)) revert AccountIsLocked();
         _;
     }
 
-    modifier nonZero(address account) {
-        require(account != address(0));
+    modifier nonZeroAccount(address account) {
+        if (account == address(0)) revert ZeroAccount();
         _;
     }
 
@@ -176,7 +290,9 @@ contract AccountConfiguration is IAccountConfiguration {
         // state via a global (chainId 0) change. This must be explicit: now that authorizeActor is an upsert it no
         // longer reverts on a duplicate initial actor, and the create2 below is intentionally swallowed (pop), so a
         // duplicate createAccount would otherwise silently re-initialize.
-        require(_accountState[account].localSequence == 0 && _accountState[account].multichainSequence == 0);
+        if (_accountState[account].localSequence != 0 || _accountState[account].multichainSequence != 0) {
+            revert AlreadyInitialized();
+        }
 
         // Mark the account initialized: localSequence doubles as the initialized flag, so setting it to 1 blocks
         // importAccount (which requires localSequence == 0) from running against an already-created account.
@@ -189,30 +305,46 @@ contract AccountConfiguration is IAccountConfiguration {
 
         _initializeAccount(account, initialActors);
 
-        // Create account code at the CREATE2 address derived from the packed actors commitment.
+        // Create account code at the CREATE2 address derived from the packed actors commitment. The return value
+        // MUST be checked: CREATE2 returns address(0) on failure (bytecode too large per EIP-170, a leading 0xEF
+        // byte per EIP-3541, or out of gas). On success it returns the deployed address, which equals `account` by
+        // construction. Reverting on mismatch unwinds every state write above, so a failed deploy can never leave an
+        // initialized-but-codeless account behind.
         bytes memory deploymentCode = _buildDeploymentCode(bytecode);
         bytes32 effectiveSalt = _computeEffectiveSalt(userSalt, initialActors);
-        assembly {
-            pop(create2(0, add(deploymentCode, 0x20), mload(deploymentCode), effectiveSalt))
+        address deployed;
+        assembly ("memory-safe") {
+            deployed := create2(0, add(deploymentCode, 0x20), mload(deploymentCode), effectiveSalt)
         }
+        if (deployed != account) revert AccountDeploymentFailed();
         emit AccountCreated(account, userSalt, keccak256(bytecode));
     }
 
     /// @notice Import an existing account to AccountConfiguration management.
     /// @dev Verifies via ERC-1271. Accounts must have bytecode.
     /// @dev Custom hash used to partially mitigate phishing attacks on eth_signTypedData.
-    function importAccount(address account, InitialActor[] calldata initialActors, bytes calldata signature)
-        external
-        onlyUnlocked(account)
-    {
+    /// @param chainId Replay domain of the import signature, mirroring applySignedActorChanges: 0 = multichain
+    ///        (valid on every chain), otherwise it must equal the current chain.
+    function importAccount(
+        address account,
+        uint256 chainId,
+        InitialActor[] calldata initialActors,
+        bytes calldata signature
+    ) external onlyUnlocked(account) {
+        if (chainId != 0 && chainId != block.chainid) revert InvalidChainId();
+
         // Import is a one-time bootstrap for accounts with no 8130 state yet
-        require(_accountState[account].localSequence == 0 && _accountState[account].multichainSequence == 0);
+        if (_accountState[account].localSequence != 0 || _accountState[account].multichainSequence != 0) {
+            revert AlreadyInitialized();
+        }
         _accountState[account].localSequence = 1;
 
-        bytes32 digest = _computeImportDigest(account, initialActors);
+        bytes32 digest = _computeImportDigest(account, chainId, initialActors);
         (bool success, bytes memory result) =
             account.staticcall(abi.encodeWithSelector(ERC1271_SELECTOR, digest, signature));
-        require(success && result.length == 32 && abi.decode(result, (bytes4)) == ERC1271_SELECTOR);
+        if (!success || result.length != 32 || abi.decode(result, (bytes4)) != ERC1271_SELECTOR) {
+            revert InvalidImportSignature();
+        }
 
         // Disable the implicit default-EOA path (parity with createAccount). Set *after* the ERC-1271 check: for an
         // EIP-7702 delegated EOA its own k1 signature (the implicit full owner) is the only authenticator available
@@ -225,15 +357,17 @@ contract AccountConfiguration is IAccountConfiguration {
         emit AccountImported(account);
     }
 
-    /// @notice Apply actor changes (actor management only).
-    ///         Direct authentication via authenticator + actor_config, isValidSignature fallback for migration.
+    /// @notice Apply a batch of signed actor changes (authorize/revoke) to an account's configuration.
+    /// @dev Authenticates `auth` against the account's actors and requires the resolved actor to be unrestricted
+    ///      (scope 0) or to hold SCOPE_CONFIG. Replay is bound by chainId (0 = multichain, else the current
+    ///      chain) and a monotonic per-account sequence consumed on each call.
     function applySignedActorChanges(
         address account,
-        uint64 chainId,
+        uint256 chainId,
         ActorChange[] calldata actorChanges,
         bytes calldata auth
     ) external onlyUnlocked(account) {
-        require(chainId == 0 || chainId == block.chainid);
+        if (chainId != 0 && chainId != block.chainid) revert InvalidChainId();
 
         // Increment the corresponding sequence
         uint64 sequence =
@@ -244,7 +378,7 @@ contract AccountConfiguration is IAccountConfiguration {
         (uint8 scope,,) = authenticateActor(account, digest, auth);
 
         // Require actor has scope to change actors (scope == 0 means unrestricted)
-        require(scope == 0 || scope & SCOPE_CHANGE_ACTORS != 0);
+        if (scope != 0 && scope & SCOPE_CONFIG == 0) revert UnauthorizedActorChange();
 
         // Apply actorChanges
         for (uint256 i; i < actorChanges.length; i++) {
@@ -255,7 +389,7 @@ contract AccountConfiguration is IAccountConfiguration {
             } else if (actorChanges[i].changeType == REVOKE_ACTOR) {
                 _revokeActor(account, actorChanges[i].actorId);
             } else {
-                revert();
+                revert UnknownChangeType();
             }
         }
     }
@@ -268,7 +402,7 @@ contract AccountConfiguration is IAccountConfiguration {
     /// @param unlockDelay The delay in seconds before the account can be unlocked (capped at ~18 hours).
     function lock(uint16 unlockDelay) external onlyUnlocked(msg.sender) {
         // Require non-zero unlock delay
-        require(unlockDelay > 0);
+        if (unlockDelay == 0) revert ZeroUnlockDelay();
 
         AccountState storage config = _accountState[msg.sender];
 
@@ -282,7 +416,7 @@ contract AccountConfiguration is IAccountConfiguration {
         AccountState storage config = _accountState[msg.sender];
 
         // Require account is locked and unlock has not been initiated
-        require(config.unlocksAt == type(uint40).max);
+        if (config.unlocksAt != type(uint40).max) revert NotLocked();
 
         config.unlocksAt = uint40(block.timestamp + config.unlockDelay);
         config.unlockDelay = 0;
@@ -327,7 +461,7 @@ contract AccountConfiguration is IAccountConfiguration {
         view
         returns (uint8 scope, uint8 policyType, address policyTarget)
     {
-        require(auth.length >= 20);
+        if (auth.length < 20) revert InvalidAuthLength();
         return _authenticate(account, hash, address(bytes20(auth[:20])), auth[20:]);
     }
 
@@ -448,9 +582,8 @@ contract AccountConfiguration is IAccountConfiguration {
     // INTERNAL FUNCTIONS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice Returns true if the account is locked and clears storage if unlocked
-    /// @dev Side effects to clear locked state
-    function _isLockedSideEffects(address account) internal returns (bool locked) {
+    /// @notice Returns true if the account is locked; clears the stored unlock timestamp once it has expired.
+    function _checkAndClearLock(address account) internal returns (bool locked) {
         // Early return if account is locked
         uint40 unlocksAt = _accountState[account].unlocksAt;
         if (block.timestamp < unlocksAt) return true;
@@ -464,14 +597,17 @@ contract AccountConfiguration is IAccountConfiguration {
     // ACTOR CHANGES
     // ----------------------------------------------------------------------------------------------------------------
 
-    function _initializeAccount(address account, InitialActor[] calldata initialActors) internal nonZero(account) {
+    function _initializeAccount(address account, InitialActor[] calldata initialActors)
+        internal
+        nonZeroAccount(account)
+    {
         // Must have at least one initial actor
-        require(initialActors.length > 0);
+        if (initialActors.length == 0) revert NoInitialActors();
 
         bytes32 previousActorId;
         for (uint256 i; i < initialActors.length; i++) {
             // Enforce sorting with relative comparison of sequential actor ids
-            require(initialActors[i].actorId > previousActorId);
+            if (initialActors[i].actorId <= previousActorId) revert ActorsNotSortedOrDuplicate();
             previousActorId = initialActors[i].actorId;
 
             // Initial actors are always unrestricted owners: scope 0x00, no expiry, no policy. The InitialActor type
@@ -486,15 +622,15 @@ contract AccountConfiguration is IAccountConfiguration {
 
     function _authorizeActor(address account, bytes32 actorId, ActorConfig memory config, bytes memory policyData)
         internal
-        nonZero(account)
+        nonZeroAccount(account)
     {
-        require(config.authenticator >= K1_AUTHENTICATOR);
+        if (config.authenticator < K1_AUTHENTICATOR) revert InvalidAuthenticator();
 
         // A policy-bearing actor must be scope-restricted and may not hold CONFIG scope: the policy gate only
         // covers SENDER-context calls, so a CONFIG-scoped (or unrestricted) key could authorize new, unrestricted
         // actors and escape its policy entirely. Applies to every home (inline self, non-k1 self, any other actor).
         if (config.policyType != POLICY_NONE) {
-            require(config.scope != 0 && config.scope & SCOPE_CHANGE_ACTORS == 0);
+            if (config.scope == 0 || config.scope & SCOPE_CONFIG != 0) revert InvalidPolicyScope();
         }
 
         // Slice the signed policy by policyType. The commitment is opaque to the protocol.
@@ -529,7 +665,7 @@ contract AccountConfiguration is IAccountConfiguration {
             if (commitment != bytes32(0)) _policyCommitment[actorId][account] = commitment;
             if (manager != address(0)) _policyManager[actorId][account] = manager;
 
-            emit ActorAuthorized(account, actorId, config, manager, commitment);
+            _emitActorAuthorized(account, actorId, config, manager, commitment);
             return;
         }
 
@@ -542,7 +678,25 @@ contract AccountConfiguration is IAccountConfiguration {
         if (commitment != bytes32(0)) _policyCommitment[actorId][account] = commitment;
         if (manager != address(0)) _policyManager[actorId][account] = manager;
 
-        emit ActorAuthorized(account, actorId, config, manager, commitment);
+        _emitActorAuthorized(account, actorId, config, manager, commitment);
+    }
+
+    /// @dev Emit ActorAuthorized with a tightly packed payload. The config packs to 28 bytes
+    ///      (authenticator || scope || expiry || policyType); the policy gate (manager || commitment, 52 bytes)
+    ///      is appended only for a policy-bearing actor, so no zero policy words are emitted otherwise.
+    function _emitActorAuthorized(
+        address account,
+        bytes32 actorId,
+        ActorConfig memory config,
+        address manager,
+        bytes32 commitment
+    ) private {
+        bytes memory actorData = config.policyType == POLICY_NONE
+            ? abi.encodePacked(config.authenticator, config.scope, config.expiry, config.policyType)
+            : abi.encodePacked(
+                config.authenticator, config.scope, config.expiry, config.policyType, manager, commitment
+            );
+        emit ActorAuthorized(account, actorId, actorData);
     }
 
     /// @dev Validates `policyData` against `policyType` and returns (manager, commitment).
@@ -555,19 +709,19 @@ contract AccountConfiguration is IAccountConfiguration {
         returns (address manager, bytes32 commitment)
     {
         if (policyType == POLICY_NONE) {
-            require(policyData.length == 0);
+            if (policyData.length != 0) revert InvalidPolicyData();
         } else {
-            require(policyData.length == 52);
+            if (policyData.length != 52) revert InvalidPolicyData();
             assembly ("memory-safe") {
                 manager := shr(96, mload(add(policyData, 0x20)))
                 commitment := mload(add(policyData, 0x34))
             }
-            require(manager != address(0) && commitment != bytes32(0));
+            if (manager == address(0) || commitment == bytes32(0)) revert InvalidPolicyData();
         }
     }
 
-    function _revokeActor(address account, bytes32 actorId) internal nonZero(account) {
-        require(isActor(account, actorId));
+    function _revokeActor(address account, bytes32 actorId) internal nonZeroAccount(account) {
+        if (!isActor(account, actorId)) revert UnknownActor();
         delete _actorConfig[actorId][account];
         // Policy state is keyed by (account, actorId) and cleared exactly on revoke.
         delete _policyCommitment[actorId][account];
@@ -606,8 +760,9 @@ contract AccountConfiguration is IAccountConfiguration {
     }
 
     /// @dev Typed digest for the importAccount ERC-1271 signature (a signed message), so signers can reproduce it
-    ///      with standard EIP-712-style struct hashing. `salt` is bound to the account address.
-    function _computeImportDigest(address account, InitialActor[] calldata initialActors)
+    ///      with standard EIP-712-style struct hashing. `salt` is bound to the account address and the digest is
+    ///      bound to `chainId` (0 = multichain) so its replay domain matches applySignedActorChanges.
+    function _computeImportDigest(address account, uint256 chainId, InitialActor[] calldata initialActors)
         internal
         pure
         returns (bytes32)
@@ -625,14 +780,17 @@ contract AccountConfiguration is IAccountConfiguration {
 
         return keccak256(
             abi.encode(
-                ACTOR_INITIALIZATION_TYPEHASH, bytes32(bytes20(account)), keccak256(abi.encodePacked(actorHashes))
+                ACTOR_INITIALIZATION_TYPEHASH,
+                bytes32(bytes20(account)),
+                chainId,
+                keccak256(abi.encodePacked(actorHashes))
             )
         );
     }
 
     function _computeSignedActorChangesDigest(
         address account,
-        uint64 chainId,
+        uint256 chainId,
         uint64 sequence,
         ActorChange[] calldata actorChanges
     ) internal pure returns (bytes32) {
@@ -674,12 +832,12 @@ contract AccountConfiguration is IAccountConfiguration {
         if (authenticator == K1_AUTHENTICATOR) return _authenticateK1(account, hash, data);
 
         bytes32 actorId = IAuthenticator(authenticator).authenticate(hash, data);
-        require(actorId != bytes32(0));
+        if (actorId == bytes32(0)) revert AuthenticationFailed();
 
         ActorConfig memory config = _actorConfig[actorId][account];
-        require(config.authenticator == authenticator);
+        if (config.authenticator != authenticator) revert AuthenticatorMismatch();
         // Expiry is read from the same slot; an expired actor fails authentication. 0 = no expiry.
-        require(config.expiry == 0 || block.timestamp <= config.expiry);
+        if (config.expiry != 0 && block.timestamp > config.expiry) revert ActorExpired();
         return (config.scope, config.policyType, _resolvePolicyTarget(account, actorId, config.policyType));
     }
 
@@ -696,14 +854,14 @@ contract AccountConfiguration is IAccountConfiguration {
         returns (uint8, uint8, address)
     {
         address recovered = _recoverSigner(hash, data);
-        require(recovered != address(0));
+        if (recovered == address(0)) revert InvalidSignature();
 
         if (recovered == account) {
             // Inline self: a single SLOAD resolves the whole key. The flag disables it entirely; otherwise the
             // inline scope/policy/expiry govern (all-zero = full owner).
             AccountState storage st = _accountState[account];
-            require((st.flags & FLAG_REVOKE_DEFAULT_EOA) == 0);
-            require(st.defaultEOAExpiry == 0 || block.timestamp <= st.defaultEOAExpiry);
+            if (st.flags & FLAG_REVOKE_DEFAULT_EOA != 0) revert DefaultEoaRevoked();
+            if (st.defaultEOAExpiry != 0 && block.timestamp > st.defaultEOAExpiry) revert ActorExpired();
             uint8 policyType = st.defaultEOAPolicyType;
             return
                 (st.defaultEOAScope, policyType, _resolvePolicyTarget(account, bytes32(bytes20(account)), policyType));
@@ -711,9 +869,9 @@ contract AccountConfiguration is IAccountConfiguration {
 
         bytes32 actorId = bytes32(bytes20(recovered));
         ActorConfig memory config = _actorConfig[actorId][account];
-        require(config.authenticator == K1_AUTHENTICATOR);
+        if (config.authenticator != K1_AUTHENTICATOR) revert AuthenticatorMismatch();
         // Expiry is read from the same slot; an expired actor fails authentication. 0 = no expiry.
-        require(config.expiry == 0 || block.timestamp <= config.expiry);
+        if (config.expiry != 0 && block.timestamp > config.expiry) revert ActorExpired();
         return (config.scope, config.policyType, _resolvePolicyTarget(account, actorId, config.policyType));
     }
 
@@ -731,14 +889,14 @@ contract AccountConfiguration is IAccountConfiguration {
     }
 
     function _recoverSigner(bytes32 hash, bytes calldata data) internal pure returns (address recovered) {
-        require(data.length == 65);
+        if (data.length != 65) revert InvalidSignature();
         bytes32 r = bytes32(data[:32]);
         bytes32 s = bytes32(data[32:64]);
         uint8 v = uint8(data[64]);
         // EIP-2: reject the malleable high-s half of each signature and non-canonical v to enforce a single
         // canonical encoding per signature.
-        require(uint256(s) <= SECP256K1_HALF_ORDER);
-        require(v == 27 || v == 28);
+        if (uint256(s) > SECP256K1_HALF_ORDER) revert InvalidSignature();
+        if (v != 27 && v != 28) revert InvalidSignature();
         return ecrecover(hash, v, r, s);
     }
 
@@ -752,7 +910,7 @@ contract AccountConfiguration is IAccountConfiguration {
     function _buildDeploymentCode(bytes calldata bytecode) internal pure returns (bytes memory code) {
         // Bytecode must be less than 65536 bytes
         uint256 n = bytecode.length;
-        require(n <= 0xFFFF);
+        if (n > 0xFFFF) revert BytecodeTooLarge();
 
         // Construct the deployment code with 14-byte header then provided bytecode
         code = new bytes(14 + n);

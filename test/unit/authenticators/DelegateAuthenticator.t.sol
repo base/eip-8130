@@ -2,7 +2,6 @@
 pragma solidity ^0.8.30;
 
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
-import {IAccountConfiguration} from "../../../src/interfaces/IAccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 contract DelegateAuthenticatorTest is AccountConfigurationTest {
@@ -16,21 +15,19 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
         bytes32 delegatorActorId = bytes32(bytes20(delegateSigner));
         bytes32 delegateRefActorId = bytes32(bytes20(delegateAccount));
 
-        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](2);
+        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](2);
         if (delegatorActorId < delegateRefActorId) {
-            actors[0] = IAccountConfiguration.InitialActor({
-                actorId: delegatorActorId, authenticator: address(k1Authenticator)
-            });
-            actors[1] = IAccountConfiguration.InitialActor({
+            actors[0] =
+                AccountConfiguration.InitialActor({actorId: delegatorActorId, authenticator: address(k1Authenticator)});
+            actors[1] = AccountConfiguration.InitialActor({
                 actorId: delegateRefActorId, authenticator: address(delegateAuthenticator)
             });
         } else {
-            actors[0] = IAccountConfiguration.InitialActor({
+            actors[0] = AccountConfiguration.InitialActor({
                 actorId: delegateRefActorId, authenticator: address(delegateAuthenticator)
             });
-            actors[1] = IAccountConfiguration.InitialActor({
-                actorId: delegatorActorId, authenticator: address(k1Authenticator)
-            });
+            actors[1] =
+                AccountConfiguration.InitialActor({actorId: delegatorActorId, authenticator: address(k1Authenticator)});
         }
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
@@ -73,9 +70,9 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
         (address accountA,) = _createK1Account(DELEGATE_PK);
 
         bytes32 delegateRefA = bytes32(bytes20(accountA));
-        IAccountConfiguration.InitialActor[] memory actorsB = new IAccountConfiguration.InitialActor[](1);
+        AccountConfiguration.InitialActor[] memory actorsB = new AccountConfiguration.InitialActor[](1);
         actorsB[0] =
-            IAccountConfiguration.InitialActor({actorId: delegateRefA, authenticator: address(delegateAuthenticator)});
+            AccountConfiguration.InitialActor({actorId: delegateRefA, authenticator: address(delegateAuthenticator)});
         bytes memory bytecodeB = _computeERC1167Bytecode(defaultAccountImplementation);
         address accountB = accountConfiguration.createAccount(bytes32(uint256(10)), bytecodeB, actorsB);
 
@@ -128,12 +125,12 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
     /// @dev Authorizes a new K1 actor (`newPk`) with `scope` on `account`, signed by the
     ///      unrestricted owner (`ownerPk`) via applySignedActorChanges on the local chain.
     function _authorizeScopedK1Actor(address account, uint256 ownerPk, uint256 newPk, uint8 scope) internal {
-        IAccountConfiguration.ActorConfig memory config = IAccountConfiguration.ActorConfig({
+        AccountConfiguration.ActorConfig memory config = AccountConfiguration.ActorConfig({
             authenticator: address(k1Authenticator), scope: scope, expiry: 0, policyType: 0
         });
 
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             changeType: AUTHORIZE_ACTOR, actorId: bytes32(bytes20(vm.addr(newPk))), data: abi.encode(config, bytes(""))
         });
 

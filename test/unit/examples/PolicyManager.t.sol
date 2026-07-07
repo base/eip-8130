@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {IAccountConfiguration} from "../../../src/interfaces/IAccountConfiguration.sol";
+import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../../src/interfaces/ITransactionContext.sol";
-import {EXTERNAL_CALLER_AUTHENTICATOR} from "../../../src/accounts/DefaultAccount.sol";
+import {TRUSTED_EXECUTOR} from "../../../src/accounts/DefaultAccount.sol";
 
 import {PolicyManager} from "../../../src/examples/policies/PolicyManager.sol";
 import {SessionPolicy} from "../../../src/examples/policies/SessionPolicy.sol";
@@ -177,14 +177,14 @@ contract PolicyManagerTest is AccountConfigurationTest {
     }
 
     function _createAccountWithRootAndManager() internal returns (address) {
-        IAccountConfiguration.InitialActor memory root = IAccountConfiguration.InitialActor({
+        AccountConfiguration.InitialActor memory root = AccountConfiguration.InitialActor({
             actorId: bytes32(bytes20(vm.addr(ROOT_PK))), authenticator: address(k1Authenticator)
         });
-        IAccountConfiguration.InitialActor memory mgr = IAccountConfiguration.InitialActor({
-            actorId: bytes32(bytes20(address(manager))), authenticator: EXTERNAL_CALLER_AUTHENTICATOR
+        AccountConfiguration.InitialActor memory mgr = AccountConfiguration.InitialActor({
+            actorId: bytes32(bytes20(address(manager))), authenticator: TRUSTED_EXECUTOR
         });
 
-        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](2);
+        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](2);
         (actors[0], actors[1]) = root.actorId < mgr.actorId ? (root, mgr) : (mgr, root);
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
@@ -192,13 +192,13 @@ contract PolicyManagerTest is AccountConfigurationTest {
     }
 
     function _authorizePolicyActor(bytes32 actorId, bytes32 commitment) internal {
-        IAccountConfiguration.ActorConfig memory cfg = IAccountConfiguration.ActorConfig({
+        AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
             authenticator: address(k1Authenticator), scope: SCOPE_SENDER, expiry: 0, policyType: POLICY_GATED
         });
         bytes memory policyData = abi.encodePacked(address(manager), commitment);
 
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: actorId, changeType: AUTHORIZE_ACTOR, data: abi.encode(cfg, policyData)
         });
 
@@ -213,16 +213,16 @@ contract PolicyManagerTest is AccountConfigurationTest {
     }
 
     /// @dev Build a second account owned by a distinct root key (the "attacker"), with this manager registered as
-    ///      an execution-enabled actor (`EXTERNAL_CALLER_AUTHENTICATOR`).
+    ///      an execution-enabled actor (`TRUSTED_EXECUTOR`).
     function _createAttackerAccount() internal returns (address attacker, uint256 attackerOwnerPk) {
         attackerOwnerPk = 0xB0B;
-        IAccountConfiguration.InitialActor memory root = IAccountConfiguration.InitialActor({
+        AccountConfiguration.InitialActor memory root = AccountConfiguration.InitialActor({
             actorId: bytes32(bytes20(vm.addr(attackerOwnerPk))), authenticator: address(k1Authenticator)
         });
-        IAccountConfiguration.InitialActor memory mgr = IAccountConfiguration.InitialActor({
-            actorId: bytes32(bytes20(address(manager))), authenticator: EXTERNAL_CALLER_AUTHENTICATOR
+        AccountConfiguration.InitialActor memory mgr = AccountConfiguration.InitialActor({
+            actorId: bytes32(bytes20(address(manager))), authenticator: TRUSTED_EXECUTOR
         });
-        IAccountConfiguration.InitialActor[] memory actors = new IAccountConfiguration.InitialActor[](2);
+        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](2);
         (actors[0], actors[1]) = root.actorId < mgr.actorId ? (root, mgr) : (mgr, root);
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
@@ -232,13 +232,13 @@ contract PolicyManagerTest is AccountConfigurationTest {
     /// @dev Variant of {_authorizePolicyActor} that operates on an arbitrary `target` account signed by its owner.
     ///      Used to register a victim's commitment value on a different account — the cross-account reuse case.
     function _authorizePolicyActorOn(address target_, uint256 ownerPk, bytes32 actorId, bytes32 commitment) internal {
-        IAccountConfiguration.ActorConfig memory cfg = IAccountConfiguration.ActorConfig({
+        AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
             authenticator: address(k1Authenticator), scope: SCOPE_SENDER, expiry: 0, policyType: POLICY_GATED
         });
         bytes memory policyData = abi.encodePacked(address(manager), commitment);
 
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
             actorId: actorId, changeType: AUTHORIZE_ACTOR, data: abi.encode(cfg, policyData)
         });
 
@@ -249,8 +249,8 @@ contract PolicyManagerTest is AccountConfigurationTest {
     }
 
     function _revokePolicyActor(bytes32 actorId) internal {
-        IAccountConfiguration.ActorChange[] memory changes = new IAccountConfiguration.ActorChange[](1);
-        changes[0] = IAccountConfiguration.ActorChange({actorId: actorId, changeType: REVOKE_ACTOR, data: ""});
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({actorId: actorId, changeType: REVOKE_ACTOR, data: ""});
 
         uint64 chainId = uint64(block.chainid);
         uint64 sequence = accountConfiguration.getChangeSequences(account).local;
