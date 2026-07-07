@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {AccountConfiguration} from "../AccountConfiguration.sol";
-import {Call, DefaultAccount} from "./DefaultAccount.sol";
+import {AccountConfiguration} from "../../AccountConfiguration.sol";
+import {Call, DefaultAccount} from "../DefaultAccount.sol";
 
 struct PackedUserOperation {
     address sender;
@@ -26,8 +26,8 @@ struct SignedActorChanges {
     bytes auth;
 }
 
-/// @notice The canonical ERC-4337 account for EIP-8130: {DefaultAccount} plus `validateUserOp`, reproducing the
-///         8130 authorization semantics (scope + policy) so an account works on non-8130 chains via a bundler +
+/// @notice Example ERC-4337-compatible account for EIP-8130: {DefaultAccount} plus `validateUserOp`, reproducing
+///         the 8130 authorization semantics (scope + policy) so an account works on non-8130 chains via a bundler +
 ///         EntryPoint, identically to native dispatch.
 ///
 ///         The EntryPoint is authorized like any other caller: a revocable TRUSTED_EXECUTOR actor in
@@ -41,7 +41,7 @@ struct SignedActorChanges {
 ///         Bootstrapping: the EntryPoint must already be a TRUSTED_EXECUTOR actor before its first call (gated by
 ///         `_isAuthorizedCaller`). Seed it into the initial actor set at `createAccount` for a counterfactual
 ///         account's first op to work out of the box; otherwise register it later via a signed actor change.
-contract Default4337Account is DefaultAccount {
+contract BackwardsCompatible4337Account is DefaultAccount {
     /// @dev Signature discriminator for validation-phase actor changes: when `userOp.signature` starts with this
     ///      32-byte magic, it decodes as `abi.encode(magic, SignedActorChanges[] changeSets, bytes opAuth)` and
     ///      each change set is applied in order (e.g. rotating the controlling key to a P-256 actor) before the op

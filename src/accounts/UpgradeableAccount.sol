@@ -7,7 +7,8 @@ import {DefaultAccount} from "./DefaultAccount.sol";
 
 /// @notice UUPS-upgradeable version of {DefaultAccount}: the general-purpose deployed account, holding no
 ///         ERC-4337 surface by default. executeBatch, isValidSignature, and caller authorization are inherited
-///         unchanged; upgrade to a {Default4337Account}-derived implementation (or any future capability) as needed.
+///         unchanged; upgrade to a 4337-capable implementation (see {BackwardsCompatible4337Account}) or any
+///         future capability as needed.
 ///
 ///         Deploy behind an UpgradeableProxy instead of ERC-1167.
 ///         7702 accounts don't need this — they can re-delegate anytime.

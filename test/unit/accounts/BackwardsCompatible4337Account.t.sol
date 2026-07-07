@@ -3,10 +3,10 @@ pragma solidity ^0.8.30;
 
 import {DefaultAccount, Call, TRUSTED_EXECUTOR} from "../../../src/accounts/DefaultAccount.sol";
 import {
-    Default4337Account,
+    BackwardsCompatible4337Account,
     PackedUserOperation,
     SignedActorChanges
-} from "../../../src/accounts/Default4337Account.sol";
+} from "../../../src/accounts/example/BackwardsCompatible4337Account.sol";
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
@@ -22,10 +22,10 @@ contract UserOpMockTarget {
     }
 }
 
-/// @notice ERC-4337 conformance suite for {Default4337Account}. The EntryPoint is authorized as a config-driven
-///         TRUSTED_EXECUTOR actor (seeded into the initial actor set at creation), so it is revocable and
-///         version-agnostic — the single opinionated 4337 model for the repo.
-contract Default4337AccountTest is AccountConfigurationTest {
+/// @notice ERC-4337 conformance suite for {BackwardsCompatible4337Account}. The EntryPoint is authorized as a
+///         config-driven TRUSTED_EXECUTOR actor (seeded into the initial actor set at creation), so it is revocable
+///         and version-agnostic — the single opinionated 4337 model for the repo.
+contract BackwardsCompatible4337AccountTest is AccountConfigurationTest {
     uint256 constant ACTOR_PK = 100;
 
     uint8 constant SCOPE_SIGNER = 0x01;
@@ -40,7 +40,7 @@ contract Default4337AccountTest is AccountConfigurationTest {
     function setUp() public virtual override {
         super.setUp();
         target = new UserOpMockTarget();
-        impl = address(new Default4337Account(address(accountConfiguration)));
+        impl = address(new BackwardsCompatible4337Account(address(accountConfiguration)));
     }
 
     /// @dev Create an account from `impl` with `pk` as the unrestricted owner, seeding the EntryPoint as a
@@ -223,7 +223,7 @@ contract Default4337AccountTest is AccountConfigurationTest {
         PackedUserOperation memory userOp = _buildUserOp(account, _buildK1Auth(ACTOR_PK, userOpHash));
 
         vm.prank(ENTRY_POINT);
-        assertEq(Default4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 0);
+        assertEq(BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 0);
     }
 
     function test_validateUserOp_invalidSignature() public {
@@ -233,7 +233,7 @@ contract Default4337AccountTest is AccountConfigurationTest {
         PackedUserOperation memory userOp = _buildUserOp(account, _buildK1Auth(999, userOpHash));
 
         vm.prank(ENTRY_POINT);
-        assertEq(Default4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 1);
+        assertEq(BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 1);
     }
 
     function test_validateUserOp_revertsFromUnauthorizedCaller() public {
@@ -244,7 +244,7 @@ contract Default4337AccountTest is AccountConfigurationTest {
 
         vm.prank(address(0xdead));
         vm.expectRevert();
-        Default4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0);
+        BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0);
     }
 
     function test_validateUserOp_paysPrefund() public {
@@ -258,7 +258,7 @@ contract Default4337AccountTest is AccountConfigurationTest {
         uint256 epBalanceBefore = ENTRY_POINT.balance;
 
         vm.prank(ENTRY_POINT);
-        Default4337Account(payable(account)).validateUserOp(userOp, userOpHash, prefund);
+        BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, prefund);
 
         assertEq(ENTRY_POINT.balance - epBalanceBefore, prefund);
     }
@@ -283,7 +283,7 @@ contract Default4337AccountTest is AccountConfigurationTest {
         PackedUserOperation memory userOp = _buildUserOp(account, signature);
 
         vm.prank(ENTRY_POINT);
-        assertEq(Default4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 0);
+        assertEq(BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 0);
         assertTrue(accountConfiguration.isActor(account, newActorId));
     }
 
@@ -308,7 +308,7 @@ contract Default4337AccountTest is AccountConfigurationTest {
         PackedUserOperation memory userOp = _buildUserOp(account, signature);
 
         vm.prank(ENTRY_POINT);
-        assertEq(Default4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 0);
+        assertEq(BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 0);
         assertTrue(accountConfiguration.isActor(account, actorB));
         assertTrue(accountConfiguration.isActor(account, actorC));
     }
@@ -331,7 +331,7 @@ contract Default4337AccountTest is AccountConfigurationTest {
         PackedUserOperation memory userOp = _buildUserOp(account, signature);
 
         vm.prank(ENTRY_POINT);
-        assertEq(Default4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 1);
+        assertEq(BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 1);
     }
 
     /// @notice An invalid change authorization fails validation and applies nothing.
@@ -351,7 +351,7 @@ contract Default4337AccountTest is AccountConfigurationTest {
         PackedUserOperation memory userOp = _buildUserOp(account, signature);
 
         vm.prank(ENTRY_POINT);
-        assertEq(Default4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 1);
+        assertEq(BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 1);
         assertFalse(accountConfiguration.isActor(account, newActorId));
     }
 
@@ -366,7 +366,7 @@ contract Default4337AccountTest is AccountConfigurationTest {
         PackedUserOperation memory userOp = _buildUserOp(account, signature);
 
         vm.prank(ENTRY_POINT);
-        assertEq(Default4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 1);
+        assertEq(BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 1);
     }
 
     // ── SIGNER scope (ERC-1271) ──
@@ -405,7 +405,7 @@ contract Default4337AccountTest is AccountConfigurationTest {
         PackedUserOperation memory userOp = _buildUserOp(account, _buildK1Auth(senderPk, userOpHash));
 
         vm.prank(ENTRY_POINT);
-        assertEq(Default4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 0);
+        assertEq(BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 0);
     }
 
     function test_validateUserOp_requiresSenderScope() public {
@@ -418,7 +418,7 @@ contract Default4337AccountTest is AccountConfigurationTest {
 
         // A SIGNER-only actor cannot initiate transactions: no SENDER scope.
         vm.prank(ENTRY_POINT);
-        assertEq(Default4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 1);
+        assertEq(BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 1);
     }
 
     // ── PAYER scope (self-funded ops) ──
@@ -434,7 +434,7 @@ contract Default4337AccountTest is AccountConfigurationTest {
 
         // SENDER but not PAYER: cannot authorize spending the account's funds on gas.
         vm.prank(ENTRY_POINT);
-        assertEq(Default4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0.1 ether), 1);
+        assertEq(BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0.1 ether), 1);
     }
 
     function test_validateUserOp_senderPayerScope_selfFundedSucceeds() public {
@@ -447,7 +447,7 @@ contract Default4337AccountTest is AccountConfigurationTest {
         PackedUserOperation memory userOp = _buildUserOp(account, _buildK1Auth(pk, userOpHash));
 
         vm.prank(ENTRY_POINT);
-        assertEq(Default4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0.1 ether), 0);
+        assertEq(BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0.1 ether), 0);
     }
 
     // ── Policy gating (calls confined to policy target) ──
@@ -463,7 +463,7 @@ contract Default4337AccountTest is AccountConfigurationTest {
         PackedUserOperation memory userOp = _buildUserOp(account, callData, _buildK1Auth(pk, userOpHash));
 
         vm.prank(ENTRY_POINT);
-        assertEq(Default4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 0);
+        assertEq(BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 0);
     }
 
     function test_validateUserOp_policyGated_rejectsCallsToOtherTarget() public {
@@ -479,6 +479,6 @@ contract Default4337AccountTest is AccountConfigurationTest {
         PackedUserOperation memory userOp = _buildUserOp(account, callData, _buildK1Auth(pk, userOpHash));
 
         vm.prank(ENTRY_POINT);
-        assertEq(Default4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 1);
+        assertEq(BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 1);
     }
 }

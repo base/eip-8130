@@ -7,8 +7,8 @@ pragma solidity ^0.8.30;
 ///         This is the per-account bytecode half of the upgradeable path; {UpgradeableAccount} is the
 ///         implementation half (the singleton this proxy delegates to). Pass an {UpgradeableAccount} as the
 ///         default implementation — only implementations carrying UUPS logic can ever write the slot this proxy
-///         reads. Immutable accounts ({DefaultAccount}, {Default4337Account}, {DefaultHighRateAccount}) use a
-///         45-byte ERC-1167 proxy instead.
+///         reads. Immutable accounts ({DefaultAccount}, {DefaultHighRateAccount}, and example variants like
+///         {BackwardsCompatible4337Account}) use a 45-byte ERC-1167 proxy instead.
 ///
 ///         Proxy logic:
 ///           1. SLOAD the ERC-1967 implementation slot

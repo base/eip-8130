@@ -25,8 +25,8 @@ bytes32 constant SALT = bytes32(0);
 ///           - DefaultHighRateAccount — the immutable account (deployed behind a 45-byte ERC-1167 proxy);
 ///           - UpgradeableAccount     — the general upgradeable account (behind UpgradeableProxy).
 ///         DefaultAccount is the base building block (inherited by both); its bytecode is embedded in the deployed
-///         implementations, so it is not deployed standalone. Default4337Account is a separate, opt-in ERC-4337
-///         building block that neither deployed account depends on by default.
+///         implementations, so it is not deployed standalone. BackwardsCompatible4337Account is a separate, opt-in
+///         ERC-4337 example that neither deployed account depends on by default.
 ///
 ///         All addresses are canonical: determined solely by salt + bytecode, independent of the
 ///         deployer's address or nonce, and identical on every chain.
@@ -115,7 +115,7 @@ contract Deploy is Script {
         // ── Account implementations (singletons; every account proxy delegates to one) ──
         //    DefaultHighRateAccount is the immutable (ERC-1167) account; UpgradeableAccount is the general
         //    upgradeable account. DefaultAccount is an inherited base building block and is not deployed
-        //    standalone; Default4337Account is a separate, opt-in building block neither depends on by default.
+        //    standalone; BackwardsCompatible4337Account is a separate, opt-in example neither depends on by default.
 
         address defaultHighRate = _create2(_defaultHighRateInit(accountConfig));
         address upgradeableAccount = _create2(_upgradeableAccountInit(accountConfig));
