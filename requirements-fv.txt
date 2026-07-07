@@ -1,0 +1,4 @@
+# Formal-verification tooling for the EIP-8130 reference implementation.
+# Install into a virtualenv:  python3 -m venv .venv-fv && . .venv-fv/bin/activate && pip install -r requirements-fv.txt
+# Then run the symbolic proofs:  halmos --match-contract AccountConfigurationSymbolicTest
+halmos==0.3.3

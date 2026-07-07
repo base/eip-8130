@@ -8,6 +8,14 @@ remappings = [
     "solady/=lib/solady/src/",
 ]
 
+[fuzz]
+runs = 256
+
+[invariant]
+runs = 256
+depth = 500
+fail_on_revert = false
+
 [lint]
 lint_on_build = false
 exclude_lints = [

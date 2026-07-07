@@ -16,6 +16,10 @@ docs/
 # Node
 node_modules/
 
+# Formal-verification tooling (Halmos) local virtualenv
+.venv-fv/
+halmos-cache/
+
 # Tool reports (generated output)
 **/reports/*.json
 **/reports/*.txt

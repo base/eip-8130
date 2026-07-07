@@ -1,0 +1,14 @@
+# Halmos symbolic-verification configuration for the EIP-8130 reference implementation.
+# See https://github.com/a16z/halmos for the full option reference.
+#
+# Run all symbolic proofs:  halmos --match-contract AccountConfigurationSymbolicTest
+[global]
+# Restrict discovery to the symbolic proof suite (files named *.symbolic.t.sol drive the `check_*` proofs).
+match-contract = "SymbolicTest"
+
+# Loop/array unrolling bound for symbolic execution. The proofs are written to stay within small bounds; raise this
+# if a new proof needs to reason about longer dynamic arrays.
+loop = 4
+
+# Fail fast and print a concrete counterexample model when a proof is violated.
+early-exit = false
