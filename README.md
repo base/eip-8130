@@ -10,12 +10,12 @@ EIP-8130 defines a new transaction type and onchain system contract that togethe
 
 ## Contracts
 
-Two account implementations are deployed as usable accounts: `DefaultHighRateAccount` (immutable) and `UpgradeableAccount` (general, upgradeable). `DefaultAccount` is the shared building block behind both — its bytecode is embedded in each, so it is not deployed standalone. `BackwardsCompatible4337Account` is a separate, opt-in ERC-4337 example (see below); nothing deployed by default depends on it.
+Three account implementations are deployed: `DefaultAccount` (the bare building block, deployed standalone as the direct EIP-7702 delegation target for EOAs), `DefaultHighRateAccount` (immutable smart account), and `UpgradeableAccount` (general, upgradeable smart account). `DefaultHighRateAccount` and `UpgradeableAccount` both inherit from `DefaultAccount`, but each is deployed as its own singleton, since a smart-account proxy is a permanent address that cannot re-delegate the way a 7702 EOA can. `BackwardsCompatible4337Account` is a separate, opt-in ERC-4337 example (see below); nothing deployed by default depends on it.
 
 | Contract | Role | Description |
 |----------|------|-------------|
 | `AccountConfiguration` | System | Actor authorization, account creation, and change sequencing |
-| `DefaultAccount` | Building block | Bare minimum account: batched execution (`executeBatch`) + ERC-1271 (`isValidSignature`), all authorization deferred to `AccountConfiguration`. No ERC-4337. Works natively on 8130 chains via direct dispatch |
+| `DefaultAccount` | Deployed account (EOAs) | Bare minimum account: batched execution (`executeBatch`) + ERC-1271 (`isValidSignature`), all authorization deferred to `AccountConfiguration`. No ERC-4337. Works natively on 8130 chains via direct dispatch. Deployed standalone as the EIP-7702 delegation target for EOAs — they can re-delegate to a new implementation anytime, so no upgrade wrapper is needed |
 | `BackwardsCompatible4337Account` | Example (opt-in) | `DefaultAccount` + ERC-4337 (`validateUserOp`), so an account works on non-8130 chains via a bundler + EntryPoint. The EntryPoint is not hardcoded — it is a revocable `TRUSTED_EXECUTOR` actor in `AccountConfiguration`, so a compromised EntryPoint is disabled with one signed change and any version (v0.7/v0.8/…) is supported. Not used by either deployed account by default; extend it (with or without UUPS) when 4337 is actually needed |
 | `DefaultHighRateAccount` | Deployed account | The immutable account (behind a 45-byte ERC-1167 proxy). A `DefaultAccount` variant that blocks ETH transfers when locked for higher mempool rate limits |
 | `UpgradeableAccount` | Deployed account | The general upgradeable account: UUPS-upgradeable `DefaultAccount` (behind `UpgradeableProxy`), with upgrades authorized by a CONFIG-scoped key. Carries no ERC-4337 surface by default — upgrade to a `BackwardsCompatible4337Account`-derived implementation if a given deployment needs it |
@@ -30,6 +30,8 @@ Every account is a small per-account proxy (deployed at a deterministic CREATE2 
 | `UpgradeableProxy` (93 bytes, ERC-1967 slot) | `UpgradeableAccount` | Yes — UUPS |
 
 `UpgradeableAccount` and `UpgradeableProxy` are the two halves of the upgradeable path: the former is the logic (a singleton), the latter generates the per-account bytecode that holds the ERC-1967 implementation slot (empty slot → the hardcoded default implementation; set slot → the upgraded one). Only implementations that carry UUPS logic (`UpgradeableAccount`, or any implementation upgraded to) can be deployed behind `UpgradeableProxy`.
+
+`AccountConfiguration.createAccount(userSalt, bytecode, initialActors)` is itself proxy-agnostic — it just `CREATE2`s whatever `bytecode` it's given. The caller decides which proxy strategy to use: an ERC-1167 clone of `DefaultHighRateAccount`, or the 93-byte result of `UpgradeableProxy.bytecode(upgradeableImpl)` for an upgradeable account.
 
 ### Authenticators
 
