@@ -20,7 +20,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -50,7 +50,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x04, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: 0x04, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -100,7 +100,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -110,7 +110,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -150,7 +150,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -177,7 +177,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -205,7 +205,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -235,7 +235,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -261,7 +261,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: newScope, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: newScope, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -325,7 +325,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -357,7 +357,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -441,7 +441,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: 0x00, expiry: 0, policyType: 0x00
+                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: 0x00, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -465,7 +465,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -569,7 +569,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -597,7 +597,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: 0x00, expiry: 0, policyType: 0x00
+                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: 0x00, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -629,7 +629,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -668,7 +668,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -705,7 +705,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -743,7 +743,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: scope, expiry: 0, policyType: 0x00
+                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: scope, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -769,9 +769,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: authenticator, scope: scope, expiry: 0, policyType: 0x00
-                }),
+                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0, nonceLane: 0}),
                 bytes("")
             )
         });
@@ -810,9 +808,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: authenticator, scope: scope, expiry: 0, policyType: 0x00
-                }),
+                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0, nonceLane: 0}),
                 bytes("")
             )
         });

@@ -244,7 +244,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: scope, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: scope, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )

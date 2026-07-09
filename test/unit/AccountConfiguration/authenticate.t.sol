@@ -213,7 +213,7 @@ contract AuthenticateTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: 0x02, expiry: 0, policyType: 0x00
+                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: 0x02, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -315,9 +315,7 @@ contract AuthenticateTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: authenticator, scope: scope, expiry: 0, policyType: 0x00
-                }),
+                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0, nonceLane: 0}),
                 bytes("")
             )
         });
@@ -342,7 +340,7 @@ contract AuthenticateTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: authenticator, scope: 0x00, expiry: expiry, policyType: 0x00
+                    authenticator: authenticator, scope: 0x00, expiry: expiry, nonceLane: 0
                 }),
                 bytes("")
             )
@@ -372,9 +370,7 @@ contract AuthenticateTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: authenticator, scope: 0x00, expiry: 0, policyType: 0x00
-                }),
+                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: 0x00, expiry: 0, nonceLane: 0}),
                 bytes("")
             )
         });
@@ -391,7 +387,6 @@ contract AuthenticateTest is AccountConfigurationTest {
         uint256 ownerPk,
         bytes32 newActorId,
         uint8 scope,
-        uint8 policyType,
         address policyManager,
         bytes32 commitment
     ) internal {
@@ -401,7 +396,7 @@ contract AuthenticateTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: scope, expiry: 0, policyType: policyType
+                    authenticator: address(k1Authenticator), scope: scope, expiry: 0, nonceLane: 0
                 }),
                 abi.encodePacked(policyManager, commitment)
             )
@@ -414,22 +409,22 @@ contract AuthenticateTest is AccountConfigurationTest {
         );
     }
 
-    /// @notice authenticate surfaces the actor's full authorization: scope, the reserved policyType byte, and the
+    /// @notice authenticate surfaces the actor's full authorization: scope (including SCOPE_POLICY) and the
     ///         resolved policy target (the manager); the commitment stays an execution-time read.
-    function test_authenticate_returnsScopePolicyTypeAndTarget() public {
+    function test_authenticate_returnsScopeAndPolicyTarget() public {
         (address account,) = _createK1Account(ACTOR_PK);
 
         uint256 sessionPk = 410;
         bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
         address policyManager = address(0xB0B);
-        _authorizeGatedActor(account, ACTOR_PK, sessionActorId, 0x02, 0x01, policyManager, keccak256("commit"));
+        uint8 gatedScope = 0x02 | accountConfiguration.SCOPE_POLICY();
+        _authorizeGatedActor(account, ACTOR_PK, sessionActorId, gatedScope, policyManager, keccak256("commit"));
 
         bytes32 hash = keccak256("gated authenticate");
-        (uint8 scope, uint8 policyType, address policyTarget) =
+        (uint8 scope,, address policyTarget) =
             accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
 
-        assertEq(scope, uint8(0x02));
-        assertEq(policyType, uint8(0x01));
+        assertEq(scope, gatedScope);
         assertEq(policyTarget, policyManager);
     }
 
@@ -437,11 +432,10 @@ contract AuthenticateTest is AccountConfigurationTest {
         (address account,) = _createK1Account(ACTOR_PK);
 
         bytes32 hash = keccak256("ungated authenticate");
-        (uint8 scope, uint8 policyType, address policyTarget) =
+        (uint8 scope,, address policyTarget) =
             accountConfiguration.authenticateActor(account, hash, _buildK1Auth(ACTOR_PK, hash));
 
         assertEq(scope, uint8(0x00));
-        assertEq(policyType, uint8(0x00));
         assertEq(policyTarget, address(0));
     }
 }

@@ -11,7 +11,7 @@ import {PolicyManager} from "./PolicyManager.sol";
 ///      per-use *action* (`executionData`, supplied when the session key transacts) into an account call plan.
 ///      The plan is ABI-encoded calldata that the manager forwards to the account (e.g. `executeBatch`).
 ///
-///      This is the example/reference shape for an EIP-8130 actor policy (non-zero `policyType`): the
+///      This is the example/reference shape for an EIP-8130 actor policy (`scope & SCOPE_POLICY != 0`): the
 ///      manager is the single call target a restricted actor may reach, and policies express *what* that actor
 ///      may do. All hooks are callable only by the configured {PolicyManager}.
 abstract contract Policy {

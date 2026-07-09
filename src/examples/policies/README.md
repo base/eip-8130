@@ -2,15 +2,17 @@
 
 Reference, **unaudited** example of a policy manager for EIP-8130 restricted actors.
 
-In EIP-8130, a restricted actor (e.g. a session key) is configured with a non-zero `policyType`, which stores a
+In EIP-8130, a restricted actor (e.g. a session key) is configured with `scope & SCOPE_POLICY != 0`, which stores a
 `policy_manager` address and an opaque `policy_commitment` in the Account Configuration contract. The protocol
 gate forces every call that actor makes to land on that single manager. These contracts are an example of what
-that manager can be: one that enforces application-specific limits and then drives the account. (The protocol
-gates identically on any non-zero `policyType` and does not interpret the value; this example uses `0x01`.)
+that manager can be: one that enforces application-specific limits and then drives the account. `SCOPE_POLICY`
+(`0x10`) may be combined with other scope bits (e.g. `SCOPE_POLICY | SCOPE_PAYER`) — `AccountConfiguration` does
+not reject scope combinations; use-time exclusivity between policy gating and an actor's other capabilities is
+protocol-side, not enforced by this contract.
 
 ## Flow
 
-1. **Authorize + commit.** The account authorizes the session key with `policyType = 0x01`,
+1. **Authorize + commit.** The account authorizes the session key with `scope = SCOPE_POLICY`,
    `policy_manager = PolicyManager`, and `policy_commitment = keccak256` of an account-authorized
    [`PolicyBinding`](./PolicyManager.sol). The Account Configuration contract exposes this via
    [`getPolicy(account, actorId)`](../../AccountConfiguration.sol).
@@ -26,11 +28,11 @@ gates identically on any non-zero `policyType` and does not interpret the value;
    the key's call can only arrive at `PolicyManager.execute(policy, executionData)` with `msg.sender == account`.
    Because reaching this manager already proves it is the key's gate, `execute` does not re-check the target: it
    reads the acting `actorId` from the [transaction-context precompile](../../interfaces/ITransactionContext.sol)
-   (`getTransactionSenderActorId()`) and needs only the live `getPolicyCommitment(account, actorId)` (a single
-   SLOAD) to locate the installed binding — a revoked or expired key has a zero commitment and stops immediately.
-   It then invokes the policy, which enforces the committed policy against the per-use action and returns an
-   `executeBatch` call plan that the manager — an execution-enabled actor (`TRUSTED_EXECUTOR`) —
-   forwards to the account.
+   (`getTransactionSenderActorId()`) and needs the live `getPolicyCommitment(account, actorId)` (a single SLOAD)
+   to locate the installed binding — a revoked key has a zero commitment and stops immediately. Actor expiry is
+   checked separately via `getActorConfig` (expiry does not clear the commitment slot). It then invokes the policy,
+   which enforces the committed policy against the per-use action and returns an `executeBatch` call plan that the
+   manager — an execution-enabled actor (`TRUSTED_EXECUTOR`) — forwards to the account.
 
 ```
 session key ──(8130 gate: only PolicyManager)──▶ PolicyManager.execute
@@ -62,8 +64,9 @@ given key needs.
 Recipient allowlists and spend-limit accounting require decoding a call's arguments, which is only possible for
 selectors whose ABI is known: `SessionPolicy` hardcodes the standard ERC-20 set (`transfer`, `transferFrom`,
 `approve`). A recipient allowlist may only be attached to one of those (enforced at install); spend limits are
-consumed for those selectors on a limited token, native-ETH limits from each call's `value`, and every other
-selector is governed by target/selector gating alone.
+consumed for those selectors on a limited token (`approve` included, so an allowance cannot exceed the remaining
+budget), native-ETH limits from each call's `value`, and every other selector is governed by target/selector gating
+alone. `anySelector` on a limited token is rejected at install — pin an explicit selector allowlist instead.
 
 #### Worked example
 
@@ -126,8 +129,8 @@ caller, not the protocol.
   dispatched path). So a provider can only pull through the exact manager the account authorized.
 - **One identity, many accounts:** `executeForMany(accounts[], policy, executionData[])` runs each account in its
   own self-call so a single failure (revoked/expired binding, over budget, a reverting account call) is **isolated
-  and skipped** (emitting `PullSkipped`) rather than reverting the whole batch — one delinquent subscriber doesn't
-  block the rest.
+  and skipped** (emitting `ExecutionSkipped`) rather than reverting the whole batch — one delinquent subscriber
+  doesn't block the rest.
 
 **Opt-in (per account, once).** The account's only on-chain obligation is a single **off-chain signature** over an
 actor change. Because `applySignedActorChanges` is signature-gated and `install` is permissionless (gated by the
@@ -139,10 +142,10 @@ as a *policy-only* actor — it has no authority of its own, it only carries a b
 // actorId = bytes20(provider). The provider never signs an 8130 tx; it acts by being msg.sender.
 AccountConfiguration.ActorConfig({
     authenticator: EXTERNAL_POLICY_AUTHENTICATOR, // recognized actor; NO direct executeBatch; not 8130-usable
-    scope:         0x02,                          // SCOPE_SENDER — required non-zero (a policy actor can't be scopeless),
-                                                  //   but inert here since the sentinel can't authenticate a tx
+    scope:         0x10,                          // SCOPE_POLICY — gated initiation only (MAY also OR SCOPE_PAYER
+                                                  //   for self-pay; MUST NOT combine with SENDER/SIGNER/CONFIG)
     expiry:        0,
-    policyType:    0x01                           // gated; policy_manager = manager, policy_commitment = own salt
+    nonceLane:     0
 });
 ```
 

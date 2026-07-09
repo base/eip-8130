@@ -25,13 +25,13 @@ contract ImportAccountTest is AccountConfigurationTest {
     // the full Actor/ActorConfig typehash structure; for imported (always unrestricted) actors the config fields are
     // zero and policyData is empty.
     bytes32 constant ACTOR_INITIALIZATION_TYPEHASH = keccak256(
-        "ActorInitialization(bytes32 salt,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint8 scope,uint48 expiry,uint8 policyType)"
+        "ActorInitialization(bytes32 salt,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint8 scope,uint48 expiry,uint16 nonceLane)"
     );
     bytes32 constant ACTOR_TYPEHASH = keccak256(
-        "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint8 scope,uint48 expiry,uint8 policyType)"
+        "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint8 scope,uint48 expiry,uint16 nonceLane)"
     );
     bytes32 constant ACTORCONFIG_TYPEHASH =
-        keccak256("ActorConfig(address authenticator,uint8 scope,uint48 expiry,uint8 policyType)");
+        keccak256("ActorConfig(address authenticator,uint8 scope,uint48 expiry,uint16 nonceLane)");
 
     /// @dev Convenience: bind the digest to the current chain (the common per-chain import).
     function _computeImportDigest(address account, AccountConfiguration.InitialActor[] memory initialActors)
@@ -50,7 +50,7 @@ contract ImportAccountTest is AccountConfigurationTest {
         bytes32[] memory actorHashes = new bytes32[](initialActors.length);
         for (uint256 i; i < initialActors.length; i++) {
             bytes32 configHash = keccak256(
-                abi.encode(ACTORCONFIG_TYPEHASH, initialActors[i].authenticator, uint8(0), uint48(0), uint8(0))
+                abi.encode(ACTORCONFIG_TYPEHASH, initialActors[i].authenticator, uint8(0), uint48(0), uint16(0))
             );
             actorHashes[i] = keccak256(abi.encode(ACTOR_TYPEHASH, initialActors[i].actorId, configHash, keccak256("")));
         }
@@ -141,7 +141,7 @@ contract ImportAccountTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, policyType: 0x00
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
                 }),
                 bytes("")
             )

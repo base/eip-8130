@@ -57,7 +57,7 @@ contract SessionPolicyTest is AccountConfigurationTest {
 
     uint256 internal constant ROOT_PK = 0xA11CE;
     uint8 internal constant SCOPE_SENDER = 0x02;
-    uint8 internal constant POLICY_GATED = 0x01;
+    uint8 internal constant SCOPE_POLICY = 0x10;
     uint8 internal constant AUTHORIZE_ACTOR = 0x01;
 
     bytes4 internal constant TRANSFER = bytes4(keccak256("transfer(address,uint256)"));
@@ -387,6 +387,17 @@ contract SessionPolicyTest is AccountConfigurationTest {
         manager.install(actorId, binding);
     }
 
+    function test_install_revertsAnySelectorOnLimitedToken() public {
+        // A TokenLimit only tracks transfer/transferFrom/approve; anySelector would leave other methods untracked.
+        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
+        scopes[0] = _anySelectorScope(address(token));
+        (bytes32 actorId, PolicyManager.PolicyBinding memory binding) =
+            _prepareBinding(_config(_limit(address(token), 500e18, WEEK), scopes));
+        vm.expectRevert(abi.encodeWithSelector(SessionPolicy.AnySelectorOnLimitedToken.selector, address(token)));
+        vm.prank(account);
+        manager.install(actorId, binding);
+    }
+
     // ── Helpers ──
 
     function _mockActingActor(bytes32 actorId) internal {
@@ -492,7 +503,7 @@ contract SessionPolicyTest is AccountConfigurationTest {
         bytes32 commitment = manager.commitmentOf(binding);
 
         AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
-            authenticator: address(k1Authenticator), scope: SCOPE_SENDER, expiry: 0, policyType: POLICY_GATED
+            authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: 0, nonceLane: 0
         });
         AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
         changes[0] = AccountConfiguration.ActorChange({

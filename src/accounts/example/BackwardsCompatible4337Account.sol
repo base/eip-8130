@@ -2,7 +2,7 @@
 pragma solidity ^0.8.30;
 
 import {AccountConfiguration} from "../../AccountConfiguration.sol";
-import {Call, DefaultAccount} from "../DefaultAccount.sol";
+import {DefaultAccount} from "../DefaultAccount.sol";
 
 struct PackedUserOperation {
     address sender;
@@ -82,18 +82,19 @@ contract BackwardsCompatible4337Account is DefaultAccount {
     }
 
     /// @notice Validates `userOp` by authenticating it as a plain authenticator blob over `userOpHash` and
-    ///         enforcing the verified actor's elevated scope and policy. A signature carrying signed actor/owner
-    ///         changes additionally applies them during validation before the op itself is authenticated.
+    ///         enforcing the verified actor's elevated scope. A signature carrying signed actor/owner changes
+    ///         additionally applies them during validation before the op itself is authenticated.
     /// @dev Signed-actor-changes path: each set is applied via `applySignedActorChanges` (empty batch rejected).
     ///      Every slot it writes is keyed by `account`, so under ERC-7562 it's the account's own associated
     ///      storage — allowed by STO-021 for an existing account; only a combined create+change op falls under
     ///      STO-022, requiring the AccountConfiguration factory to be staked.
     ///
-    ///      Op authentication (both paths) enforces the verified actor's elevated scope and policy:
+    ///      Op authentication (both paths) enforces the verified actor's elevated scope:
     ///        - the actor must be unrestricted (scope 0x00) or hold {SCOPE_SENDER} to authorize the calls;
-    ///        - a self-funded op (`missingAccountFunds != 0`) additionally requires {SCOPE_PAYER};
-    ///        - a policy-gated actor (non-zero `policyType`) may only drive calls to its policy target, so
-    ///          `userOp.callData` must be an `executeBatch` whose every call targets that address.
+    ///        - a self-funded op (`missingAccountFunds != 0`) additionally requires {SCOPE_PAYER}.
+    ///      This reduced 4337 bridge does not replicate the native-dispatch policy-target gate: a SCOPE_POLICY
+    ///      actor without SCOPE_SENDER is rejected here by construction (see {_authorize}), and this repo does not
+    ///      implement protocol-side lane/exclusivity checks for actors that combine SCOPE_POLICY with SCOPE_SENDER.
     function _validateSignature(PackedUserOperation calldata userOp, bytes32 userOpHash, uint256 missingAccountFunds)
         internal
         returns (bool)
@@ -120,70 +121,45 @@ contract BackwardsCompatible4337Account is DefaultAccount {
         }
 
         // Applying changes never authorizes the op; `opAuth` must still sign for this `userOpHash`.
-        (bool valid, uint8 scope, address policyTarget) = _authenticate(userOpHash, opAuth);
+        (bool valid, uint8 scope) = _authenticate(userOpHash, opAuth);
         if (!valid) return false;
 
         // Authentication only proves WHO signed; authorization decides whether that actor may drive THIS op.
-        return _authorize(scope, policyTarget, userOp.callData, missingAccountFunds);
+        return _authorize(scope, missingAccountFunds);
     }
 
-    /// @notice Authenticates `auth` over `hash` via AccountConfiguration, resolving the signing actor's authorization
-    ///         surface. This answers only "who signed", never "may they do this" — see {_authorize}.
+    /// @notice Authenticates `auth` over `hash` via AccountConfiguration, resolving the signing actor's scope.
+    ///         This answers only "who signed", never "may they do this" — see {_authorize}.
     /// @return valid True if `auth` is a valid signature from a live actor of this account.
     /// @return scope The verified actor's scope (0x00 = unrestricted owner).
-    /// @return policyTarget The verified actor's policy gate target, or address(0) if ungated.
-    function _authenticate(bytes32 hash, bytes memory auth)
-        internal
-        view
-        returns (bool valid, uint8 scope, address policyTarget)
-    {
-        // policyType is reserved for future manager-defined semantics; the account gates on scope + target today.
-        try ACCOUNT_CONFIGURATION.authenticateActor(address(this), hash, auth) returns (uint8 s, uint8, address p) {
-            return (true, s, p);
+    function _authenticate(bytes32 hash, bytes memory auth) internal view returns (bool valid, uint8 scope) {
+        // nonceLane and policyTarget are protocol-side / policy-manager concerns this reduced 4337 bridge does not
+        // replicate: a SCOPE_POLICY actor is rejected below by the SCOPE_SENDER check (see {_authorize}), since this
+        // repo does not implement protocol-side lane/exclusivity checks.
+        try ACCOUNT_CONFIGURATION.authenticateActor(address(this), hash, auth) returns (uint8 s, uint16, address) {
+            return (true, s);
         } catch {
-            return (false, 0, address(0));
+            return (false, 0);
         }
     }
 
-    /// @notice Decides whether an already-authenticated actor may drive this UserOperation, from its scope and
-    ///         policy gate. Split out from {_authenticate} so the two concerns — who signed vs. what they may do —
-    ///         are independently reviewable and overridable.
+    /// @notice Decides whether an already-authenticated actor may drive this UserOperation, from its scope.
+    ///         Split out from {_authenticate} so the two concerns — who signed vs. what they may do — are
+    ///         independently reviewable and overridable.
     /// @dev Enforces:
     ///        - scope 0x00 is an unrestricted owner; any other actor must hold {SCOPE_SENDER} to authorize the calls;
-    ///        - a self-funded op (`missingAccountFunds != 0`) additionally requires {SCOPE_PAYER};
-    ///        - a policy-gated actor (`policyTarget != address(0)`) may only drive calls to its policy target, so
-    ///          `callData` must be a non-empty `executeBatch` whose every call targets that address.
+    ///        - a self-funded op (`missingAccountFunds != 0`) additionally requires {SCOPE_PAYER}.
+    ///      A SCOPE_POLICY actor without SCOPE_SENDER fails the check below by construction — this reduced 4337
+    ///      bridge does not give policy-gated actors special call-target enforcement (that is native-dispatch,
+    ///      protocol-side behavior out of scope for this repo). An actor combining SCOPE_POLICY | SCOPE_SENDER is
+    ///      authorized here exactly like any other SENDER-scoped actor.
     /// @param scope The verified actor's scope (0x00 = unrestricted owner).
-    /// @param policyTarget The verified actor's policy gate target, or address(0) if ungated.
-    /// @param callData The op's callData (committed to by `userOpHash`), gated against `policyTarget`.
     /// @param missingAccountFunds The prefund the account owes the EntryPoint; non-zero means a self-funded op.
-    function _authorize(uint8 scope, address policyTarget, bytes calldata callData, uint256 missingAccountFunds)
-        internal
-        view
-        virtual
-        returns (bool)
-    {
+    function _authorize(uint8 scope, uint256 missingAccountFunds) internal view virtual returns (bool) {
         // scope 0x00 = unrestricted owner; otherwise the actor must explicitly hold the required scopes.
         if (scope != 0) {
             if (scope & SCOPE_SENDER == 0) return false;
             if (missingAccountFunds != 0 && scope & SCOPE_PAYER == 0) return false;
-        }
-
-        // A policy-gated actor may only direct the account's calls to its policy target.
-        if (policyTarget != address(0) && !_callsTargetOnly(callData, policyTarget)) return false;
-
-        return true;
-    }
-
-    /// @dev True iff `callData` is a non-empty `executeBatch` whose every call targets `policyTarget`.
-    ///      Because `userOpHash` commits to `callData`, enforcing this during validation binds the gated
-    ///      actor's authorization to calls that stay within its policy target.
-    function _callsTargetOnly(bytes calldata callData, address policyTarget) internal pure returns (bool) {
-        if (callData.length < 4 || bytes4(callData[:4]) != DefaultAccount.executeBatch.selector) return false;
-        Call[] memory calls = abi.decode(callData[4:], (Call[]));
-        if (calls.length == 0) return false;
-        for (uint256 i; i < calls.length; i++) {
-            if (calls[i].target != policyTarget) return false;
         }
         return true;
     }

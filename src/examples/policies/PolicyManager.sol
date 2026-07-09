@@ -25,7 +25,7 @@ address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak2
 /// @dev Role in the EIP-8130 flow:
 ///      - The manager is registered as an execution-enabled actor on the account (an actor whose authenticator is
 ///        `TRUSTED_EXECUTOR`), so it may drive the account via `executeBatch`.
-///      - A restricted session-key actor is configured with a non-zero `policyType` and `policy_manager =
+///      - A restricted session-key actor is configured with `scope & SCOPE_POLICY != 0` and `policy_manager =
 ///        address(this)`, so the protocol gate forces every call that actor makes to land on this manager.
 ///      - When the session key transacts, the protocol dispatches its call *as the account*, so `msg.sender`
 ///        here is the account itself. That is the authorization boundary: only a gated session-key transaction
@@ -41,8 +41,8 @@ address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak2
 ///        omits.
 ///
 ///      Commitment binding: the account authorizes a {PolicyBinding}; its `keccak256` is the `commitment`. When the
-///      account authorizes the session-key actor it stores a non-zero `policyType`, `policy_manager = address(this)`, and
-///      `policy_commitment = commitment` in the Account Configuration contract. At {install} the manager reads that
+///      account authorizes the session-key actor it stores `scope & SCOPE_POLICY != 0`, `policy_manager =
+///      address(this)`, and `policy_commitment = commitment` in the Account Configuration contract. At {install} the manager reads that
 ///      binding back via the single-SLOAD {AccountConfiguration.getPolicyManager} / {AccountConfiguration.getPolicyCommitment}
 ///      accessors and requires the target and commitment to match, so an install can only succeed for a policy the
 ///      account actually signed for this manager.
@@ -100,8 +100,11 @@ contract PolicyManager is ReentrancyGuard {
     ///      AccountConfiguration, so this binds execution (and the commitment-keyed policy state) to its owner.
     error CommitmentAccountMismatch(address expected, address actual);
     /// @dev The acting actor has no live policy commitment for the account — i.e. it is not a gated actor of this
-    ///      account, was revoked/expired, or (on the external path) the account did not gate this manager for it.
+    ///      account, was revoked, or (on the external path) the account did not gate this manager for it.
     error NoActivePolicy(bytes32 actorId);
+    /// @dev The acting actor's `ActorConfig.expiry` has passed. Commitment is not cleared on expiry (only on revoke),
+    ///      so the manager must enforce this itself — especially on {executeFor}, which has no protocol auth path.
+    error ActorExpired(bytes32 actorId);
     /// @dev {executeForMany} array length mismatch between `accounts` and `executionData`.
     error LengthMismatch();
     /// @dev The per-account self-call boundary used by {executeForMany} was invoked by someone other than this
@@ -136,7 +139,7 @@ contract PolicyManager is ReentrancyGuard {
     ///      Changing any binding field yields a different commitment — a separate, independently-accounted binding,
     ///      not a reset of the old one.
     ///
-    /// @param actorId The actor the account configured with this policy (non-zero policyType).
+    /// @param actorId The actor the account configured with this policy (scope & SCOPE_POLICY != 0).
     /// @param binding The account-authorized binding.
     ///
     /// @return commitment The binding's commitment.
@@ -149,7 +152,7 @@ contract PolicyManager is ReentrancyGuard {
 
         // The account must have signed this exact commitment for this manager when authorizing `actorId`. Read the
         // gate target and signed commitment via the single-SLOAD granular accessors: the manager never needs the
-        // policyType byte, so this avoids the extra ActorConfig SLOAD that getPolicy performs. This (not msg.sender)
+        // actor's scope, so this avoids the extra ActorConfig SLOAD that getPolicy performs. This (not msg.sender)
         // is the authorization gate, which is why install is permissionless.
         address target = ACCOUNT_CONFIGURATION.getPolicyManager(binding.account, actorId);
         bytes32 signedCommitment = ACCOUNT_CONFIGURATION.getPolicyCommitment(binding.account, actorId);
@@ -179,7 +182,8 @@ contract PolicyManager is ReentrancyGuard {
     ///      transaction-context precompile and takes the account from `msg.sender` (the protocol sets
     ///      `msg.sender == sender == account` at a dispatched `call.to`, and using `msg.sender` confines execution
     ///      to that direct dispatch path). It then needs only the live signed `commitment` (a single SLOAD) to
-    ///      locate the installed binding — a revoked or expired actor has a zero commitment and is rejected.
+    ///      locate the installed binding — a revoked actor has a zero commitment and is rejected. Actor expiry is
+    ///      checked separately: expiry does not clear the commitment slot, so a stale key would otherwise still drive.
     ///
     /// @param policy        Policy contract for the binding.
     /// @param executionData Per-use action parameters interpreted by the policy.
@@ -188,9 +192,10 @@ contract PolicyManager is ReentrancyGuard {
         bytes32 actorId = _actingActorId();
 
         // Single-SLOAD read of the live signed commitment for the acting actor. Zero means the actor is not a gated
-        // key of this account (or was revoked/expired): there is no binding to enforce, so reject.
+        // key of this account (or was revoked): there is no binding to enforce, so reject.
         bytes32 commitment = ACCOUNT_CONFIGURATION.getPolicyCommitment(account, actorId);
         if (commitment == bytes32(0)) revert NoActivePolicy(actorId);
+        _requireNotExpired(account, actorId);
 
         // No manager-match check here: on the protocol-dispatched path the 8130 gate already guarantees this manager
         // is the acting key's configured target (see the dev note above). The external entrypoints below re-add it.
@@ -263,7 +268,8 @@ contract PolicyManager is ReentrancyGuard {
     }
 
     /// @dev External-path validation shared by {executeFor} and {enforceExternalSelf}: re-add the manager-match check
-    ///      the protocol path can omit, resolve the live commitment, then run the common enforcement.
+    ///      the protocol path can omit, resolve the live commitment, enforce actor expiry (no protocol auth on this
+    ///      path), then run the common enforcement.
     function _enforceExternal(
         address account,
         bytes32 actorId,
@@ -276,7 +282,15 @@ contract PolicyManager is ReentrancyGuard {
         }
         bytes32 commitment = ACCOUNT_CONFIGURATION.getPolicyCommitment(account, actorId);
         if (commitment == bytes32(0)) revert NoActivePolicy(actorId);
+        _requireNotExpired(account, actorId);
         _enforce(account, policy, commitment, executionData, caller);
+    }
+
+    /// @dev Reject when the acting actor's stored expiry has passed. Commitment is only cleared on revoke, not on
+    ///      expiry, so this check is required on every execution path (protocol-dispatched and external).
+    function _requireNotExpired(address account, bytes32 actorId) internal view {
+        AccountConfiguration.ActorConfig memory config = ACCOUNT_CONFIGURATION.getActorConfig(account, actorId);
+        if (config.expiry != 0 && block.timestamp > config.expiry) revert ActorExpired(actorId);
     }
 
     /// @dev Common enforcement for both acting models: validate the installed binding's lifecycle window, run the

@@ -126,7 +126,7 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
     ///      unrestricted owner (`ownerPk`) via applySignedActorChanges on the local chain.
     function _authorizeScopedK1Actor(address account, uint256 ownerPk, uint256 newPk, uint8 scope) internal {
         AccountConfiguration.ActorConfig memory config = AccountConfiguration.ActorConfig({
-            authenticator: address(k1Authenticator), scope: scope, expiry: 0, policyType: 0
+            authenticator: address(k1Authenticator), scope: scope, expiry: 0, nonceLane: 0
         });
 
         AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);

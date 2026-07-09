@@ -24,9 +24,10 @@ import {RecurringAllowance} from "./RecurringAllowance.sol";
 ///      decoding the call's arguments, which is only possible for selectors whose ABI layout is known. This policy
 ///      hardcodes the standard ERC-20 set — `transfer`, `transferFrom`, `approve`. Consequences:
 ///        - A recipient allowlist may only be attached to one of those selectors (enforced at install).
-///        - Spend limits are consumed only for those selectors when called on a limited token; other selectors on
-///          a token are governed solely by target/selector gating. To prevent untracked token movement, simply do
-///          not allow non-spend selectors on a limited token via the selector rules.
+///        - Spend limits are consumed only for those selectors when called on a limited token (`approve` included,
+///          so an allowance grant cannot exceed the remaining budget). `anySelector` on a limited token is rejected
+///          at install; pin an explicit selector allowlist instead. Non-spend selectors on a limited token are still
+///          governed only by that allowlist — do not list methods that move value outside the tracked set.
 ///        - Native-ETH limits are consumed from each call's `value`, independent of calldata.
 contract SessionPolicy is Policy {
     using RecurringAllowance for RecurringAllowance.State;
@@ -126,6 +127,10 @@ contract SessionPolicy is Policy {
     error ZeroLimit(address token);
     error RecipientRuleUnsupportedSelector(bytes4 selector);
     error MalformedTokenCall(bytes4 selector);
+    /// @dev A limited token must pin its allowed selectors: `anySelector` would let non-ERC20 methods move value
+    ///      without debiting the spend cap. Native-ETH limits (`token == address(0)`) are unaffected — they gate
+    ///      call `value`, not a call target.
+    error AnySelectorOnLimitedToken(address token);
 
     constructor(address policyManager) Policy(policyManager) {}
 
@@ -192,6 +197,11 @@ contract SessionPolicy is Policy {
         for (uint256 i; i < config.callScopes.length; i++) {
             CallScope memory scope = config.callScopes[i];
             bool anySelector = scope.selectorRules.length == 0;
+            // Fail closed: a TokenLimit on this target only tracks transfer/transferFrom/approve, so anySelector
+            // would let other methods move value untracked. Require an explicit selector allowlist instead.
+            if (anySelector && _tokenSpend[commitment][scope.target].set) {
+                revert AnySelectorOnLimitedToken(scope.target);
+            }
             _targetScope[commitment][scope.target] = TargetScope({allowed: true, anySelector: anySelector});
 
             for (uint256 j; j < scope.selectorRules.length; j++) {

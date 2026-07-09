@@ -24,7 +24,7 @@ contract PolicyManagerTest is AccountConfigurationTest {
     uint256 internal constant ROOT_PK = 0xA11CE;
 
     uint8 internal constant SCOPE_SENDER = 0x02;
-    uint8 internal constant POLICY_GATED = 0x01;
+    uint8 internal constant SCOPE_POLICY = 0x10;
     uint8 internal constant AUTHORIZE_ACTOR = 0x01;
     uint8 internal constant REVOKE_ACTOR = 0x02;
 
@@ -56,6 +56,18 @@ contract PolicyManagerTest is AccountConfigurationTest {
 
         // Revoke cleared the policy slots; the per-call commitment read now resolves to zero.
         vm.expectRevert(abi.encodeWithSelector(PolicyManager.NoActivePolicy.selector, actorId));
+        vm.prank(account);
+        manager.execute(address(policy), _action());
+    }
+
+    function test_execute_revertsWhenActorExpired() public {
+        // Expiry does not clear the commitment slot — only revoke does — so the manager must enforce it itself.
+        uint48 expiry = uint48(block.timestamp + 1 days);
+        bytes32 actorId = _installSessionWithExpiry(1, expiry);
+
+        vm.warp(uint256(expiry) + 1);
+        _mockActingActor(actorId);
+        vm.expectRevert(abi.encodeWithSelector(PolicyManager.ActorExpired.selector, actorId));
         vm.prank(account);
         manager.execute(address(policy), _action());
     }
@@ -130,8 +142,7 @@ contract PolicyManagerTest is AccountConfigurationTest {
         bytes32 actorId = _sessionActorId(9);
         _authorizePolicyActor(actorId, commitment);
 
-        (uint8 policyType, address resolvedTarget, bytes32 signed) = accountConfiguration.getPolicy(account, actorId);
-        assertEq(policyType, accountConfiguration.POLICY_GATED());
+        (address resolvedTarget, bytes32 signed) = accountConfiguration.getPolicy(account, actorId);
         assertEq(resolvedTarget, address(manager));
         assertEq(signed, commitment);
     }
@@ -169,9 +180,13 @@ contract PolicyManagerTest is AccountConfigurationTest {
     }
 
     function _installSession(uint256 salt) internal returns (bytes32 actorId) {
+        return _installSessionWithExpiry(salt, 0);
+    }
+
+    function _installSessionWithExpiry(uint256 salt, uint48 expiry) internal returns (bytes32 actorId) {
         PolicyManager.PolicyBinding memory binding = _binding(salt);
         actorId = _sessionActorId(salt);
-        _authorizePolicyActor(actorId, manager.commitmentOf(binding));
+        _authorizePolicyActor(actorId, manager.commitmentOf(binding), expiry);
         vm.prank(account);
         manager.install(actorId, binding);
     }
@@ -192,8 +207,12 @@ contract PolicyManagerTest is AccountConfigurationTest {
     }
 
     function _authorizePolicyActor(bytes32 actorId, bytes32 commitment) internal {
+        _authorizePolicyActor(actorId, commitment, 0);
+    }
+
+    function _authorizePolicyActor(bytes32 actorId, bytes32 commitment, uint48 expiry) internal {
         AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
-            authenticator: address(k1Authenticator), scope: SCOPE_SENDER, expiry: 0, policyType: POLICY_GATED
+            authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: expiry, nonceLane: 0
         });
         bytes memory policyData = abi.encodePacked(address(manager), commitment);
 
@@ -233,7 +252,7 @@ contract PolicyManagerTest is AccountConfigurationTest {
     ///      Used to register a victim's commitment value on a different account — the cross-account reuse case.
     function _authorizePolicyActorOn(address target_, uint256 ownerPk, bytes32 actorId, bytes32 commitment) internal {
         AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
-            authenticator: address(k1Authenticator), scope: SCOPE_SENDER, expiry: 0, policyType: POLICY_GATED
+            authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: 0, nonceLane: 0
         });
         bytes memory policyData = abi.encodePacked(address(manager), commitment);
 
