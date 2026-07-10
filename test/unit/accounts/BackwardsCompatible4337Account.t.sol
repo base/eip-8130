@@ -112,9 +112,7 @@ contract BackwardsCompatible4337AccountTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: scope, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0}),
                 policyData
             )
         });
@@ -137,9 +135,7 @@ contract BackwardsCompatible4337AccountTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
                 bytes("")
             )
         });
@@ -183,9 +179,7 @@ contract BackwardsCompatible4337AccountTest is AccountConfigurationTest {
             actorId: bytes32(bytes20(relayer)),
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: TRUSTED_EXECUTOR, scope: SCOPE_SENDER, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: TRUSTED_EXECUTOR, scope: SCOPE_SENDER, expiry: 0}),
                 bytes("")
             )
         });

@@ -133,10 +133,10 @@ contract BackwardsCompatible4337Account is DefaultAccount {
     /// @return valid True if `auth` is a valid signature from a live actor of this account.
     /// @return scope The verified actor's scope (0x00 = unrestricted owner).
     function _authenticate(bytes32 hash, bytes memory auth) internal view returns (bool valid, uint8 scope) {
-        // nonceLane and policyTarget are protocol-side / policy-manager concerns this reduced 4337 bridge does not
-        // replicate: a SCOPE_POLICY actor is rejected below by the SCOPE_SENDER check (see {_authorize}), since this
-        // repo does not implement protocol-side lane/exclusivity checks.
-        try ACCOUNT_CONFIGURATION.authenticateActor(address(this), hash, auth) returns (uint8 s, uint16, address) {
+        // policyTarget is a protocol-side / policy-manager concern this reduced 4337 bridge does not replicate:
+        // a SCOPE_POLICY actor is rejected below by the SCOPE_SENDER check (see {_authorize}), since this repo
+        // does not implement protocol-side lane/exclusivity checks.
+        try ACCOUNT_CONFIGURATION.authenticateActor(address(this), hash, auth) returns (uint8 s, address) {
             return (true, s);
         } catch {
             return (false, 0);

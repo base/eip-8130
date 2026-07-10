@@ -13,7 +13,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         bytes32 hash = keccak256("authenticate me");
         bytes memory auth = _buildK1Auth(ACTOR_PK, hash);
 
-        (uint8 scope,,) = accountConfiguration.authenticateActor(account, hash, auth);
+        (uint8 scope,) = accountConfiguration.authenticateActor(account, hash, auth);
         assertEq(scope, uint8(0x00));
     }
 
@@ -131,7 +131,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         bytes32 hash = keccak256("scoped authenticate");
         bytes memory auth = _buildK1Auth(401, hash);
 
-        (uint8 scope,,) = accountConfiguration.authenticateActor(account, hash, auth);
+        (uint8 scope,) = accountConfiguration.authenticateActor(account, hash, auth);
         assertEq(scope, uint8(0x01));
     }
 
@@ -145,7 +145,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         bytes32 hash = keccak256("unrestricted");
         bytes memory auth = _buildK1Auth(401, hash);
 
-        (uint8 scope,,) = accountConfiguration.authenticateActor(account, hash, auth);
+        (uint8 scope,) = accountConfiguration.authenticateActor(account, hash, auth);
         assertEq(scope, uint8(0x00));
     }
 
@@ -159,7 +159,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         bytes memory auth = _buildK1Auth(eoaPk, hash);
 
         // No createAccount or importAccount — the EOA is implicitly authorized
-        (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, hash, auth);
+        (uint8 scope,) = accountConfiguration.authenticateActor(eoa, hash, auth);
         assertEq(scope, 0);
     }
 
@@ -213,7 +213,7 @@ contract AuthenticateTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: 0x02, expiry: 0, nonceLane: 0
+                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: 0x02, expiry: 0
                 }),
                 bytes("")
             )
@@ -224,7 +224,7 @@ contract AuthenticateTest is AccountConfigurationTest {
 
         // The own key now returns the downgraded scope (0x02), never full owner (0x00).
         bytes32 hash = keccak256("scoped self auth");
-        (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (uint8 scope,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(scope, 0x02);
     }
 
@@ -237,7 +237,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         _implicitAuthorizeActor(eoa, eoaPk, bobActorId, accountConfiguration.K1_AUTHENTICATOR());
 
         bytes32 hash = keccak256("explicit non-self actor");
-        (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(bobPk, hash));
+        (uint8 scope,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(bobPk, hash));
         assertEq(scope, 0);
     }
 
@@ -315,8 +315,7 @@ contract AuthenticateTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0, nonceLane: 0}),
-                bytes("")
+                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes("")
             )
         });
 
@@ -339,10 +338,7 @@ contract AuthenticateTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: authenticator, scope: 0x00, expiry: expiry, nonceLane: 0
-                }),
-                bytes("")
+                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: 0x00, expiry: expiry}), bytes("")
             )
         });
 
@@ -370,8 +366,7 @@ contract AuthenticateTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: 0x00, expiry: 0, nonceLane: 0}),
-                bytes("")
+                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: 0x00, expiry: 0}), bytes("")
             )
         });
 
@@ -395,9 +390,7 @@ contract AuthenticateTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: scope, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0}),
                 abi.encodePacked(policyManager, commitment)
             )
         });
@@ -421,7 +414,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         _authorizeGatedActor(account, ACTOR_PK, sessionActorId, gatedScope, policyManager, keccak256("commit"));
 
         bytes32 hash = keccak256("gated authenticate");
-        (uint8 scope,, address policyTarget) =
+        (uint8 scope, address policyTarget) =
             accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
 
         assertEq(scope, gatedScope);
@@ -432,7 +425,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         (address account,) = _createK1Account(ACTOR_PK);
 
         bytes32 hash = keccak256("ungated authenticate");
-        (uint8 scope,, address policyTarget) =
+        (uint8 scope, address policyTarget) =
             accountConfiguration.authenticateActor(account, hash, _buildK1Auth(ACTOR_PK, hash));
 
         assertEq(scope, uint8(0x00));

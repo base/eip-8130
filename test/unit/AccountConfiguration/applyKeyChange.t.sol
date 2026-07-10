@@ -19,9 +19,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
                 bytes("")
             )
         });
@@ -49,9 +47,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x04, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x04, expiry: 0}),
                 bytes("")
             )
         });
@@ -99,9 +95,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: actor1,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
                 bytes("")
             )
         });
@@ -109,9 +103,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: actor2,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
                 bytes("")
             )
         });
@@ -149,9 +141,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: bytes32(bytes20(vm.addr(300))),
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
                 bytes("")
             )
         });
@@ -176,9 +166,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: thirdActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
                 bytes("")
             )
         });
@@ -191,7 +179,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         assertTrue(accountConfiguration.isActor(account, thirdActorId));
     }
 
-    function test_scopedActor_cannotAuthorizeWithoutConfigScope() public {
+    function test_scopedActor_cannotAuthorizeWithoutAdmin_senderScope() public {
         (address account,) = _createK1Account(ACTOR_PK);
 
         address newSigner = vm.addr(NEW_ACTOR_PK);
@@ -204,9 +192,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: thirdActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
                 bytes("")
             )
         });
@@ -219,13 +205,15 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
     }
 
-    function test_scopedActor_canAuthorizeWithConfigScope() public {
+    function test_scopedActor_cannotAuthorizeWithoutAdmin_nonceScope() public {
+        // There is no elevated "admin" scope bit: admin is exactly scope == 0. An actor scoped with SCOPE_NONCE
+        // (a protocol-side, uninterpreted bit) is just as unable to change actors as any other non-zero scope.
         (address account,) = _createK1Account(ACTOR_PK);
 
         address newSigner = vm.addr(NEW_ACTOR_PK);
         bytes32 secondActorId = bytes32(bytes20(newSigner));
         _authorizeActorWithScope(
-            account, ACTOR_PK, secondActorId, address(k1Authenticator), accountConfiguration.SCOPE_CONFIG()
+            account, ACTOR_PK, secondActorId, address(k1Authenticator), accountConfiguration.SCOPE_NONCE()
         );
 
         bytes32 thirdActorId = bytes32(bytes20(vm.addr(302)));
@@ -234,9 +222,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: thirdActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
                 bytes("")
             )
         });
@@ -245,24 +231,22 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(NEW_ACTOR_PK, digest);
 
+        vm.expectRevert(AccountConfiguration.UnauthorizedActorChange.selector);
         accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
-        assertTrue(accountConfiguration.isActor(account, thirdActorId));
     }
 
     function test_reauthorizeNonSelfActor_upsertsInPlace() public {
         // authorizeActor is an upsert: re-authorizing an already-configured (non-self) actor overwrites its config
-        // in place rather than reverting. Here the owner actor is re-scoped from unrestricted (0x00) to CONFIG.
+        // in place rather than reverting. Here the owner actor is re-scoped from unrestricted (0x00) to SENDER.
         (address account, bytes32 actorActorId) = _createK1Account(ACTOR_PK);
 
-        uint8 newScope = accountConfiguration.SCOPE_CONFIG();
+        uint8 newScope = accountConfiguration.SCOPE_SENDER();
         AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
         changes[0] = AccountConfiguration.ActorChange({
             actorId: actorActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: newScope, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: newScope, expiry: 0}),
                 bytes("")
             )
         });
@@ -279,25 +263,54 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
     }
 
     function test_reauthorizeLiveK1Self_rescopesWithoutPriorRevoke() public {
-        // Re-authorizing the inline k1 self is now an in-place upsert — no prior revoke required, even when the self
-        // is live with a non-trivial scope. (Previously this reverted unless the self was revoked or all-zero.)
+        // Re-authorizing the inline k1 self is an in-place upsert — no prior revoke required — but this exercises
+        // it via a *different*, still-admin (scope 0) signer: the account's implicit owner rescopes the live self
+        // to a non-trivial scope in one step, no revoke in between.
         uint256 eoaPk = 500;
         address eoa = vm.addr(eoaPk);
         bytes32 selfActorId = bytes32(bytes20(eoa));
 
-        // First: the implicit owner (all-zero inline, live) scopes the self to CONFIG so it can keep signing.
-        uint8 configScope = accountConfiguration.SCOPE_CONFIG();
-        _rescopeSelf(eoa, eoaPk, configScope);
-        assertEq(accountConfiguration.getActorConfig(eoa, selfActorId).scope, configScope);
-
-        // Second: re-scope the now-live, non-trivially-scoped self again (no revoke in between).
-        uint8 newScope = configScope | 0x02; // CONFIG | SENDER
+        uint8 newScope = accountConfiguration.SCOPE_SENDER() | accountConfiguration.SCOPE_PAYER();
         _rescopeSelf(eoa, eoaPk, newScope);
 
         AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);
         assertEq(cfg.scope, newScope);
         assertEq(cfg.authenticator, accountConfiguration.K1_AUTHENTICATOR());
         assertTrue(accountConfiguration.isActor(eoa, selfActorId));
+    }
+
+    function test_selfActor_downgradedScope_cannotApplyFurtherActorChanges() public {
+        // Admin is exactly scope == 0: once the self-actorId is downgraded to any non-zero scope, that same key
+        // can no longer sign applySignedActorChanges — even though authorizeActor is an in-place upsert that
+        // would otherwise let it keep re-scoping itself without a prior revoke.
+        uint256 eoaPk = 500;
+        address eoa = vm.addr(eoaPk);
+        bytes32 selfActorId = bytes32(bytes20(eoa));
+
+        uint8 senderScope = accountConfiguration.SCOPE_SENDER();
+        uint8 senderPayerScope = senderScope | accountConfiguration.SCOPE_PAYER();
+        _rescopeSelf(eoa, eoaPk, senderScope);
+        assertEq(accountConfiguration.getActorConfig(eoa, selfActorId).scope, senderScope);
+
+        // Build the second (now-unauthorized) change fully before expectRevert, so no intervening (successful)
+        // view calls land between it and the reverting applySignedActorChanges call.
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
+            actorId: selfActorId,
+            changeType: 0x01,
+            data: abi.encode(
+                AccountConfiguration.ActorConfig({
+                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: senderPayerScope, expiry: 0
+                }),
+                bytes("")
+            )
+        });
+        uint64 seq = accountConfiguration.getChangeSequences(eoa).local;
+        bytes32 digest = _computeActorChangeBatchDigest(eoa, uint64(block.chainid), seq, changes);
+        bytes memory auth = _buildK1Auth(eoaPk, digest);
+
+        vm.expectRevert(AccountConfiguration.UnauthorizedActorChange.selector);
+        accountConfiguration.applySignedActorChanges(eoa, uint64(block.chainid), changes, auth);
     }
 
     function test_revertsOnRevokingNonExistentActor() public {
@@ -324,9 +337,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: bytes32(bytes20(vm.addr(300))),
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
                 bytes("")
             )
         });
@@ -356,9 +367,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
                 bytes("")
             )
         });
@@ -422,7 +431,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         // The same key now authenticates with its downgraded scope (0x02), never full owner (0x00).
         bytes32 hash = keccak256("scoped self");
-        (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (uint8 scope,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(scope, 0x02);
     }
 
@@ -441,7 +450,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: 0x00, expiry: 0, nonceLane: 0
+                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: 0x00, expiry: 0
                 }),
                 bytes("")
             )
@@ -464,9 +473,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
                 bytes("")
             )
         });
@@ -539,7 +546,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         // The own key is a full owner again — now resolved through its explicit self config (the flag stays set, so
         // it is the config, not the implicit fallback, that authorizes it).
-        (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (uint8 scope,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(scope, 0);
     }
 
@@ -559,7 +566,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         // ── Phase 0: the default EOA is live and authenticates with its own k1 signature (implicit full owner). ──
         assertTrue(accountConfiguration.isActor(eoa, selfActorId));
         bytes32 h0 = keccak256("phase 0");
-        (uint8 scope0,,) = accountConfiguration.authenticateActor(eoa, h0, _buildK1Auth(eoaPk, h0));
+        (uint8 scope0,) = accountConfiguration.authenticateActor(eoa, h0, _buildK1Auth(eoaPk, h0));
         assertEq(scope0, 0);
 
         // ── Phase 1: in one batch signed by the EOA, add the passkey as a full owner and revoke the default EOA. ──
@@ -568,9 +575,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: deviceActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
                 bytes("")
             )
         });
@@ -587,7 +592,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         bytes32 h1 = keccak256("phase 1");
         vm.expectRevert();
         accountConfiguration.authenticateActor(eoa, h1, _buildK1Auth(eoaPk, h1));
-        (uint8 scope1,,) = accountConfiguration.authenticateActor(eoa, h1, _buildK1Auth(devicePk, h1));
+        (uint8 scope1,) = accountConfiguration.authenticateActor(eoa, h1, _buildK1Auth(devicePk, h1));
         assertEq(scope1, 0);
 
         // ── Phase 2: the passkey re-enables the K1 key by authorizing the self-actorId as a native k1 owner. ──
@@ -597,7 +602,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: 0x00, expiry: 0, nonceLane: 0
+                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: 0x00, expiry: 0
                 }),
                 bytes("")
             )
@@ -611,7 +616,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         // implicit fallback (the flag is never cleared), so the same k1 signature authenticates.
         assertTrue(accountConfiguration.isActor(eoa, selfActorId));
         bytes32 h2 = keccak256("phase 2");
-        (uint8 scope2,,) = accountConfiguration.authenticateActor(eoa, h2, _buildK1Auth(eoaPk, h2));
+        (uint8 scope2,) = accountConfiguration.authenticateActor(eoa, h2, _buildK1Auth(eoaPk, h2));
         assertEq(scope2, 0);
     }
 
@@ -628,9 +633,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
                 bytes("")
             )
         });
@@ -667,9 +670,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: thirdActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
                 bytes("")
             )
         });
@@ -704,9 +705,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: thirdActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
                 bytes("")
             )
         });
@@ -743,7 +742,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: scope, expiry: 0, nonceLane: 0
+                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: scope, expiry: 0
                 }),
                 bytes("")
             )
@@ -769,8 +768,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0, nonceLane: 0}),
-                bytes("")
+                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes("")
             )
         });
 
@@ -808,8 +806,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0, nonceLane: 0}),
-                bytes("")
+                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes("")
             )
         });
 

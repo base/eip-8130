@@ -127,7 +127,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         bytes32 selfActorId = bytes32(bytes20(eoa));
 
         // Pre-authorize a separate unrestricted-owner key. Once we downgrade the self-actorId to
-        // SCOPE_SENDER + policy below, it no longer carries SCOPE_CONFIG and can't sign the revoke.
+        // SCOPE_SENDER + policy below, admin is exactly scope == 0, so it can't sign the revoke.
         bytes32 ownerActorId = bytes32(bytes20(vm.addr(SESSION_PK)));
         _authorizeUngatedActor(eoa, EOA_PK, ownerActorId, address(k1Authenticator));
 
@@ -186,14 +186,13 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
             uint8(0),
             accountConfiguration.SCOPE_SIGNER(),
             accountConfiguration.SCOPE_PAYER(),
-            accountConfiguration.SCOPE_CONFIG()
+            accountConfiguration.SCOPE_NONCE()
         ];
         for (uint256 i; i < otherScopes.length; i++) {
             bytes32 actorId = bytes32(bytes20(vm.addr(SESSION_PK + i + 1)));
             uint8 scope = otherScopes[i] | accountConfiguration.SCOPE_POLICY();
-            AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
-                authenticator: address(k1Authenticator), scope: scope, expiry: 0, nonceLane: 0
-            });
+            AccountConfiguration.ActorConfig memory cfg =
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0});
             AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
             changes[0] = AccountConfiguration.ActorChange({
                 actorId: actorId,
@@ -267,7 +266,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         bytes32 commitment
     ) internal {
         AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
-            authenticator: address(k1Authenticator), scope: accountConfiguration.SCOPE_POLICY(), expiry: 0, nonceLane: 0
+            authenticator: address(k1Authenticator), scope: accountConfiguration.SCOPE_POLICY(), expiry: 0
         });
         bytes memory policyData = abi.encodePacked(policyManager, commitment);
 
@@ -294,8 +293,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
             authenticator: accountConfiguration.K1_AUTHENTICATOR(),
             scope: accountConfiguration.SCOPE_POLICY(),
-            expiry: 0,
-            nonceLane: 0
+            expiry: 0
         });
         bytes memory policyData = abi.encodePacked(policyManager, commitment);
 
@@ -315,8 +313,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: AUTHORIZE_ACTOR,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: 0x00, expiry: 0, nonceLane: 0}),
-                bytes("")
+                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: 0x00, expiry: 0}), bytes("")
             )
         });
         uint64 seq = accountConfiguration.getChangeSequences(account).local;

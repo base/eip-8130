@@ -25,13 +25,12 @@ contract ImportAccountTest is AccountConfigurationTest {
     // the full Actor/ActorConfig typehash structure; for imported (always unrestricted) actors the config fields are
     // zero and policyData is empty.
     bytes32 constant ACTOR_INITIALIZATION_TYPEHASH = keccak256(
-        "ActorInitialization(bytes32 salt,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint8 scope,uint48 expiry,uint16 nonceLane)"
+        "ActorInitialization(bytes32 salt,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint8 scope,uint48 expiry)"
     );
     bytes32 constant ACTOR_TYPEHASH = keccak256(
-        "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint8 scope,uint48 expiry,uint16 nonceLane)"
+        "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint8 scope,uint48 expiry)"
     );
-    bytes32 constant ACTORCONFIG_TYPEHASH =
-        keccak256("ActorConfig(address authenticator,uint8 scope,uint48 expiry,uint16 nonceLane)");
+    bytes32 constant ACTORCONFIG_TYPEHASH = keccak256("ActorConfig(address authenticator,uint8 scope,uint48 expiry)");
 
     /// @dev Convenience: bind the digest to the current chain (the common per-chain import).
     function _computeImportDigest(address account, AccountConfiguration.InitialActor[] memory initialActors)
@@ -49,9 +48,8 @@ contract ImportAccountTest is AccountConfigurationTest {
     ) internal pure returns (bytes32) {
         bytes32[] memory actorHashes = new bytes32[](initialActors.length);
         for (uint256 i; i < initialActors.length; i++) {
-            bytes32 configHash = keccak256(
-                abi.encode(ACTORCONFIG_TYPEHASH, initialActors[i].authenticator, uint8(0), uint48(0), uint16(0))
-            );
+            bytes32 configHash =
+                keccak256(abi.encode(ACTORCONFIG_TYPEHASH, initialActors[i].authenticator, uint8(0), uint48(0)));
             actorHashes[i] = keccak256(abi.encode(ACTOR_TYPEHASH, initialActors[i].actorId, configHash, keccak256("")));
         }
         return keccak256(
@@ -140,9 +138,7 @@ contract ImportAccountTest is AccountConfigurationTest {
             actorId: bytes32(bytes20(device)),
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
                 bytes("")
             )
         });
@@ -255,7 +251,7 @@ contract ImportAccountTest is AccountConfigurationTest {
         // The same key still authenticates as a full owner — now resolved through its explicit self config rather
         // than the (disabled) implicit fallback.
         bytes32 h = keccak256("post import");
-        (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, h, _buildK1Auth(eoaPk, h));
+        (uint8 scope,) = accountConfiguration.authenticateActor(eoa, h, _buildK1Auth(eoaPk, h));
         assertEq(scope, 0);
     }
 

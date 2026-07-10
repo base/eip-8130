@@ -284,7 +284,7 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
 
     function _authorizeProvider(address account, address policyManager, bytes32 commitment, uint48 expiry) internal {
         AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
-            authenticator: EXTERNAL_POLICY_AUTHENTICATOR, scope: SCOPE_POLICY, expiry: expiry, nonceLane: 0
+            authenticator: EXTERNAL_POLICY_AUTHENTICATOR, scope: SCOPE_POLICY, expiry: expiry
         });
         AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
         changes[0] = AccountConfiguration.ActorChange({

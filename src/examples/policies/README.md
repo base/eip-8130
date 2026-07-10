@@ -143,11 +143,14 @@ as a *policy-only* actor — it has no authority of its own, it only carries a b
 AccountConfiguration.ActorConfig({
     authenticator: EXTERNAL_POLICY_AUTHENTICATOR, // recognized actor; NO direct executeBatch; not 8130-usable
     scope:         0x10,                          // SCOPE_POLICY — gated initiation only (MAY also OR SCOPE_PAYER
-                                                  //   for self-pay; MUST NOT combine with SENDER/SIGNER/CONFIG)
-    expiry:        0,
-    nonceLane:     0
+                                                  //   for self-pay; MUST NOT combine with SENDER/SIGNER)
+    expiry:        0
 });
 ```
+
+`SCOPE_NONCE` (`0x20`) is a separate, orthogonal scope bit: it marks an actor as bound to a protocol-side nonce
+lane. This contract stores the bit verbatim and never interprets it — lane allocation/semantics are entirely
+protocol-side — so it isn't part of the policy flow above and is only mentioned here for completeness.
 
 Critically, the provider must **not** be registered with `TRUSTED_EXECUTOR` — that sentinel grants
 *direct, unrestricted* `executeBatch` and would let the provider bypass the policy entirely. `EXTERNAL_POLICY_AUTHENTICATOR`

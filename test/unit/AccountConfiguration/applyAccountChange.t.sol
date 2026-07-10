@@ -107,9 +107,7 @@ contract AccountLockTest is AccountConfigurationTest {
             actorId: bytes32(bytes20(vm.addr(400))),
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
                 bytes("")
             )
         });
@@ -142,9 +140,7 @@ contract AccountLockTest is AccountConfigurationTest {
             actorId: bytes32(bytes20(vm.addr(500))),
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, nonceLane: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
                 bytes("")
             )
         });

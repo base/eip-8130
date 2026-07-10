@@ -163,7 +163,6 @@ contract CreateAccountTest is AccountConfigurationTest {
         assertEq(cfg.authenticator, address(k1Authenticator));
         assertEq(cfg.scope, 0x00);
         assertEq(cfg.expiry, 0);
-        assertEq(cfg.nonceLane, 0);
 
         // Created accounts are marked initialized (localSequence == 1).
         assertEq(accountConfiguration.getChangeSequences(account).local, 1);
