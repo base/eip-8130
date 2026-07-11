@@ -4,12 +4,7 @@ pragma solidity ^0.8.30;
 import {Receiver} from "solady/accounts/Receiver.sol";
 
 import {AccountConfiguration} from "../AccountConfiguration.sol";
-
-struct Call {
-    address target;
-    uint256 value;
-    bytes data;
-}
+import {Call, IExecutor} from "../interfaces/IExecutor.sol";
 
 /// @dev Sentinel `authenticator` value marking an actor as a trusted executor: an address (e.g. a PolicyManager,
 ///      EntryPoint, or relayer) authorized to drive execution on the account directly by matching `msg.sender`,
@@ -29,7 +24,7 @@ address constant TRUSTED_EXECUTOR = address(uint160(uint256(keccak256("trustedEx
 ///           - address(this) is always authorized (hardcoded) — covers 8130 self-call batches
 ///           - Trusted executors (PolicyManagers, relayers, EntryPoints) are registered as actors with
 ///             TRUSTED_EXECUTOR as the authenticator in AccountConfiguration
-contract DefaultAccount is Receiver {
+contract DefaultAccount is Receiver, IExecutor {
     AccountConfiguration public immutable ACCOUNT_CONFIGURATION;
 
     constructor(address accountConfiguration) {
@@ -40,7 +35,7 @@ contract DefaultAccount is Receiver {
     //  EXECUTION
     // ══════════════════════════════════════════════
 
-    function executeBatch(Call[] calldata calls) external virtual {
+    function executeBatch(Call[] calldata calls) external virtual override {
         require(_isAuthorizedCaller(msg.sender));
         for (uint256 i; i < calls.length; i++) {
             (bool success,) = calls[i].target.call{value: calls[i].value}(calls[i].data);
