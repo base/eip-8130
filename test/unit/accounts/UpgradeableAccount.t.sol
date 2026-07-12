@@ -4,7 +4,7 @@ pragma solidity ^0.8.30;
 import {UpgradeableAccount} from "../../../src/accounts/UpgradeableAccount.sol";
 import {UpgradeableProxy} from "../../../src/accounts/UpgradeableProxy.sol";
 import {UUPSUpgradeable} from "solady/utils/UUPSUpgradeable.sol";
-import {Call} from "../../../src/accounts/DefaultAccount.sol";
+import {Call, DefaultAccount} from "../../../src/accounts/DefaultAccount.sol";
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
@@ -54,7 +54,9 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         actorId = bytes32(bytes20(signer));
 
         AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](1);
-        actors[0] = AccountConfiguration.InitialActor({actorId: actorId, authenticator: address(k1Authenticator)});
+        actors[0] = AccountConfiguration.InitialActor({
+            actorId: actorId, authenticator: address(k1Authenticator), scope: 0, policyData: ""
+        });
 
         bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
         account = accountConfiguration.createAccount(bytes32(0), proxyBytecode, actors);
@@ -87,7 +89,9 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         bytes32 actorId = bytes32(bytes20(signer));
 
         AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](1);
-        actors[0] = AccountConfiguration.InitialActor({actorId: actorId, authenticator: address(k1Authenticator)});
+        actors[0] = AccountConfiguration.InitialActor({
+            actorId: actorId, authenticator: address(k1Authenticator), scope: 0, policyData: ""
+        });
 
         bytes memory proxyBytecode = UpgradeableProxy.bytecode(upgradeableImpl);
         address predicted = accountConfiguration.computeAddress(bytes32(0), proxyBytecode, actors);
@@ -130,7 +134,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         (address account,) = _createUpgradeableAccount(ACTOR_PK);
 
         vm.prank(address(0xdead));
-        vm.expectRevert();
+        vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
         UpgradeableAccount(payable(account))
             .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1))));
     }
@@ -139,7 +143,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         (address account,) = _createUpgradeableAccount(ACTOR_PK);
 
         vm.prank(account);
-        vm.expectRevert();
+        vm.expectRevert(DefaultAccount.CallFailed.selector);
         UpgradeableAccount(payable(account))
             .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.reverting, ())));
     }
@@ -154,7 +158,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         UpgradeableAccountV2 v2Impl = new UpgradeableAccountV2(address(accountConfiguration));
 
         vm.prank(account);
-        vm.expectRevert();
+        vm.expectRevert(UpgradeableAccount.UpgradeNotInitiated.selector);
         UpgradeableAccount(payable(account)).upgradeToAndCall(address(v2Impl), "");
     }
 
@@ -163,7 +167,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         UpgradeableAccountV2 v2Impl = new UpgradeableAccountV2(address(accountConfiguration));
 
         vm.prank(address(0xdead));
-        vm.expectRevert();
+        vm.expectRevert(UpgradeableAccount.UpgradeNotInitiated.selector);
         UpgradeableAccount(payable(account)).upgradeToAndCall(address(v2Impl), "");
     }
 
@@ -193,7 +197,7 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         calls[0] = Call(account, 0, abi.encodeCall(UUPSUpgradeable.upgradeToAndCall, (address(v2Impl), "")));
 
         vm.prank(account);
-        vm.expectRevert();
+        vm.expectRevert(DefaultAccount.CallFailed.selector);
         UpgradeableAccount(payable(account)).executeBatch(calls);
     }
 

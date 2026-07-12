@@ -46,7 +46,9 @@ contract SmokeTest is Script {
         returns (address)
     {
         AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](1);
-        actors[0] = AccountConfiguration.InitialActor({actorId: actorId, authenticator: k1Authenticator});
+        actors[0] = AccountConfiguration.InitialActor({
+            actorId: actorId, authenticator: k1Authenticator, scope: 0, policyData: ""
+        });
 
         bytes memory bytecode =
             abi.encodePacked(hex"363d3d373d3d3d363d73", defaultImpl, hex"5af43d82803e903d91602b57fd5bf3");

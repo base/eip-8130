@@ -52,8 +52,9 @@ contract GasBenchmarkTest is Test {
             address signerA = vm.addr(pkA);
             bytes32 actorIdA = bytes32(bytes20(signerA));
             AccountConfiguration.InitialActor[] memory actorsA = new AccountConfiguration.InitialActor[](1);
-            actorsA[0] =
-                AccountConfiguration.InitialActor({actorId: actorIdA, authenticator: config.K1_AUTHENTICATOR()});
+            actorsA[0] = AccountConfiguration.InitialActor({
+                actorId: actorIdA, authenticator: config.K1_AUTHENTICATOR(), scope: 0, policyData: ""
+            });
             bytes memory bytecode =
                 abi.encodePacked(hex"363d3d373d3d3d363d73", defaultImpl, hex"5af43d82803e903d91602b57fd5bf3");
             config.createAccount(bytes32("benchA"), bytecode, actorsA);

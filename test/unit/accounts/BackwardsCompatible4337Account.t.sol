@@ -28,9 +28,9 @@ contract UserOpMockTarget {
 contract BackwardsCompatible4337AccountTest is AccountConfigurationTest {
     uint256 constant ACTOR_PK = 100;
 
-    uint8 constant SCOPE_SIGNER = 0x01;
-    uint8 constant SCOPE_SENDER = 0x02;
-    uint8 constant SCOPE_PAYER = 0x04;
+    uint8 constant SCOPE_SENDER = 0x01;
+    uint8 constant SCOPE_PAYER = 0x08;
+    uint8 constant SCOPE_SIGNER = 0x10;
 
     bytes32 constant SIGNED_ACTOR_CHANGES_MAGIC = keccak256("ERC4337Account.signedActorChanges.v1");
 
@@ -48,10 +48,11 @@ contract BackwardsCompatible4337AccountTest is AccountConfigurationTest {
     ///      model has no hardcoded EntryPoint). Returns (account, ownerActorId).
     function _create4337Account(uint256 pk) internal returns (address account, bytes32 actorId) {
         actorId = bytes32(bytes20(vm.addr(pk)));
-        AccountConfiguration.InitialActor memory owner =
-            AccountConfiguration.InitialActor({actorId: actorId, authenticator: address(k1Authenticator)});
+        AccountConfiguration.InitialActor memory owner = AccountConfiguration.InitialActor({
+            actorId: actorId, authenticator: address(k1Authenticator), scope: 0, policyData: ""
+        });
         AccountConfiguration.InitialActor memory ep = AccountConfiguration.InitialActor({
-            actorId: bytes32(bytes20(ENTRY_POINT)), authenticator: TRUSTED_EXECUTOR
+            actorId: bytes32(bytes20(ENTRY_POINT)), authenticator: TRUSTED_EXECUTOR, scope: 0, policyData: ""
         });
 
         AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](2);
@@ -238,7 +239,7 @@ contract BackwardsCompatible4337AccountTest is AccountConfigurationTest {
         PackedUserOperation memory userOp = _buildUserOp(account, _buildK1Auth(ACTOR_PK, userOpHash));
 
         vm.prank(address(0xdead));
-        vm.expectRevert();
+        vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
         BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0);
     }
 

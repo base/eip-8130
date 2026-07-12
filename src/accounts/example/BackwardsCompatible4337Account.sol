@@ -53,8 +53,8 @@ contract BackwardsCompatible4337Account is DefaultAccount {
     bytes32 internal constant SIGNED_ACTOR_CHANGES_MAGIC = keccak256("ERC4337Account.signedActorChanges.v1");
 
     /// @dev Elevated-scope bitflags, mirroring AccountConfiguration. A scope of 0x00 is an unrestricted owner.
-    uint8 internal constant SCOPE_SENDER = 0x02; // may initiate transactions (authorize the op's calls)
-    uint8 internal constant SCOPE_PAYER = 0x04; // may spend account funds paying for the op
+    uint8 internal constant SCOPE_SENDER = 0x01; // may initiate transactions (authorize the op's calls)
+    uint8 internal constant SCOPE_PAYER = 0x08; // may spend account funds paying for the op
 
     constructor(address accountConfiguration) DefaultAccount(accountConfiguration) {}
 
@@ -66,11 +66,14 @@ contract BackwardsCompatible4337Account is DefaultAccount {
     ///         Signature format follows 8130 authenticator conventions (authenticator_type || data),
     ///         and optionally carries signed actor/owner changes applied during validation
     ///         (see {SIGNED_ACTOR_CHANGES_MAGIC}).
+    ///
+    /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a TRUSTED_EXECUTOR actor
+    ///      (typically the EntryPoint).
     function validateUserOp(PackedUserOperation calldata userOp, bytes32 userOpHash, uint256 missingAccountFunds)
         external
         returns (uint256 validationData)
     {
-        require(_isAuthorizedCaller(msg.sender));
+        if (!_isAuthorizedCaller(msg.sender)) revert UnauthorizedCaller();
 
         validationData = _validateSignature(userOp, userOpHash, missingAccountFunds) ? 0 : 1;
 

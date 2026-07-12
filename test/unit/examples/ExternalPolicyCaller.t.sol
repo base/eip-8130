@@ -38,8 +38,8 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
     address internal recipient = address(0x5EE);
 
     uint256 internal constant ROOT_PK = 0xA11CE;
-    uint8 internal constant SCOPE_SENDER = 0x02;
-    uint8 internal constant SCOPE_POLICY = 0x10;
+    uint8 internal constant SCOPE_SENDER = 0x01;
+    uint8 internal constant SCOPE_POLICY = 0x02;
     uint8 internal constant AUTHORIZE_ACTOR = 0x01;
     uint8 internal constant REVOKE_ACTOR = 0x02;
 
@@ -263,10 +263,13 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
 
     function _createAccount(bytes32 salt) internal returns (address account) {
         AccountConfiguration.InitialActor memory root = AccountConfiguration.InitialActor({
-            actorId: bytes32(bytes20(vm.addr(ROOT_PK))), authenticator: address(k1Authenticator)
+            actorId: bytes32(bytes20(vm.addr(ROOT_PK))),
+            authenticator: address(k1Authenticator),
+            scope: 0,
+            policyData: ""
         });
         AccountConfiguration.InitialActor memory mgr = AccountConfiguration.InitialActor({
-            actorId: bytes32(bytes20(address(manager))), authenticator: TRUSTED_EXECUTOR
+            actorId: bytes32(bytes20(address(manager))), authenticator: TRUSTED_EXECUTOR, scope: 0, policyData: ""
         });
         AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](2);
         (actors[0], actors[1]) = root.actorId < mgr.actorId ? (root, mgr) : (mgr, root);
