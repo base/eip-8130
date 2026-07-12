@@ -2,15 +2,16 @@
 pragma solidity ^0.8.30;
 
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
+import {DelegateAuthenticator} from "../../../src/authenticators/DelegateAuthenticator.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 /// @notice Fuzzed, branch-complete test suite for DelegateAuthenticator.authenticate.
 ///
 ///         Source data layout: delegate_address(20) ‖ nested_authenticator(20) ‖ nested_data.
-///         Guards, in source-execution order (all bare `require`, so assert with vm.expectRevert()):
-///           1. require(data.length >= 40)
-///           2. require(nestedAuthenticator != address(this))   // blocks 1-hop recursion
-///           3. require(ACCOUNT_CONFIGURATION.verifySignature(delegate, hash, nestedAuth))
+///         Guards, in source-execution order, each reverting with a custom error:
+///           1. InvalidDataLength       — data.length < 40
+///           2. RecursiveDelegation     — nestedAuthenticator == address(this) (blocks 1-hop recursion)
+///           3. InvalidNestedSignature  — verifySignature(delegate, hash, nestedAuth) is false
 ///         On success returns actorId = bytes32(bytes20(delegate)).
 ///
 ///         verifySignature(delegate, hash, nestedAuth) is true iff the nested auth resolves to a live
@@ -33,7 +34,7 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
             data[i] = bytes1(uint8(uint256(keccak256(abi.encode(fillSeed, i)))));
         }
 
-        vm.expectRevert();
+        vm.expectRevert(DelegateAuthenticator.InvalidDataLength.selector);
         delegateAuthenticator.authenticate(hash, data);
     }
 
@@ -48,7 +49,7 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
         bytes memory data = abi.encodePacked(delegate, self, tail);
         assertGe(data.length, 40);
 
-        vm.expectRevert();
+        vm.expectRevert(DelegateAuthenticator.RecursiveDelegation.selector);
         delegateAuthenticator.authenticate(hash, data);
     }
 
@@ -69,7 +70,7 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
         bytes memory nestedAuth = abi.encodePacked(k1Authenticator, _signDigest(wrongPk, hash));
         bytes memory data = abi.encodePacked(delegateAccount, nestedAuth);
 
-        vm.expectRevert();
+        vm.expectRevert(DelegateAuthenticator.InvalidNestedSignature.selector);
         delegateAuthenticator.authenticate(hash, data);
     }
 
@@ -89,7 +90,7 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
         bytes memory nestedAuth = abi.encodePacked(k1Authenticator, _signDigest(ownerAPk, hash));
         bytes memory data = abi.encodePacked(accountB, nestedAuth);
 
-        vm.expectRevert();
+        vm.expectRevert(DelegateAuthenticator.InvalidNestedSignature.selector);
         delegateAuthenticator.authenticate(hash, data);
     }
 
@@ -115,7 +116,7 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
         bytes memory nestedAuth = abi.encodePacked(k1Authenticator, _signDigest(signerPk, hash));
         bytes memory data = abi.encodePacked(delegateAccount, nestedAuth);
 
-        vm.expectRevert();
+        vm.expectRevert(DelegateAuthenticator.InvalidNestedSignature.selector);
         delegateAuthenticator.authenticate(hash, data);
     }
 

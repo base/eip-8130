@@ -90,7 +90,7 @@ contract DefaultAccountTest is AccountConfigurationTest {
         value = bound(value, 0, type(uint128).max);
 
         vm.prank(caller);
-        vm.expectRevert();
+        vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
         DefaultAccount(payable(account)).executeBatch(_singleCall(address(target), value, data));
     }
 
@@ -103,7 +103,7 @@ contract DefaultAccountTest is AccountConfigurationTest {
         vm.assume(owner != account);
 
         vm.prank(owner);
-        vm.expectRevert();
+        vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
         DefaultAccount(payable(account))
             .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1))));
     }
@@ -121,7 +121,7 @@ contract DefaultAccountTest is AccountConfigurationTest {
         _authorizeActor(account, ACTOR_PK, bytes32(bytes20(actor)), k1Authenticator);
 
         vm.prank(actor);
-        vm.expectRevert();
+        vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
         DefaultAccount(payable(account))
             .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1))));
     }
@@ -134,7 +134,7 @@ contract DefaultAccountTest is AccountConfigurationTest {
         vm.deal(account, value);
 
         vm.prank(account);
-        vm.expectRevert();
+        vm.expectRevert(DefaultAccount.CallFailed.selector);
         DefaultAccount(payable(account))
             .executeBatch(_singleCall(address(target), value, abi.encodeCall(MockTarget.reverting, ())));
     }
@@ -150,7 +150,7 @@ contract DefaultAccountTest is AccountConfigurationTest {
         calls[1] = Call(address(target), 0, abi.encodeCall(MockTarget.reverting, ()));
 
         vm.prank(account);
-        vm.expectRevert();
+        vm.expectRevert(DefaultAccount.CallFailed.selector);
         DefaultAccount(payable(account)).executeBatch(calls);
 
         assertEq(target.value(), 0);

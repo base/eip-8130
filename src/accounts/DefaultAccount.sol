@@ -42,6 +42,12 @@ contract DefaultAccount is Receiver {
     /// @notice The AccountConfiguration system contract that owns this account's authorization state.
     AccountConfiguration public immutable ACCOUNT_CONFIGURATION;
 
+    /// @notice The caller is neither the account itself nor a registered TRUSTED_EXECUTOR actor.
+    error UnauthorizedCaller();
+
+    /// @notice An inner call in the executed batch reverted.
+    error CallFailed();
+
     /// @notice Deploys the account implementation bound to an AccountConfiguration instance.
     /// @param accountConfiguration Address of the AccountConfiguration system contract.
     constructor(address accountConfiguration) {
@@ -54,15 +60,15 @@ contract DefaultAccount is Receiver {
 
     /// @notice Executes a batch of calls from the account; reverts the entire batch if any call fails.
     ///
-    /// @dev Reverts when the caller is neither the account itself nor a registered TRUSTED_EXECUTOR actor.
-    /// @dev Reverts when any inner call reverts.
+    /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a TRUSTED_EXECUTOR actor.
+    /// @dev Reverts with CallFailed when any inner call reverts.
     ///
     /// @param calls Ordered calls to execute, each as (target, value, data).
     function executeBatch(Call[] calldata calls) external virtual {
-        require(_isAuthorizedCaller(msg.sender));
+        if (!_isAuthorizedCaller(msg.sender)) revert UnauthorizedCaller();
         for (uint256 i; i < calls.length; i++) {
             (bool success,) = calls[i].target.call{value: calls[i].value}(calls[i].data);
-            require(success);
+            if (!success) revert CallFailed();
         }
     }
 

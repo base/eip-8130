@@ -66,11 +66,14 @@ contract BackwardsCompatible4337Account is DefaultAccount {
     ///         Signature format follows 8130 authenticator conventions (authenticator_type || data),
     ///         and optionally carries signed actor/owner changes applied during validation
     ///         (see {SIGNED_ACTOR_CHANGES_MAGIC}).
+    ///
+    /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a TRUSTED_EXECUTOR actor
+    ///      (typically the EntryPoint).
     function validateUserOp(PackedUserOperation calldata userOp, bytes32 userOpHash, uint256 missingAccountFunds)
         external
         returns (uint256 validationData)
     {
-        require(_isAuthorizedCaller(msg.sender));
+        if (!_isAuthorizedCaller(msg.sender)) revert UnauthorizedCaller();
 
         validationData = _validateSignature(userOp, userOpHash, missingAccountFunds) ? 0 : 1;
 

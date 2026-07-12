@@ -4,19 +4,20 @@ pragma solidity ^0.8.30;
 import {Math} from "openzeppelin/utils/math/Math.sol";
 import {P256} from "openzeppelin/utils/cryptography/P256.sol";
 
+import {P256Authenticator} from "../../../src/authenticators/P256Authenticator.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 /// @notice P256Authenticator tests. Data layout: r(32) ‖ s(32) ‖ x(32) ‖ y(32) ‖ preHash(1) = 129 bytes.
 ///         The authenticator reverts on wrong length, returns actorId = keccak256(x‖y) on a valid signature, and
 ///         returns bytes32(0) on any verification failure (it never reverts on a bad-but-well-formed signature).
 contract P256AuthenticatorTest is AccountConfigurationTest {
-    // ── revert: length guard (require(data.length == 129)) ──
+    // ── revert: length guard (InvalidDataLength) ──
 
     /// @notice Reverts for any calldata whose length is not exactly 129 bytes.
-    /// @dev Fuzz confirms no length other than 129 is accepted; bare require reverts with empty data.
+    /// @dev Fuzz confirms no length other than 129 is accepted; reverts with InvalidDataLength.
     function test_authenticate_revert_wrongDataLength(bytes memory data) public {
         vm.assume(data.length != 129);
-        vm.expectRevert();
+        vm.expectRevert(P256Authenticator.InvalidDataLength.selector);
         p256Authenticator.authenticate(keccak256("h"), data);
     }
 
@@ -29,7 +30,7 @@ contract P256AuthenticatorTest is AccountConfigurationTest {
         for (uint256 i; i < 128; ++i) {
             short[i] = data[i];
         }
-        vm.expectRevert();
+        vm.expectRevert(P256Authenticator.InvalidDataLength.selector);
         p256Authenticator.authenticate(hash, short);
     }
 
@@ -39,7 +40,7 @@ contract P256AuthenticatorTest is AccountConfigurationTest {
         pk = _boundP256Pk(pk);
         bytes memory data = abi.encodePacked(_p256SignData(pk, hash), uint8(0));
         assertEq(data.length, 130);
-        vm.expectRevert();
+        vm.expectRevert(P256Authenticator.InvalidDataLength.selector);
         p256Authenticator.authenticate(hash, data);
     }
 

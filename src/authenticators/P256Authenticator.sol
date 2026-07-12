@@ -12,16 +12,19 @@ import {IAuthenticator} from "../interfaces/IAuthenticator.sol";
 ///
 /// @author Coinbase
 contract P256Authenticator is IAuthenticator {
+    /// @notice The auth data length is not exactly 129 bytes.
+    error InvalidDataLength();
+
     /// @notice Verifies a raw secp256r1 (P-256) signature and returns the signer's actorId.
     ///
-    /// @dev Reverts when `data` is not exactly 129 bytes.
+    /// @dev Reverts with InvalidDataLength when `data` is not exactly 129 bytes.
     ///
     /// @param hash The digest that was signed.
     /// @param data r (32) || s (32) || pub_key_x (32) || pub_key_y (32) || pre_hash (1).
     ///
     /// @return actorId keccak256(pub_key_x || pub_key_y) if the signature is valid, otherwise bytes32(0).
     function authenticate(bytes32 hash, bytes calldata data) external view returns (bytes32 actorId) {
-        require(data.length == 129);
+        if (data.length != 129) revert InvalidDataLength();
         bytes32 r = bytes32(data[:32]);
         bytes32 s = bytes32(data[32:64]);
         bytes32 x = bytes32(data[64:96]);

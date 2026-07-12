@@ -243,7 +243,7 @@ contract BackwardsCompatible4337AccountTest is AccountConfigurationTest {
         PackedUserOperation memory userOp = _buildUserOp(account, _buildK1Auth(ACTOR_PK, userOpHash));
 
         vm.prank(address(0xdead));
-        vm.expectRevert();
+        vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
         BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0);
     }
 

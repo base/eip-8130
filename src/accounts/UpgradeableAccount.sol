@@ -40,12 +40,17 @@ contract UpgradeableAccount is DefaultAccount, UUPSUpgradeable {
     /// @dev The authenticated actor may not authorize upgrades (not an unrestricted owner and lacks CONFIG scope).
     error UpgradeUnauthorized();
 
+    /// @dev upgradeToAndCall was called directly instead of through {upgradeBySignature}, so no CONFIG-signed
+    ///      authorization set the one-shot flag.
+    error UpgradeNotInitiated();
+
     constructor(address accountConfiguration) DefaultAccount(accountConfiguration) {}
 
     /// @dev {upgradeBySignature} is the only place that sets {_upgradeAuthorized}, so satisfying this confirms a
     ///      CONFIG-scoped signature has already authorized the implementation change being applied.
+    /// @dev Reverts with UpgradeNotInitiated when the flag is unset (a direct upgradeToAndCall call).
     function _authorizeUpgrade(address) internal override {
-        require(_upgradeAuthorized);
+        if (!_upgradeAuthorized) revert UpgradeNotInitiated();
         _upgradeAuthorized = false;
     }
 

@@ -2,7 +2,7 @@
 pragma solidity ^0.8.30;
 
 import {DefaultHighRateAccount} from "../../../src/accounts/DefaultHighRateAccount.sol";
-import {Call} from "../../../src/accounts/DefaultAccount.sol";
+import {Call, DefaultAccount} from "../../../src/accounts/DefaultAccount.sol";
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
@@ -92,7 +92,7 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
         (address account,) = _createHighRateK1Account(ACTOR_PK);
 
         vm.prank(address(0xdead));
-        vm.expectRevert();
+        vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
         DefaultHighRateAccount(payable(account))
             .executeBatch(_singleCall(address(target), 0, abi.encodeCall(HighRateMockTarget.setValue, (1))));
     }
@@ -101,7 +101,7 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
         (address account,) = _createHighRateK1Account(ACTOR_PK);
 
         vm.prank(account);
-        vm.expectRevert();
+        vm.expectRevert(DefaultAccount.CallFailed.selector);
         DefaultHighRateAccount(payable(account))
             .executeBatch(_singleCall(address(target), 0, abi.encodeCall(HighRateMockTarget.reverting, ())));
     }
@@ -113,7 +113,7 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
         _lockAccount(account, 1 hours);
 
         vm.prank(account);
-        vm.expectRevert();
+        vm.expectRevert(DefaultHighRateAccount.AccountLocked.selector);
         DefaultHighRateAccount(payable(account))
             .executeBatch(_singleCall(address(target), 0.1 ether, abi.encodeCall(HighRateMockTarget.setValue, (1))));
     }
