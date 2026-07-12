@@ -21,18 +21,21 @@ struct Call {
 ///      all chains, so if the protocol ever calls authenticate() on it the call naturally fails.
 address constant TRUSTED_EXECUTOR = address(uint160(uint256(keccak256("trustedExecutor"))));
 
-/// @notice Bare default account implementation for EIP-8130.
-///
-///         This is the minimal spec: it handles batched execution and ERC-1271 signature validation, and defers
-///         all authorization to the AccountConfiguration system contract.
-///
-///         Deploy this via {UpgradeableAccount} (behind an UpgradeableProxy), which layers UUPS upgradeability
-///         on top with no other change in behavior.
+/// @notice Canonical model of the EIP-8130 default account: the behavior every EOA exhibits by default on an
+///         EIP-8130 chain, expressed in Solidity. It handles batched execution and ERC-1271 signature validation,
+///         and defers all authorization to the AccountConfiguration system contract.
 ///
 ///         Caller authorization:
 ///           - address(this) is always authorized (hardcoded), covering 8130 self-call batches
 ///           - Trusted executors (PolicyManagers, relayers, EntryPoints) are registered as actors with
 ///             TRUSTED_EXECUTOR as the authenticator in AccountConfiguration
+///
+/// @dev Not a deployment target. This describes the default EOA behavior applied natively on an EIP-8130 chain; it
+///      is intentionally minimal and is NOT ERC-4337 compatible. An account that wants smart-account features (for
+///      example ERC-4337 on a chain without native EIP-8130 support) should delegate or deploy to a purpose-built
+///      account, not to this one. If this bytecode is deployed anyway, it MUST sit behind an upgradeable (UUPS)
+///      proxy: adopting those features later means swapping in different bytecode, which is only possible if the
+///      deployment is upgradeable. See {UpgradeableAccount} for that upgradeable variant.
 ///
 /// @author Coinbase
 contract DefaultAccount is Receiver {
