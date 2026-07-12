@@ -5,10 +5,10 @@ import {AccountConfiguration} from "../AccountConfiguration.sol";
 import {IAuthenticator} from "../interfaces/IAuthenticator.sol";
 
 /// @notice Delegates authentication to another account's actor configuration; a single hop only.
-///         actorId = bytes32(bytes20(delegate_address)).
+///         actorId = bytes32(bytes20(delegate_address))
 ///
-///         This contract exists for non-8130 chains where verifySignature() runs in normal EVM. On 8130
-///         chains, the protocol handles DELEGATE directly at the protocol level.
+///         This contract exists for non-8130 chains where verifySignature() runs in normal EVM.
+///         On 8130 chains, the protocol handles DELEGATE directly at the protocol level.
 ///
 ///         Data layout: delegate_address (20) || nested_authenticator (20) || nested_data
 ///
@@ -23,7 +23,7 @@ contract DelegateAuthenticator is IAuthenticator {
         ACCOUNT_CONFIGURATION = AccountConfiguration(accountConfiguration);
     }
 
-    /// @notice Authenticates by delegating to another account's actor configuration; a single hop only.
+    /// @notice Authenticates by delegating to another account's actor configuration; only one hop is permitted.
     ///
     /// @dev Reverts when `data` is shorter than 40 bytes.
     /// @dev Reverts when the nested authenticator is this contract (recursive delegation is not permitted).

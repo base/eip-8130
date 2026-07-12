@@ -7,6 +7,8 @@ import {IAuthenticator} from "./interfaces/IAuthenticator.sol";
 ///         Manages actor authorization, account creation, change sequencing, and account lock. This contract is
 ///         also the canonical reference for the EIP-8130 Account Configuration ABI: its public structs, events,
 ///         and function signatures are the spec surface, and there is no separate interface file to keep in sync.
+///
+/// @author Coinbase
 contract AccountConfiguration {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // STRUCTS
@@ -146,12 +148,13 @@ contract AccountConfiguration {
     ///         (see _authorizeActor), since a policy could otherwise be escaped by minting a fresh unrestricted actor.
     uint8 public constant SCOPE_CONFIG = 0x08;
 
-    /// @dev Authenticator namespace: 1 = the canonical secp256k1 ("K1") verifier (native ecrecover); 2..max = custom
-    ///      IAuthenticator contracts. address(0) is reserved as the "no actor configured" storage sentinel and is
-    ///      never a valid authenticator selector.
     /// @notice The single secp256k1 authenticator. The default EOA and every k1 actor share this one identity; the
     ///         actor config alone distinguishes a full-owner EOA from a scoped key. Signed with a K1_AUTHENTICATOR
     ///         (20) || r‖s‖v auth blob.
+    ///
+    /// @dev Authenticator namespace: 1 = the canonical secp256k1 ("K1") verifier (native ecrecover); 2..max = custom
+    ///      IAuthenticator contracts. address(0) is reserved as the "no actor configured" storage sentinel and is
+    ///      never a valid authenticator selector.
     address public constant K1_AUTHENTICATOR = address(1);
 
     // ----------------------------------------------------------------------------------------------------------------
@@ -228,48 +231,70 @@ contract AccountConfiguration {
 
     /// @notice An account address argument was the zero address.
     error ZeroAccount();
+
     /// @notice The account already has EIP-8130 state, so it cannot be created or imported again.
     error AlreadyInitialized();
+
     /// @notice The operation is not permitted while the account is locked.
     error AccountIsLocked();
+
     /// @notice The signed chainId is neither 0 (multichain) nor the current chain.
     error InvalidChainId();
+
     /// @notice The authenticated actor lacks the scope required to change actors.
     error UnauthorizedActorChange();
+
     /// @notice An ActorChange carried an unrecognized changeType.
     error UnknownChangeType();
+
     /// @notice The importAccount ERC-1271 signature check did not return the magic value.
     error InvalidImportSignature();
+
     /// @notice lock() was called with a zero unlock delay.
     error ZeroUnlockDelay();
+
     /// @notice initiateUnlock() was called when the account was not in the locked (unlocksAt == max) state.
     error NotLocked();
+
     /// @notice The auth blob is shorter than the 20-byte authenticator selector prefix.
     error InvalidAuthLength();
+
     /// @notice createAccount/importAccount was called with an empty initialActors set.
     error NoInitialActors();
+
     /// @notice initialActors are not strictly ascending by actorId (unsorted or duplicated).
     error ActorsNotSortedOrDuplicate();
+
     /// @notice An actor config named an authenticator below the K1 sentinel (i.e. address(0)).
     error InvalidAuthenticator();
+
     /// @notice A policy-bearing actor must be scope-restricted and must not hold change-actors scope.
     error InvalidPolicyScope();
+
     /// @notice The policyData length or embedded manager/commitment did not match the policyType.
     error InvalidPolicyData();
+
     /// @notice The referenced actor is not currently authorized on the account.
     error UnknownActor();
+
     /// @notice An authenticator resolved a zero actorId (authentication failed).
     error AuthenticationFailed();
+
     /// @notice The resolved actor is not bound to the presented authenticator.
     error AuthenticatorMismatch();
+
     /// @notice The actor's expiry has passed.
     error ActorExpired();
+
     /// @notice The signature was malformed: bad length, non-canonical v, high-s, or a zero recovery.
     error InvalidSignature();
+
     /// @notice The account's default (implicit/scoped) EOA key has been revoked.
     error DefaultEoaRevoked();
+
     /// @notice The provided account bytecode exceeds the maximum encodable length.
     error BytecodeTooLarge();
+
     /// @notice CREATE2 did not deploy code at the expected account address (e.g. bytecode too large per EIP-170,
     ///      leading 0xEF byte per EIP-3541, or out of gas). Reverting unwinds all state writes so no orphaned
     ///      EIP-8130 configuration is left behind.
@@ -297,11 +322,15 @@ contract AccountConfiguration {
     // MODIFIERS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
+    /// @notice Modifier to check if an account is unlocked.
+    /// @dev Reverts with AccountIsLocked when the account is locked.
     modifier onlyUnlocked(address account) {
         if (_checkAndClearLock(account)) revert AccountIsLocked();
         _;
     }
 
+    /// @notice Modifier to check if an account is not the zero address.
+    /// @dev Reverts with ZeroAccount when the account is the zero address.
     modifier nonZeroAccount(address account) {
         if (account == address(0)) revert ZeroAccount();
         _;
