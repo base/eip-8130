@@ -74,6 +74,8 @@ contract AccountConfiguration {
     // CONSTANTS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
+    /// @dev ERC-1271 isValidSignature(bytes32,bytes) selector, which also equals the ERC-1271 magic return value
+    ///      (0x1626ba7e); used both to build the import staticcall and to validate its result.
     bytes4 constant ERC1271_SELECTOR = bytes4(keccak256("isValidSignature(bytes32,bytes)"));
 
     /// @notice Typehash binding an importAccount signature to its salt, chainId, and initial actor set.
@@ -764,6 +766,10 @@ contract AccountConfiguration {
     // ACTOR CHANGES
     // ----------------------------------------------------------------------------------------------------------------
 
+    /// @dev Registers the bootstrap actor set shared by createAccount and importAccount: requires a non-empty,
+    ///      strictly ascending-by-actorId list (rejecting unsorted or duplicate entries) and authorizes each entry
+    ///      as an unrestricted owner (scope 0, no expiry, no policy). Reverts with NoInitialActors or
+    ///      ActorsNotSortedOrDuplicate.
     function _initializeAccount(address account, InitialActor[] calldata initialActors)
         internal
         nonZeroAccount(account)
@@ -787,6 +793,11 @@ contract AccountConfiguration {
         }
     }
 
+    /// @dev Authorizes (upserts) `actorId` with `config` and optional `policyData`, emitting ActorAuthorized. Rejects
+    ///      a sub-K1 authenticator and requires any policy-bearing actor to be scope-restricted without CONFIG scope.
+    ///      The self-actorId is routed by authenticator type (a k1 self inline in AccountState, a non-k1 self in
+    ///      _actorConfig) and the two are kept mutually exclusive; every other actor lives in _actorConfig. Reverts
+    ///      with InvalidAuthenticator, InvalidPolicyScope, or InvalidPolicyData.
     function _authorizeActor(address account, bytes32 actorId, ActorConfig memory config, bytes memory policyData)
         internal
         nonZeroAccount(account)
@@ -887,6 +898,9 @@ contract AccountConfiguration {
         }
     }
 
+    /// @dev Revokes `actorId` from `account`, clearing its config and policy slots and emitting ActorRevoked. For the
+    ///      self-actorId it also disables the inline k1 self (sets FLAG_REVOKE_DEFAULT_EOA and zeroes the inline
+    ///      fields). Reverts with UnknownActor when the actor is not currently live.
     function _revokeActor(address account, bytes32 actorId) internal nonZeroAccount(account) {
         if (!isActor(account, actorId)) revert UnknownActor();
         delete _actorConfig[actorId][account];
@@ -955,6 +969,9 @@ contract AccountConfiguration {
         );
     }
 
+    /// @dev Computes the digest signed over an applySignedActorChanges batch: each ActorChange is hashed structurally
+    ///      (its variable-length `data` pre-hashed to a fixed-width layout) and the batch is bound to `account`,
+    ///      `chainId`, and `sequence` via SIGNED_ACTOR_CHANGES_TYPEHASH.
     function _computeSignedActorChangesDigest(
         address account,
         uint256 chainId,
@@ -991,6 +1008,10 @@ contract AccountConfiguration {
     // AUTHENTICATION
     // ----------------------------------------------------------------------------------------------------------------
 
+    /// @dev Resolves and authenticates the actor behind `authenticator`/`data`, returning its (scope, policyType,
+    ///      policyTarget). Routes the K1 sentinel to _authenticateK1; otherwise calls the IAuthenticator and requires
+    ///      the resolved actorId to carry a matching, unexpired _actorConfig entry. Reverts with AuthenticationFailed,
+    ///      AuthenticatorMismatch, or ActorExpired.
     function _authenticate(address account, bytes32 hash, address authenticator, bytes calldata data)
         internal
         view
@@ -1055,6 +1076,9 @@ contract AccountConfiguration {
         return _policyManager[actorId][account];
     }
 
+    /// @dev Recovers the ECDSA signer from a 65-byte r‖s‖v signature over `hash`, enforcing EIP-2 (low-s only,
+    ///      canonical v of 27 or 28). Reverts with InvalidSignature on a bad length or non-canonical encoding; may
+    ///      return address(0) if ecrecover fails, which callers treat as a failed authentication.
     function _recoverSigner(bytes32 hash, bytes calldata data) internal pure returns (address recovered) {
         if (data.length != 65) revert InvalidSignature();
         bytes32 r = bytes32(data[:32]);
