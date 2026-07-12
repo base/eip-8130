@@ -4,305 +4,746 @@ pragma solidity ^0.8.30;
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
+/// @notice Fuzzed, branch-complete suite for the authentication paths of AccountConfiguration:
+///         authenticateActor -> _authenticate -> {_authenticateK1, IAuthenticator} -> _recoverSigner, plus the
+///         verifySignature / getActorConfig / getPolicy / isActor views that read the same actor resolution.
+///
+///         Source-order revert coverage (as declared / hit through authenticateActor):
+///           1. InvalidAuthLength      authenticateActor: auth.length < 20
+///           2. AuthenticationFailed   _authenticate: non-K1 IAuthenticator returns bytes32(0)
+///           3. AuthenticatorMismatch  _authenticate (non-K1) / _authenticateK1: stored authenticator != presented
+///           4. ActorExpired           inline self (_authenticateK1), non-self K1, and non-self non-K1 paths
+///           5. DefaultEoaRevoked      _authenticateK1: recovered == account with the revoke flag set
+///           6. InvalidSignature       _recoverSigner: bad length / high-s / non-canonical v / zero recovery
+///
+///         The authentication functions are `view` and emit no events, so there are no event assertions here;
+///         events (ActorAuthorized / ActorRevoked) belong to the applyKeyChange suite that drives the config writes.
 contract AuthenticateTest is AccountConfigurationTest {
-    uint256 constant ACTOR_PK = 400;
+    uint8 constant SCOPE_SIGNER = 0x01;
+    uint8 constant SCOPE_SENDER = 0x02;
+    uint8 constant SCOPE_PAYER = 0x04;
+    uint8 constant SCOPE_CONFIG = 0x08;
 
-    function test_authenticate_validK1() public {
-        (address account,) = _createK1Account(ACTOR_PK);
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+    // REVERTS (source order)
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-        bytes32 hash = keccak256("authenticate me");
-        bytes memory auth = _buildK1Auth(ACTOR_PK, hash);
+    // ── 1. InvalidAuthLength: authenticateActor, auth.length < 20 ──
 
-        (uint8 scope,,) = accountConfiguration.authenticateActor(account, hash, auth);
-        assertEq(scope, uint8(0x00));
-    }
+    /// @notice Any auth blob shorter than the 20-byte authenticator prefix reverts before slicing the selector.
+    /// @dev Fuzzes the full [0,19] length range and byte content plus the account/hash; hits the length guard.
+    function test_authenticateActor_revert_invalidAuthLength(
+        address account,
+        bytes32 hash,
+        uint256 lenSeed,
+        uint256 fillSeed
+    ) public {
+        uint256 len = bound(lenSeed, 0, 19);
+        bytes memory auth = new bytes(len);
+        for (uint256 i; i < len; ++i) {
+            auth[i] = bytes1(uint8(uint256(keccak256(abi.encode(fillSeed, i)))));
+        }
 
-    function test_authenticate_wrongSignature() public {
-        (address account,) = _createK1Account(ACTOR_PK);
-
-        bytes32 hash = keccak256("authenticate me");
-        // Sign with pk 999 — authenticator recovers wrong address, config mismatch
-        bytes memory auth = _buildK1Auth(999, hash);
-
-        vm.expectRevert();
+        vm.expectRevert(AccountConfiguration.InvalidAuthLength.selector);
         accountConfiguration.authenticateActor(account, hash, auth);
     }
 
-    function test_authenticate_unregisteredActor() public {
-        (address account,) = _createK1Account(ACTOR_PK);
+    // ── 2. AuthenticationFailed: non-K1 IAuthenticator returns bytes32(0) ──
 
-        bytes32 hash = keccak256("authenticate me");
-        // Sign with pk 999 (not registered on this account)
-        bytes memory auth = _buildK1Auth(999, hash);
+    /// @notice A well-formed P-256 blob whose signature is over a different hash resolves actorId 0 and reverts.
+    /// @dev The P256Authenticator returns bytes32(0) on a failed verify (never reverts on a well-formed sig), so
+    ///      _authenticate hits `revert AuthenticationFailed`. Reverts before any account SLOAD, so account is free.
+    function test_authenticateActor_revert_authenticationFailed_p256(
+        address account,
+        uint256 pkSeed,
+        bytes32 hash,
+        bytes32 wrongHash
+    ) public {
+        vm.assume(hash != wrongHash);
+        uint256 pk = _boundP256Pk(pkSeed);
+        bytes memory auth = abi.encodePacked(address(p256Authenticator), _p256SignData(pk, hash));
 
-        vm.expectRevert();
+        vm.expectRevert(AccountConfiguration.AuthenticationFailed.selector);
+        accountConfiguration.authenticateActor(account, wrongHash, auth);
+    }
+
+    /// @notice A valid WebAuthn assertion presented against a different hash also resolves actorId 0 and reverts.
+    /// @dev Same AuthenticationFailed branch through a distinct IAuthenticator (challenge != abi.encode(wrongHash)).
+    function test_authenticateActor_revert_authenticationFailed_webAuthn(
+        address account,
+        uint256 pkSeed,
+        bytes32 hash,
+        bytes32 wrongHash
+    ) public {
+        vm.assume(hash != wrongHash);
+        uint256 pk = _boundP256Pk(pkSeed);
+        bytes memory auth = abi.encodePacked(address(webAuthnAuthenticator), _webauthnSignData(pk, hash));
+
+        vm.expectRevert(AccountConfiguration.AuthenticationFailed.selector);
+        accountConfiguration.authenticateActor(account, wrongHash, auth);
+    }
+
+    // ── 3. AuthenticatorMismatch: stored actor authenticator != presented ──
+
+    /// @notice A K1 signature recovering to a key that is neither the account nor a registered actor mismatches.
+    /// @dev _authenticateK1: recovered != account, `_actorConfig[actorId].authenticator == 0 != K1` -> mismatch.
+    function test_authenticateActor_revert_authenticatorMismatch_k1Unregistered(
+        uint256 ownerSeed,
+        uint256 strangerSeed,
+        bytes32 hash
+    ) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 strangerPk = _boundK1Pk(strangerSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(strangerPk));
+
+        (address account,) = _createK1Account(ownerPk);
+        // A CREATE2 account can never equal a recoverable EOA, so the stranger takes the non-self K1 actor branch.
+        vm.assume(vm.addr(strangerPk) != account);
+
+        vm.expectRevert(AccountConfiguration.AuthenticatorMismatch.selector);
+        accountConfiguration.authenticateActor(account, hash, _buildK1Auth(strangerPk, hash));
+    }
+
+    /// @notice A valid P-256 signature for a key that was never authorized on the account mismatches.
+    /// @dev _authenticate (non-K1): actorId resolves, but `_actorConfig[actorId].authenticator == 0 != p256`.
+    function test_authenticateActor_revert_authenticatorMismatch_p256Unregistered(
+        address account,
+        uint256 pkSeed,
+        bytes32 hash
+    ) public {
+        uint256 pk = _boundP256Pk(pkSeed);
+        bytes memory auth = abi.encodePacked(address(p256Authenticator), _p256SignData(pk, hash));
+
+        vm.expectRevert(AccountConfiguration.AuthenticatorMismatch.selector);
         accountConfiguration.authenticateActor(account, hash, auth);
     }
 
-    function test_authenticate_revokedActor() public {
-        (address account,) = _createK1Account(ACTOR_PK);
+    /// @notice A key registered under the P-256 authenticator, presented via the WebAuthn authenticator, mismatches.
+    /// @dev Both authenticators derive actorId = keccak256(x‖y), so the actorId resolves but the stored authenticator
+    ///      (p256) differs from the presented one (webAuthn).
+    function test_authenticateActor_revert_authenticatorMismatch_crossAuthenticator(
+        uint256 ownerSeed,
+        uint256 pkSeed,
+        bytes32 hash
+    ) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 pk = _boundP256Pk(pkSeed);
 
-        address newSigner = vm.addr(401);
-        bytes32 newActorId = bytes32(bytes20(newSigner));
-        _authorizeActor(account, ACTOR_PK, newActorId, address(k1Authenticator));
+        (address account,) = _createK1Account(ownerPk);
+        _authorizeActorWithScope(account, ownerPk, _p256ActorId(pk), address(p256Authenticator), 0x00);
 
-        _revokeActor(account, ACTOR_PK, newActorId);
+        // Present the same key through WebAuthn: actorId matches, presented authenticator does not.
+        bytes memory auth = abi.encodePacked(address(webAuthnAuthenticator), _webauthnSignData(pk, hash));
 
-        bytes32 hash = keccak256("after revoke");
-        bytes memory revokedAuth = _buildK1Auth(401, hash);
-
-        vm.expectRevert();
-        accountConfiguration.authenticateActor(account, hash, revokedAuth);
-
-        // Original actor should still work
-        accountConfiguration.authenticateActor(account, hash, _buildK1Auth(ACTOR_PK, hash));
+        vm.expectRevert(AccountConfiguration.AuthenticatorMismatch.selector);
+        accountConfiguration.authenticateActor(account, hash, auth);
     }
 
-    function test_authenticate_differentAccounts() public {
-        (address account1,) = _createK1AccountWithSalt(ACTOR_PK, bytes32(uint256(1)));
-        (address account2,) = _createK1AccountWithSalt(ACTOR_PK, bytes32(uint256(2)));
+    /// @notice After a K1 actor is revoked its config is cleared, so re-presenting its signature mismatches.
+    /// @dev Revoke deletes `_actorConfig[actorId]`, leaving authenticator == 0 != K1 on the non-self K1 path.
+    function test_authenticateActor_revert_authenticatorMismatch_revokedActor(
+        uint256 ownerSeed,
+        uint256 actorSeed,
+        bytes32 hash
+    ) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 actorPk = _boundK1Pk(actorSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(actorPk));
 
-        bytes32 hash = keccak256("cross-account test");
-        bytes memory auth = _buildK1Auth(ACTOR_PK, hash);
+        (address account,) = _createK1Account(ownerPk);
+        bytes32 actorId = bytes32(bytes20(vm.addr(actorPk)));
+        _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), 0x00);
+        _revokeActor(account, ownerPk, actorId);
 
-        accountConfiguration.authenticateActor(account1, hash, auth);
-        accountConfiguration.authenticateActor(account2, hash, auth);
+        vm.expectRevert(AccountConfiguration.AuthenticatorMismatch.selector);
+        accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
     }
 
-    function test_authenticate_expiredActor_reverts() public {
-        (address account,) = _createK1Account(ACTOR_PK);
+    // ── 4. ActorExpired: inline self, non-self K1, and non-self non-K1 ──
 
-        uint256 sessionPk = 401;
+    /// @notice The inline self key expires: once block.timestamp passes defaultEOAExpiry the self path reverts.
+    /// @dev _authenticateK1 inline-self branch (recovered == account, flag unset) hits the expiry guard.
+    function test_authenticateActor_revert_actorExpired_inlineSelf(
+        uint256 eoaSeed,
+        uint48 expirySeed,
+        uint256 warpSeed,
+        bytes32 hash
+    ) public {
+        uint256 eoaPk = _boundK1Pk(eoaSeed);
+        address eoa = vm.addr(eoaPk);
+        bytes32 selfActorId = bytes32(bytes20(eoa));
+
+        uint48 expiry = uint48(bound(uint256(expirySeed), 1, uint256(type(uint48).max) - 1));
+        // Authorize the self-actorId as a scoped-0 K1 actor carrying an expiry (re-enables the inline self).
+        _authorizeActorWithExpiry(eoa, eoaPk, selfActorId, address(k1Authenticator), expiry);
+
+        vm.warp(uint256(expiry) + bound(warpSeed, 1, 1_000_000));
+        vm.expectRevert(AccountConfiguration.ActorExpired.selector);
+        accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+    }
+
+    /// @notice A non-self K1 session actor expires and can no longer authenticate.
+    /// @dev _authenticateK1 non-self branch (config.expiry != 0 && block.timestamp > expiry).
+    function test_authenticateActor_revert_actorExpired_nonSelfK1(
+        uint256 ownerSeed,
+        uint256 sessionSeed,
+        uint48 expirySeed,
+        uint256 warpSeed,
+        bytes32 hash
+    ) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 sessionPk = _boundK1Pk(sessionSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(sessionPk));
+
+        (address account,) = _createK1Account(ownerPk);
         bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
-        uint48 expiry = uint48(block.timestamp + 1 hours);
-        _authorizeActorWithExpiry(account, ACTOR_PK, sessionActorId, address(k1Authenticator), expiry);
+        uint48 expiry = uint48(bound(uint256(expirySeed), 1, uint256(type(uint48).max) - 1));
+        _authorizeActorWithExpiry(account, ownerPk, sessionActorId, address(k1Authenticator), expiry);
 
-        bytes32 hash = keccak256("expiry test");
-
-        // Before expiry: valid.
-        accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
-
-        // At expiry boundary (block.timestamp == expiry): still valid.
-        vm.warp(expiry);
-        accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
-
-        // Past expiry: authentication fails.
-        vm.warp(uint256(expiry) + 1);
+        vm.warp(uint256(expiry) + bound(warpSeed, 1, 1_000_000));
         vm.expectRevert(AccountConfiguration.ActorExpired.selector);
         accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
     }
 
-    function test_authenticate_zeroExpiry_neverExpires() public {
-        (address account,) = _createK1Account(ACTOR_PK);
+    /// @notice A non-self P-256 actor expires and can no longer authenticate.
+    /// @dev _authenticate (non-K1) expiry guard: exercises the ActorExpired branch outside the K1 path.
+    function test_authenticateActor_revert_actorExpired_nonSelfP256(
+        uint256 ownerSeed,
+        uint256 pkSeed,
+        uint48 expirySeed,
+        uint256 warpSeed,
+        bytes32 hash
+    ) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 pk = _boundP256Pk(pkSeed);
 
-        uint256 sessionPk = 401;
-        bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
-        _authorizeActorWithExpiry(account, ACTOR_PK, sessionActorId, address(k1Authenticator), 0);
+        (address account,) = _createK1Account(ownerPk);
+        uint48 expiry = uint48(bound(uint256(expirySeed), 1, uint256(type(uint48).max) - 1));
+        _authorizeActorWithExpiry(account, ownerPk, _p256ActorId(pk), address(p256Authenticator), expiry);
 
-        bytes32 hash = keccak256("no expiry test");
-        vm.warp(block.timestamp + 3650 days);
-        accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
+        vm.warp(uint256(expiry) + bound(warpSeed, 1, 1_000_000));
+        bytes memory auth = abi.encodePacked(address(p256Authenticator), _p256SignData(pk, hash));
+
+        vm.expectRevert(AccountConfiguration.ActorExpired.selector);
+        accountConfiguration.authenticateActor(account, hash, auth);
     }
 
-    function test_getActorConfig_returnsAuthenticatorAndScopes() public {
-        (address account, bytes32 actorId) = _createK1Account(ACTOR_PK);
+    // ── 5. DefaultEoaRevoked: recovered == account with the revoke flag set ──
 
-        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, actorId);
-        assertEq(cfg.authenticator, address(k1Authenticator));
-        assertEq(cfg.scope, 0x00);
-    }
-
-    function test_getActorConfig_returnsZeroForUnknownActor() public {
-        (address account,) = _createK1Account(ACTOR_PK);
-
-        bytes32 unknownActorId = bytes32(bytes20(vm.addr(999)));
-        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, unknownActorId);
-        assertEq(cfg.authenticator, address(0));
-        assertEq(cfg.scope, 0);
-    }
-
-    function test_authenticate_scopedActor_succeeds() public {
-        (address account,) = _createK1Account(ACTOR_PK);
-
-        address newSigner = vm.addr(401);
-        bytes32 newActorId = bytes32(bytes20(newSigner));
-        _authorizeActorWithScope(account, ACTOR_PK, newActorId, address(k1Authenticator), 0x01);
-
-        bytes32 hash = keccak256("scoped authenticate");
-        bytes memory auth = _buildK1Auth(401, hash);
-
-        (uint8 scope,,) = accountConfiguration.authenticateActor(account, hash, auth);
-        assertEq(scope, uint8(0x01));
-    }
-
-    function test_authenticate_unrestrictedScope() public {
-        (address account,) = _createK1Account(ACTOR_PK);
-
-        address newSigner = vm.addr(401);
-        bytes32 newActorId = bytes32(bytes20(newSigner));
-        _authorizeActorWithScope(account, ACTOR_PK, newActorId, address(k1Authenticator), 0x00);
-
-        bytes32 hash = keccak256("unrestricted");
-        bytes memory auth = _buildK1Auth(401, hash);
-
-        (uint8 scope,,) = accountConfiguration.authenticateActor(account, hash, auth);
-        assertEq(scope, uint8(0x00));
-    }
-
-    // ── Implicit EOA (registered by default) ──
-
-    function test_authenticate_implicitEOA() public {
-        uint256 eoaPk = 500;
-        address eoa = vm.addr(eoaPk);
-
-        bytes32 hash = keccak256("implicit eoa authenticate");
-        bytes memory auth = _buildK1Auth(eoaPk, hash);
-
-        // No createAccount or importAccount — the EOA is implicitly authorized
-        (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, hash, auth);
-        assertEq(scope, 0);
-    }
-
-    function test_authenticate_implicitEOA_isActorReturnsTrue() public {
-        uint256 eoaPk = 500;
-        address eoa = vm.addr(eoaPk);
-
-        assertTrue(accountConfiguration.isActor(eoa, bytes32(bytes20(eoa))));
-    }
-
-    function test_authenticate_implicitEOA_nonSelfActorIdNotImplicit() public {
-        uint256 eoaPk = 500;
-        address eoa = vm.addr(eoaPk);
-
-        // A random actorId that isn't bytes32(bytes20(eoa)) should NOT be implicit
-        bytes32 randomActorId = bytes32(bytes20(vm.addr(999)));
-        assertFalse(accountConfiguration.isActor(eoa, randomActorId));
-    }
-
-    function test_authenticate_implicitEOA_revokedByFlag() public {
-        uint256 eoaPk = 500;
+    /// @notice After the self-actorId is revoked, the account's own K1 key can no longer authenticate.
+    /// @dev Revoking the self-actorId sets FLAG_REVOKE_DEFAULT_EOA; _authenticateK1 reverts on the flag check.
+    function test_authenticateActor_revert_defaultEoaRevoked_afterSelfRevoke(uint256 eoaSeed, bytes32 hash) public {
+        uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
         bytes32 selfActorId = bytes32(bytes20(eoa));
 
-        // Implicit EOA signs to add a second key
-        bytes32 newActorId = bytes32(bytes20(vm.addr(501)));
-        _implicitAuthorizeActor(eoa, eoaPk, newActorId, address(k1Authenticator));
+        // The implicit self (unrestricted) signs a batch revoking its own self-actorId; auth precedes the revoke.
+        _revokeActor(eoa, eoaPk, selfActorId);
 
-        // Revoke the self-actorId (sets the default-EOA revoke flag) using the new explicit key
-        _revokeActor(eoa, 501, selfActorId);
-
-        assertFalse(accountConfiguration.isActor(eoa, selfActorId));
-
-        // Implicit path is now blocked
-        bytes32 hash = keccak256("after revoke");
         vm.expectRevert(AccountConfiguration.DefaultEoaRevoked.selector);
         accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
     }
 
-    function test_authenticate_selfActorScopedDowngradesOwnKey() public {
-        // Scoping the account's own key (self-actorId as an explicit k1 actor) downgrades it: the same key now
-        // authenticates with the reduced scope. There is a single k1 path, so there is no implicit full-owner
-        // escape — the config alone decides the scope.
-        uint256 eoaPk = 500;
+    /// @notice Authorizing the self-actorId to a non-K1 authenticator disables the inline K1 self (mutual exclusion).
+    /// @dev The non-K1 self path sets FLAG_REVOKE_DEFAULT_EOA, so a subsequent self K1 signature is DefaultEoaRevoked.
+    function test_authenticateActor_revert_defaultEoaRevoked_afterNonK1SelfAuthorize(uint256 eoaSeed, bytes32 hash)
+        public
+    {
+        uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
         bytes32 selfActorId = bytes32(bytes20(eoa));
 
-        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
-        changes[0] = AccountConfiguration.ActorChange({
-            actorId: selfActorId,
-            changeType: 0x01,
-            data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: 0x02, expiry: 0, policyType: 0x00
-                }),
-                bytes("")
-            )
-        });
-        uint64 seq = accountConfiguration.getChangeSequences(eoa).local;
-        bytes32 digest = _computeActorChangeBatchDigest(eoa, uint64(block.chainid), seq, changes);
-        accountConfiguration.applySignedActorChanges(eoa, uint64(block.chainid), changes, _buildK1Auth(eoaPk, digest));
+        // Implicit self authorizes itself to a non-K1 authenticator (P256), flipping the mutual-exclusion flag.
+        _authorizeActorWithScope(eoa, eoaPk, selfActorId, address(p256Authenticator), 0x00);
 
-        // The own key now returns the downgraded scope (0x02), never full owner (0x00).
-        bytes32 hash = keccak256("scoped self auth");
-        (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
-        assertEq(scope, 0x02);
+        vm.expectRevert(AccountConfiguration.DefaultEoaRevoked.selector);
+        accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
     }
 
-    function test_authenticate_explicitEOA_nonSelfActor() public {
-        uint256 eoaPk = 500;
-        address eoa = vm.addr(eoaPk);
+    // ── 6. InvalidSignature: _recoverSigner (length / high-s / v / zero recovery) ──
 
-        uint256 bobPk = 501;
-        bytes32 bobActorId = bytes32(bytes20(vm.addr(bobPk)));
-        _implicitAuthorizeActor(eoa, eoaPk, bobActorId, accountConfiguration.K1_AUTHENTICATOR());
+    /// @notice A K1 auth whose signature payload is not exactly 65 bytes reverts on the length guard.
+    /// @dev _recoverSigner: `data.length != 65`; data == auth[20:], so the auth blob is K1(20) ‖ <len != 65>.
+    function test_authenticateActor_revert_invalidSignature_badLength(
+        address account,
+        bytes32 hash,
+        uint256 lenSeed,
+        uint256 fillSeed
+    ) public {
+        uint256 len = bound(lenSeed, 0, 200);
+        vm.assume(len != 65);
+        bytes memory data = new bytes(len);
+        for (uint256 i; i < len; ++i) {
+            data[i] = bytes1(uint8(uint256(keccak256(abi.encode(fillSeed, i)))));
+        }
+        bytes memory auth = abi.encodePacked(k1Authenticator, data);
 
-        bytes32 hash = keccak256("explicit non-self actor");
-        (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(bobPk, hash));
-        assertEq(scope, 0);
+        vm.expectRevert(AccountConfiguration.InvalidSignature.selector);
+        accountConfiguration.authenticateActor(account, hash, auth);
     }
 
-    function test_authenticate_unregisteredK1KeyFails() public {
-        // A k1 signature from a key that is neither the account itself nor a registered actor fails. (A k1 sig from
-        // the account's own key would instead resolve to the implicit default EOA — covered elsewhere.)
-        uint256 eoaPk = 500;
+    /// @notice The high-s (EIP-2 malleable) twin of a canonical signature is rejected.
+    /// @dev _recoverSigner: `s > SECP256K1_HALF_ORDER`. vm.sign returns low-s, so n - s is always high-s; v flipped
+    ///      to model the malleability attack that recovers the same address.
+    function test_authenticateActor_revert_invalidSignature_highS(uint256 eoaSeed, bytes32 hash) public {
+        uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
 
-        bytes32 hash = keccak256("unregistered k1 key");
-        vm.expectRevert();
-        accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(999, hash));
-    }
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(eoaPk, hash);
+        bytes32 highS = bytes32(SECP256K1_ORDER - uint256(s));
+        uint8 flippedV = v == 27 ? 28 : 27;
+        bytes memory auth = abi.encodePacked(k1Authenticator, r, highS, flippedV);
 
-    function test_authenticate_unknownAuthenticatorPrefixReverts() public {
-        uint256 eoaPk = 500;
-        address eoa = vm.addr(eoaPk);
-
-        bytes32 hash = keccak256("unknown authenticator prefix");
-        // An authenticator address with no code cannot resolve an actor, so authentication reverts.
-        bytes memory auth = abi.encodePacked(address(type(uint160).max));
-
-        vm.expectRevert();
+        vm.expectRevert(AccountConfiguration.InvalidSignature.selector);
         accountConfiguration.authenticateActor(eoa, hash, auth);
     }
 
-    // ── EIP-2 signature malleability ──
-
-    function test_authenticate_rejectsHighSMalleability() public {
-        uint256 eoaPk = 500;
+    /// @notice A recovery id outside {27, 28} is rejected even with a canonical low-s signature.
+    /// @dev _recoverSigner: `v != 27 && v != 28`. Low-s keeps the high-s guard from firing first.
+    function test_authenticateActor_revert_invalidSignature_badV(uint256 eoaSeed, bytes32 hash, uint8 vSeed) public {
+        uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
-        bytes32 hash = keccak256("malleability");
-
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(eoaPk, hash);
-
-        // The canonical (low-s) signature authenticates.
-        accountConfiguration.authenticateActor(eoa, hash, abi.encodePacked(k1Authenticator, r, s, v));
-
-        // Its high-s twin (s' = n - s, v flipped) recovers the same address but is rejected per EIP-2.
-        uint256 n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141;
-        bytes32 highS = bytes32(n - uint256(s));
-        uint8 flippedV = v == 27 ? 28 : 27;
-
-        vm.expectRevert(AccountConfiguration.InvalidSignature.selector);
-        accountConfiguration.authenticateActor(eoa, hash, abi.encodePacked(k1Authenticator, r, highS, flippedV));
-    }
-
-    function test_authenticate_rejectsNonCanonicalV() public {
-        uint256 eoaPk = 500;
-        address eoa = vm.addr(eoaPk);
-        bytes32 hash = keccak256("bad v");
+        vm.assume(vSeed != 27 && vSeed != 28);
 
         (, bytes32 r, bytes32 s) = vm.sign(eoaPk, hash);
+        bytes memory auth = abi.encodePacked(k1Authenticator, r, s, vSeed);
 
-        // v outside {27, 28} is rejected.
         vm.expectRevert(AccountConfiguration.InvalidSignature.selector);
-        accountConfiguration.authenticateActor(eoa, hash, abi.encodePacked(k1Authenticator, r, s, uint8(29)));
+        accountConfiguration.authenticateActor(eoa, hash, auth);
     }
 
-    // ── Helpers ──
+    /// @notice A signature that ecrecovers to address(0) (r == 0) is rejected as a zero recovery.
+    /// @dev _recoverSigner passes length/high-s/v guards (s low, v = 27) but r == 0 -> ecrecover == 0 ->
+    ///      _authenticateK1 reverts on `recovered == address(0)`.
+    function test_authenticateActor_revert_invalidSignature_zeroRecovery(address account, bytes32 hash, uint256 sSeed)
+        public
+    {
+        uint256 s = bound(sSeed, 1, (SECP256K1_ORDER - 1) / 2); // canonical low-s so only the r == 0 guard bites
+        bytes memory auth = abi.encodePacked(k1Authenticator, bytes32(0), bytes32(s), uint8(27));
 
-    function _authorizeActor(address account, uint256 pk, bytes32 newActorId, address authenticator) internal {
-        _authorizeActorWithScope(account, pk, newActorId, authenticator, 0x00);
+        vm.expectRevert(AccountConfiguration.InvalidSignature.selector);
+        accountConfiguration.authenticateActor(account, hash, auth);
     }
 
+    // ── Unknown authenticator: a selector with no deployed code cannot resolve an actor ──
+
+    /// @notice A non-K1 authenticator address with no deployed code reverts (empty returndata fails the decode).
+    /// @dev Exercises the external-call branch of _authenticate against a codeless authenticator.
+    function test_authenticateActor_revert_unknownAuthenticatorNoCode(
+        address account,
+        address authenticator,
+        bytes32 hash,
+        bytes calldata data
+    ) public {
+        vm.assume(uint160(authenticator) > uint160(k1Authenticator)); // not the K1 branch, not address(0)
+        vm.assume(authenticator.code.length == 0);
+        bytes memory auth = abi.encodePacked(authenticator, data);
+
+        vm.expectRevert();
+        accountConfiguration.authenticateActor(account, hash, auth);
+    }
+
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+    // HAPPY / BRANCH
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+
+    /// @notice A never-created EOA authenticates via the implicit self key as a full owner (all-zero inline config).
+    /// @dev _authenticateK1 inline-self branch: recovered == account, flag unset, expiry 0 -> (0, 0, address(0)).
+    function test_authenticateActor_success_implicitEoaSelf(uint256 eoaSeed, bytes32 hash) public view {
+        uint256 eoaPk = _boundK1Pk(eoaSeed);
+        address eoa = vm.addr(eoaPk);
+
+        (uint8 scope, uint8 policyType, address policyTarget) =
+            accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+
+        assertEq(scope, uint8(0x00));
+        assertEq(policyType, uint8(0x00));
+        assertEq(policyTarget, address(0));
+    }
+
+    /// @notice A registered non-self K1 owner (scope 0) authenticates on a created account.
+    /// @dev _authenticateK1 non-self branch: config.authenticator == K1, expiry 0 -> returns the stored scope.
+    function test_authenticateActor_success_registeredK1Actor(uint256 ownerSeed, uint256 actorSeed, bytes32 hash)
+        public
+    {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 actorPk = _boundK1Pk(actorSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(actorPk));
+
+        (address account,) = _createK1Account(ownerPk);
+        vm.assume(vm.addr(actorPk) != account);
+        _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(vm.addr(actorPk))), address(k1Authenticator), 0x00);
+
+        (uint8 scope,,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        assertEq(scope, uint8(0x00));
+    }
+
+    /// @notice A registered P-256 actor authenticates via the non-K1 authenticator path.
+    /// @dev _authenticate (non-K1) success: IAuthenticator resolves actorId, config.authenticator == p256.
+    function test_authenticateActor_success_p256Actor(uint256 ownerSeed, uint256 pkSeed, uint8 scopeSeed, bytes32 hash)
+        public
+    {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 pk = _boundP256Pk(pkSeed);
+        uint8 scope = uint8(bound(uint256(scopeSeed), 0, 255));
+
+        (address account,) = _createK1Account(ownerPk);
+        _authorizeActorWithScope(account, ownerPk, _p256ActorId(pk), address(p256Authenticator), scope);
+
+        bytes memory auth = abi.encodePacked(address(p256Authenticator), _p256SignData(pk, hash));
+        (uint8 outScope,,) = accountConfiguration.authenticateActor(account, hash, auth);
+        assertEq(outScope, scope);
+    }
+
+    /// @notice A registered WebAuthn actor authenticates via the non-K1 authenticator path.
+    /// @dev Same non-K1 success branch through the WebAuthn authenticator; actorId = keccak256(x‖y).
+    function test_authenticateActor_success_webAuthnActor(
+        uint256 ownerSeed,
+        uint256 pkSeed,
+        uint8 scopeSeed,
+        bytes32 hash
+    ) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 pk = _boundP256Pk(pkSeed);
+        uint8 scope = uint8(bound(uint256(scopeSeed), 0, 255));
+
+        (address account,) = _createK1Account(ownerPk);
+        _authorizeActorWithScope(account, ownerPk, _p256ActorId(pk), address(webAuthnAuthenticator), scope);
+
+        bytes memory auth = abi.encodePacked(address(webAuthnAuthenticator), _webauthnSignData(pk, hash));
+        (uint8 outScope,,) = accountConfiguration.authenticateActor(account, hash, auth);
+        assertEq(outScope, scope);
+    }
+
+    /// @notice A scoped K1 actor authenticates and surfaces exactly its stored scope.
+    /// @dev Fuzzes the full non-zero scope space to prove passthrough of the scope byte (no SIGNER special-casing).
+    function test_authenticateActor_success_scopedActorReturnsScope(
+        uint256 ownerSeed,
+        uint256 actorSeed,
+        uint8 scopeSeed,
+        bytes32 hash
+    ) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 actorPk = _boundK1Pk(actorSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(actorPk));
+        uint8 scope = uint8(bound(uint256(scopeSeed), 1, 255));
+
+        (address account,) = _createK1Account(ownerPk);
+        vm.assume(vm.addr(actorPk) != account);
+        _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(vm.addr(actorPk))), address(k1Authenticator), scope);
+
+        (uint8 outScope,,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        assertEq(outScope, scope);
+    }
+
+    /// @notice An explicitly registered unrestricted (scope 0) non-self K1 actor authenticates as a full owner.
+    /// @dev Distinguishes the explicit scope-0 upsert from the implicit-self path; both resolve to scope 0.
+    function test_authenticateActor_success_unrestrictedScope(uint256 ownerSeed, uint256 actorSeed, bytes32 hash)
+        public
+    {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 actorPk = _boundK1Pk(actorSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(actorPk));
+
+        (address account,) = _createK1Account(ownerPk);
+        vm.assume(vm.addr(actorPk) != account);
+        _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(vm.addr(actorPk))), address(k1Authenticator), 0x00);
+
+        (uint8 scope,,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        assertEq(scope, uint8(0x00));
+    }
+
+    /// @notice A zero-expiry actor never expires, even far in the future.
+    /// @dev expiry == 0 short-circuits the expiry guard on the non-self K1 path regardless of warp.
+    function test_authenticateActor_success_zeroExpiryNeverExpires(
+        uint256 ownerSeed,
+        uint256 sessionSeed,
+        uint256 warpSeed,
+        bytes32 hash
+    ) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 sessionPk = _boundK1Pk(sessionSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(sessionPk));
+
+        (address account,) = _createK1Account(ownerPk);
+        vm.assume(vm.addr(sessionPk) != account);
+        _authorizeActorWithExpiry(account, ownerPk, bytes32(bytes20(vm.addr(sessionPk))), address(k1Authenticator), 0);
+
+        vm.warp(block.timestamp + bound(warpSeed, 1, 3650 days));
+        (uint8 scope,,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
+        assertEq(scope, uint8(0x00));
+    }
+
+    /// @notice An actor at exactly its expiry timestamp is still valid (guard is strict `>`).
+    /// @dev Warps to block.timestamp == expiry on the non-self K1 path and expects success.
+    function test_authenticateActor_success_atExpiryBoundary(
+        uint256 ownerSeed,
+        uint256 sessionSeed,
+        uint48 expirySeed,
+        bytes32 hash
+    ) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 sessionPk = _boundK1Pk(sessionSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(sessionPk));
+
+        (address account,) = _createK1Account(ownerPk);
+        vm.assume(vm.addr(sessionPk) != account);
+        uint48 expiry = uint48(bound(uint256(expirySeed), block.timestamp + 1, uint256(type(uint48).max)));
+        _authorizeActorWithExpiry(
+            account, ownerPk, bytes32(bytes20(vm.addr(sessionPk))), address(k1Authenticator), expiry
+        );
+
+        vm.warp(expiry);
+        (uint8 scope,,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
+        assertEq(scope, uint8(0x00));
+    }
+
+    /// @notice A policy-gated actor surfaces its scope, policy sub-type byte, and resolved policy target (manager).
+    /// @dev _resolvePolicyTarget returns the stored manager; the commitment is not returned here (execution-time read).
+    function test_authenticateActor_success_gatedActorReturnsScopePolicyTarget(
+        uint256 ownerSeed,
+        uint256 sessionSeed,
+        uint8 scopeSeed,
+        uint8 policyTypeSeed,
+        address manager,
+        bytes32 commitment,
+        bytes32 hash
+    ) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 sessionPk = _boundK1Pk(sessionSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(sessionPk));
+        vm.assume(manager != address(0));
+        vm.assume(commitment != bytes32(0));
+        // A policy-bearing actor must be scope-restricted (non-zero) without CONFIG scope.
+        uint8 scope = uint8(bound(uint256(scopeSeed), 1, 7));
+        uint8 policyType = uint8(bound(uint256(policyTypeSeed), 1, 255));
+
+        (address account,) = _createK1Account(ownerPk);
+        vm.assume(vm.addr(sessionPk) != account);
+        bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
+        _authorizeGatedActor(account, ownerPk, sessionActorId, scope, policyType, manager, commitment);
+
+        (uint8 outScope, uint8 outPolicyType, address outTarget) =
+            accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
+
+        assertEq(outScope, scope);
+        assertEq(outPolicyType, policyType);
+        assertEq(outTarget, manager);
+    }
+
+    /// @notice An ungated actor authenticates with a zero policy sub-type and a zero policy target.
+    /// @dev policyType == POLICY_NONE short-circuits _resolvePolicyTarget to address(0).
+    function test_authenticateActor_success_ungatedActorReturnsZeroPolicy(uint256 eoaSeed, bytes32 hash) public view {
+        uint256 eoaPk = _boundK1Pk(eoaSeed);
+        address eoa = vm.addr(eoaPk);
+
+        (uint8 scope, uint8 policyType, address policyTarget) =
+            accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+
+        assertEq(scope, uint8(0x00));
+        assertEq(policyType, uint8(0x00));
+        assertEq(policyTarget, address(0));
+    }
+
+    /// @notice Scoping the account's own key downgrades it: the inline self returns the reduced scope, never owner.
+    /// @dev There is a single K1 path, so the config alone decides the scope — no implicit full-owner escape.
+    function test_authenticateActor_success_selfScopedDowngrade(uint256 eoaSeed, uint8 scopeSeed, bytes32 hash) public {
+        uint256 eoaPk = _boundK1Pk(eoaSeed);
+        address eoa = vm.addr(eoaPk);
+        bytes32 selfActorId = bytes32(bytes20(eoa));
+        uint8 scope = uint8(bound(uint256(scopeSeed), 1, 255));
+
+        _authorizeActorWithScope(eoa, eoaPk, selfActorId, address(k1Authenticator), scope);
+
+        (uint8 outScope,,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        assertEq(outScope, scope);
+    }
+
+    /// @notice A second explicit K1 owner (non-self actorId) registered on an EOA authenticates independently.
+    /// @dev Non-self K1 branch on an EIP-7702-style EOA that still has its implicit self live.
+    function test_authenticateActor_success_explicitNonSelfEoaActor(uint256 eoaSeed, uint256 bobSeed, bytes32 hash)
+        public
+    {
+        uint256 eoaPk = _boundK1Pk(eoaSeed);
+        uint256 bobPk = _boundK1Pk(bobSeed);
+        address eoa = vm.addr(eoaPk);
+        vm.assume(vm.addr(bobPk) != eoa);
+
+        _implicitAuthorizeActor(eoa, eoaPk, bytes32(bytes20(vm.addr(bobPk))), address(k1Authenticator));
+
+        (uint8 scope,,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(bobPk, hash));
+        assertEq(scope, uint8(0x00));
+    }
+
+    /// @notice The same owner key authenticates on two distinct accounts derived from different salts.
+    /// @dev Confirms actor resolution is keyed per-account; a valid owner sig is not cross-account fungible by luck.
+    function test_authenticateActor_success_crossAccount(uint256 ownerSeed, bytes32 saltA, bytes32 saltB, bytes32 hash)
+        public
+    {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        vm.assume(saltA != saltB);
+
+        (address accountA,) = _createK1AccountWithSalt(ownerPk, saltA);
+        (address accountB,) = _createK1AccountWithSalt(ownerPk, saltB);
+        vm.assume(accountA != accountB);
+
+        bytes memory auth = _buildK1Auth(ownerPk, hash);
+        (uint8 scopeA,,) = accountConfiguration.authenticateActor(accountA, hash, auth);
+        (uint8 scopeB,,) = accountConfiguration.authenticateActor(accountB, hash, auth);
+        assertEq(scopeA, uint8(0x00));
+        assertEq(scopeB, uint8(0x00));
+    }
+
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+    // verifySignature (SIGNER gate)
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+
+    /// @notice verifySignature returns true iff the resolved actor's scope is unrestricted or carries SCOPE_SIGNER.
+    /// @dev Fuzzes the full scope space [0,255] and asserts the boolean equals `scope == 0 || scope & SIGNER != 0`,
+    ///      proving the SIGNER gate across every scope combination.
+    function test_verifySignature_success_signerGateAcrossScopes(
+        uint256 ownerSeed,
+        uint256 actorSeed,
+        uint8 scopeSeed,
+        bytes32 hash
+    ) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 actorPk = _boundK1Pk(actorSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(actorPk));
+        uint8 scope = uint8(bound(uint256(scopeSeed), 0, 255));
+
+        (address account,) = _createK1Account(ownerPk);
+        vm.assume(vm.addr(actorPk) != account);
+        _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(vm.addr(actorPk))), address(k1Authenticator), scope);
+
+        bool expected = scope == 0 || scope & SCOPE_SIGNER != 0;
+        assertEq(accountConfiguration.verifySignature(account, hash, _buildK1Auth(actorPk, hash)), expected);
+    }
+
+    /// @notice verifySignature returns false when authentication fails outright (unregistered signer).
+    /// @dev authenticateActor reverts (AuthenticatorMismatch) and the try/catch collapses it to false.
+    function test_verifySignature_success_falseOnUnauthenticated(uint256 ownerSeed, uint256 strangerSeed, bytes32 hash)
+        public
+    {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 strangerPk = _boundK1Pk(strangerSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(strangerPk));
+
+        (address account,) = _createK1Account(ownerPk);
+        vm.assume(vm.addr(strangerPk) != account);
+
+        assertFalse(accountConfiguration.verifySignature(account, hash, _buildK1Auth(strangerPk, hash)));
+    }
+
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+    // getPolicy / getActorConfig / isActor (actor-resolution views)
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+
+    /// @notice getPolicy resolves a gated actor's sub-type, manager, and signed commitment.
+    /// @dev Non-zero policyType returns (policyType, manager, commitment) from the policy keyspace.
+    function test_getPolicy_success_gatedActor(
+        uint256 ownerSeed,
+        uint256 sessionSeed,
+        uint8 scopeSeed,
+        uint8 policyTypeSeed,
+        address manager,
+        bytes32 commitment
+    ) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 sessionPk = _boundK1Pk(sessionSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(sessionPk));
+        vm.assume(manager != address(0));
+        vm.assume(commitment != bytes32(0));
+        uint8 scope = uint8(bound(uint256(scopeSeed), 1, 7));
+        uint8 policyType = uint8(bound(uint256(policyTypeSeed), 1, 255));
+
+        (address account,) = _createK1Account(ownerPk);
+        bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
+        _authorizeGatedActor(account, ownerPk, sessionActorId, scope, policyType, manager, commitment);
+
+        (uint8 outPolicyType, address outTarget, bytes32 outCommitment) =
+            accountConfiguration.getPolicy(account, sessionActorId);
+        assertEq(outPolicyType, policyType);
+        assertEq(outTarget, manager);
+        assertEq(outCommitment, commitment);
+    }
+
+    /// @notice getPolicy returns the zero policy for an ungated actor.
+    /// @dev policyType == POLICY_NONE returns (0, address(0), bytes32(0)).
+    function test_getPolicy_success_ungatedActor(uint256 ownerSeed, uint256 actorSeed) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 actorPk = _boundK1Pk(actorSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(actorPk));
+
+        (address account,) = _createK1Account(ownerPk);
+        vm.assume(vm.addr(actorPk) != account);
+        bytes32 actorId = bytes32(bytes20(vm.addr(actorPk)));
+        _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), 0x00);
+
+        (uint8 policyType, address target, bytes32 commitment) = accountConfiguration.getPolicy(account, actorId);
+        assertEq(policyType, uint8(0x00));
+        assertEq(target, address(0));
+        assertEq(commitment, bytes32(0));
+    }
+
+    /// @notice getActorConfig returns a registered actor's authenticator and scope verbatim.
+    /// @dev The initial owner is stored with the K1 authenticator and scope 0.
+    function test_getActorConfig_success_returnsAuthenticatorAndScope(uint256 ownerSeed) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        (address account, bytes32 actorId) = _createK1Account(ownerPk);
+
+        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, actorId);
+        assertEq(cfg.authenticator, address(k1Authenticator));
+        assertEq(cfg.scope, uint8(0x00));
+    }
+
+    /// @notice getActorConfig returns the empty config for an unknown actor.
+    /// @dev No _actorConfig entry and not the (live) self-actorId -> all-zero config.
+    function test_getActorConfig_success_returnsZeroForUnknownActor(uint256 ownerSeed, bytes32 unknownActorId) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        (address account, bytes32 actorId) = _createK1Account(ownerPk);
+        vm.assume(unknownActorId != actorId);
+        vm.assume(unknownActorId != bytes32(bytes20(account)));
+
+        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, unknownActorId);
+        assertEq(cfg.authenticator, address(0));
+        assertEq(cfg.scope, uint8(0x00));
+    }
+
+    /// @notice isActor reports the implicit self-actorId of a never-created EOA as live.
+    /// @dev No _actorConfig entry, actorId == self, flag unset -> true.
+    function test_isActor_success_implicitEoaTrue(uint256 eoaSeed) public view {
+        address eoa = vm.addr(_boundK1Pk(eoaSeed));
+        assertTrue(accountConfiguration.isActor(eoa, bytes32(bytes20(eoa))));
+    }
+
+    /// @notice isActor reports a non-self actorId on a never-created EOA as not live.
+    /// @dev A random actorId != bytes32(bytes20(eoa)) has no inline home and no _actorConfig entry -> false.
+    function test_isActor_success_nonSelfActorIdNotImplicit(uint256 eoaSeed, bytes32 randomActorId) public view {
+        address eoa = vm.addr(_boundK1Pk(eoaSeed));
+        vm.assume(randomActorId != bytes32(bytes20(eoa)));
+        assertFalse(accountConfiguration.isActor(eoa, randomActorId));
+    }
+
+    /// @notice isActor reports the self-actorId as not live after the self key has been revoked.
+    /// @dev Revoking the self-actorId sets the revoke flag, so the inline self no longer counts as an actor.
+    function test_isActor_success_falseAfterSelfRevoke(uint256 eoaSeed) public {
+        uint256 eoaPk = _boundK1Pk(eoaSeed);
+        address eoa = vm.addr(eoaPk);
+        bytes32 selfActorId = bytes32(bytes20(eoa));
+
+        _revokeActor(eoa, eoaPk, selfActorId);
+
+        assertFalse(accountConfiguration.isActor(eoa, selfActorId));
+    }
+
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+    // HELPERS
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+
+    /// @dev Authorize `newActorId` under `authenticator` with `scope` (no expiry, no policy), signed by `pk`.
+    ///      For the self-actorId with the K1 authenticator this drives the inline-self home; for any other
+    ///      authenticator on the self-actorId it drives the mutually-exclusive non-K1 self home.
     function _authorizeActorWithScope(
         address account,
         uint256 pk,
@@ -324,11 +765,10 @@ contract AuthenticateTest is AccountConfigurationTest {
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(pk, digest);
-
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
+        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
     }
 
+    /// @dev Authorize `newActorId` under `authenticator` with the given `expiry` (scope 0, no policy), signed by `pk`.
     function _authorizeActorWithExpiry(
         address account,
         uint256 pk,
@@ -350,42 +790,25 @@ contract AuthenticateTest is AccountConfigurationTest {
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(pk, digest);
-
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
+        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
     }
 
+    /// @dev Authorize `newActorId` under `authenticator` as an unrestricted owner (scope 0), signed by `pk`.
+    function _implicitAuthorizeActor(address account, uint256 pk, bytes32 newActorId, address authenticator) internal {
+        _authorizeActorWithScope(account, pk, newActorId, authenticator, 0x00);
+    }
+
+    /// @dev Revoke `actorId` from `account`, signed by `pk`.
     function _revokeActor(address account, uint256 pk, bytes32 actorId) internal {
         AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
         changes[0] = AccountConfiguration.ActorChange({actorId: actorId, changeType: 0x02, data: ""});
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(pk, digest);
-
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
+        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
     }
 
-    function _implicitAuthorizeActor(address account, uint256 pk, bytes32 newActorId, address authenticator) internal {
-        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
-        changes[0] = AccountConfiguration.ActorChange({
-            actorId: newActorId,
-            changeType: 0x01,
-            data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: authenticator, scope: 0x00, expiry: 0, policyType: 0x00
-                }),
-                bytes("")
-            )
-        });
-
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
-        bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(pk, digest);
-
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
-    }
-
+    /// @dev Authorize a K1 policy-gated actor: manager[20] || commitment[32] policy data, signed by the owner `pk`.
     function _authorizeGatedActor(
         address account,
         uint256 ownerPk,
@@ -412,36 +835,5 @@ contract AuthenticateTest is AccountConfigurationTest {
         accountConfiguration.applySignedActorChanges(
             account, uint64(block.chainid), changes, _buildK1Auth(ownerPk, digest)
         );
-    }
-
-    /// @notice authenticate surfaces the actor's full authorization: scope, the reserved policyType byte, and the
-    ///         resolved policy target (the manager); the commitment stays an execution-time read.
-    function test_authenticate_returnsScopePolicyTypeAndTarget() public {
-        (address account,) = _createK1Account(ACTOR_PK);
-
-        uint256 sessionPk = 410;
-        bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
-        address policyManager = address(0xB0B);
-        _authorizeGatedActor(account, ACTOR_PK, sessionActorId, 0x02, 0x01, policyManager, keccak256("commit"));
-
-        bytes32 hash = keccak256("gated authenticate");
-        (uint8 scope, uint8 policyType, address policyTarget) =
-            accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
-
-        assertEq(scope, uint8(0x02));
-        assertEq(policyType, uint8(0x01));
-        assertEq(policyTarget, policyManager);
-    }
-
-    function test_authenticate_ungatedActorReturnsZeroPolicy() public {
-        (address account,) = _createK1Account(ACTOR_PK);
-
-        bytes32 hash = keccak256("ungated authenticate");
-        (uint8 scope, uint8 policyType, address policyTarget) =
-            accountConfiguration.authenticateActor(account, hash, _buildK1Auth(ACTOR_PK, hash));
-
-        assertEq(scope, uint8(0x00));
-        assertEq(policyType, uint8(0x00));
-        assertEq(policyTarget, address(0));
     }
 }

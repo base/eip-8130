@@ -5,6 +5,8 @@ import {DefaultAccount, Call} from "../../../src/accounts/DefaultAccount.sol";
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
+/// @dev Minimal call target: a payable state setter and an unconditional reverter, used to exercise both the
+///      success and failure legs of the low-level call inside executeBatch.
 contract MockTarget {
     uint256 public value;
 
@@ -19,6 +21,18 @@ contract MockTarget {
 
 contract DefaultAccountTest is AccountConfigurationTest {
     uint256 constant ACTOR_PK = 100;
+
+    // ERC-1271 magic values returned by isValidSignature.
+    bytes4 constant ERC1271_MAGIC = 0x1626ba7e;
+    bytes4 constant ERC1271_FAIL = 0xFFFFFFFF;
+
+    // Scope bits: SIGNER gates isValidSignature; SENDER is a non-signing scope.
+    uint8 constant SCOPE_SIGNER = 0x01;
+    uint8 constant SCOPE_SENDER = 0x02;
+
+    // TRUSTED_EXECUTOR sentinel: the authenticator value that marks an actor as a direct-execution caller.
+    address constant TRUSTED_EXECUTOR = address(uint160(uint256(keccak256("trustedExecutor"))));
+
     MockTarget public target;
 
     function setUp() public override {
@@ -31,98 +45,357 @@ contract DefaultAccountTest is AccountConfigurationTest {
         calls[0] = Call(t, v, d);
     }
 
-    // ── Caller management ──
-
-    function test_selfIsAlwaysAuthorized() public {
-        (address account,) = _createK1Account(ACTOR_PK);
-        assertTrue(DefaultAccount(payable(account)).isAuthorizedCaller(account));
+    /// @dev Authorize an actor with unrestricted scope on `account`, signed by `pk`.
+    function _authorizeActor(address account, uint256 pk, bytes32 newActorId, address authenticator) internal {
+        _authorizeActorWithScope(account, pk, newActorId, authenticator, 0x00);
     }
 
-    // ── executeBatch ──
+    /// @dev Authorize an actor with a given scope, signed by `pk`. Used to register both TRUSTED_EXECUTOR actors and
+    ///      scoped k1 actors from the account owner.
+    function _authorizeActorWithScope(
+        address account,
+        uint256 pk,
+        bytes32 newActorId,
+        address authenticator,
+        uint8 scope
+    ) internal {
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
+            actorId: newActorId,
+            changeType: 0x01,
+            data: abi.encode(
+                AccountConfiguration.ActorConfig({
+                    authenticator: authenticator, scope: scope, expiry: 0, policyType: 0x00
+                }),
+                bytes("")
+            )
+        });
 
-    function test_executeBatch_success() public {
+        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
+        bytes memory auth = _buildK1Auth(pk, digest);
+
+        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
+    }
+
+    // ══════════════════════════════════════════════
+    //  executeBatch — reverts (source order)
+    // ══════════════════════════════════════════════
+
+    /// @notice Any caller that is neither the account itself nor a registered trusted executor reverts.
+    /// @dev Exercises the false leg of `require(_isAuthorizedCaller(msg.sender))`; fuzzes caller/value/data.
+    function test_executeBatch_revert_unauthorizedCaller(address caller, uint256 value, bytes calldata data) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+        vm.assume(caller != account);
+        value = bound(value, 0, type(uint128).max);
+
+        vm.prank(caller);
+        vm.expectRevert();
+        DefaultAccount(payable(account)).executeBatch(_singleCall(address(target), value, data));
+    }
+
+    /// @notice The account owner's own EOA key holder cannot drive executeBatch directly.
+    /// @dev The owner is a k1 actor (authenticator == K1), not TRUSTED_EXECUTOR, so _isAuthorizedCaller is false.
+    function test_executeBatch_revert_ownerEoaCallerUnauthorized(uint256 pkSeed) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        (address account,) = _createK1Account(pk);
+        address owner = vm.addr(pk);
+        vm.assume(owner != account);
+
+        vm.prank(owner);
+        vm.expectRevert();
+        DefaultAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1))));
+    }
+
+    /// @notice A registered actor whose authenticator is K1 (not the TRUSTED_EXECUTOR sentinel) cannot call.
+    /// @dev Only the TRUSTED_EXECUTOR sentinel authorizes calls; an ordinary k1 actor does not.
+    function test_executeBatch_revert_nonExecutorActorCaller(uint256 actorSeed) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+
+        uint256 actorPk = _boundK1Pk(actorSeed);
+        address actor = vm.addr(actorPk);
+        vm.assume(actor != account && actor != vm.addr(ACTOR_PK));
+
+        // Register `actor` as an ordinary k1 actor (authenticator == K1_AUTHENTICATOR), NOT a trusted executor.
+        _authorizeActor(account, ACTOR_PK, bytes32(bytes20(actor)), k1Authenticator);
+
+        vm.prank(actor);
+        vm.expectRevert();
+        DefaultAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1))));
+    }
+
+    /// @notice A failing inner call aborts the whole batch.
+    /// @dev Exercises the false leg of `require(success)`; fuzzes the ETH value carried by the failing call.
+    function test_executeBatch_revert_failedInnerCall(uint256 value) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+        value = bound(value, 0, 1e24);
+        vm.deal(account, value);
+
+        vm.prank(account);
+        vm.expectRevert();
+        DefaultAccount(payable(account))
+            .executeBatch(_singleCall(address(target), value, abi.encodeCall(MockTarget.reverting, ())));
+    }
+
+    /// @notice A failed call late in the batch rolls back state written by earlier successful calls.
+    /// @dev The whole executeBatch reverts, so the earlier setValue is rolled back.
+    function test_executeBatch_revert_failedInnerCallRollsBackPriorState(uint256 v) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+        v = bound(v, 1, type(uint256).max); // non-zero so the rollback assertion is meaningful
+
+        Call[] memory calls = new Call[](2);
+        calls[0] = Call(address(target), 0, abi.encodeCall(MockTarget.setValue, (v)));
+        calls[1] = Call(address(target), 0, abi.encodeCall(MockTarget.reverting, ()));
+
+        vm.prank(account);
+        vm.expectRevert();
+        DefaultAccount(payable(account)).executeBatch(calls);
+
+        assertEq(target.value(), 0);
+    }
+
+    // ══════════════════════════════════════════════
+    //  executeBatch — happy paths
+    // ══════════════════════════════════════════════
+
+    /// @notice An empty calls array succeeds without entering the loop body.
+    /// @dev Covers the loop-not-entered branch: authorization passes and no inner call is made.
+    function test_executeBatch_success_emptyCalls() public {
+        (address account,) = _createK1Account(ACTOR_PK);
+
+        Call[] memory calls = new Call[](0);
+        vm.prank(account);
+        DefaultAccount(payable(account)).executeBatch(calls);
+
+        assertEq(target.value(), 0);
+    }
+
+    /// @notice The account calling itself executes a single inner call.
+    /// @dev Covers the `caller == address(this)` authorization branch and one successful loop iteration.
+    function test_executeBatch_success_selfCaller(uint256 v) public {
         (address account,) = _createK1Account(ACTOR_PK);
 
         vm.prank(account);
         DefaultAccount(payable(account))
-            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (42))));
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (v))));
 
-        assertEq(target.value(), 42);
+        assertEq(target.value(), v);
     }
 
-    function test_executeBatch_withETHValue() public {
+    /// @notice Executing a call that forwards ETH transfers the value to the target.
+    /// @dev Fuzzes the forwarded amount bounded to the account balance; confirms `call{value:}` wiring.
+    function test_executeBatch_success_withETHValue(uint256 amount) public {
         (address account,) = _createK1Account(ACTOR_PK);
-        vm.deal(account, 1 ether);
+        amount = bound(amount, 0, 1e30);
+        vm.deal(account, amount);
 
         vm.prank(account);
         DefaultAccount(payable(account))
-            .executeBatch(_singleCall(address(target), 0.5 ether, abi.encodeCall(MockTarget.setValue, (1))));
+            .executeBatch(_singleCall(address(target), amount, abi.encodeCall(MockTarget.setValue, (7))));
 
-        assertEq(address(target).balance, 0.5 ether);
+        assertEq(address(target).balance, amount);
+        assertEq(account.balance, 0);
+        assertEq(target.value(), 7);
     }
 
-    function test_executeBatch_multipleCalls() public {
+    /// @notice A batch with multiple calls executes every element in order.
+    /// @dev Covers the loop iterating more than once across two distinct targets with fuzzed values.
+    function test_executeBatch_success_multipleCalls(uint256 a, uint256 b) public {
         (address account,) = _createK1Account(ACTOR_PK);
+        a = bound(a, 0, 1e27);
+        b = bound(b, 0, 1e27);
+        vm.deal(account, a + b);
+
         MockTarget target2 = new MockTarget();
 
         Call[] memory calls = new Call[](2);
-        calls[0] = Call(address(target), 0, abi.encodeCall(MockTarget.setValue, (10)));
-        calls[1] = Call(address(target2), 0, abi.encodeCall(MockTarget.setValue, (20)));
+        calls[0] = Call(address(target), a, abi.encodeCall(MockTarget.setValue, (10)));
+        calls[1] = Call(address(target2), b, abi.encodeCall(MockTarget.setValue, (20)));
 
         vm.prank(account);
         DefaultAccount(payable(account)).executeBatch(calls);
 
         assertEq(target.value(), 10);
         assertEq(target2.value(), 20);
+        assertEq(address(target).balance, a);
+        assertEq(address(target2).balance, b);
     }
 
-    function test_executeBatch_revertsFromUnauthorizedCaller() public {
+    /// @notice A registered TRUSTED_EXECUTOR actor may drive execution directly by matching msg.sender.
+    /// @dev Covers the config-driven authorization branch: getActorConfig(...).authenticator == TRUSTED_EXECUTOR.
+    function test_executeBatch_success_trustedExecutor(uint256 execSeed, uint256 v) public {
         (address account,) = _createK1Account(ACTOR_PK);
 
-        vm.prank(address(0xdead));
-        vm.expectRevert();
+        address executor = address(uint160(bound(execSeed, 10, type(uint160).max)));
+        vm.assume(executor != account && executor != vm.addr(ACTOR_PK));
+
+        // The owner signs an actor change registering `executor` with the TRUSTED_EXECUTOR authenticator.
+        _authorizeActor(account, ACTOR_PK, bytes32(bytes20(executor)), TRUSTED_EXECUTOR);
+
+        vm.prank(executor);
         DefaultAccount(payable(account))
-            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1))));
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (v))));
+
+        assertEq(target.value(), v);
     }
 
-    function test_executeBatch_revertsOnFailedCall() public {
+    /// @notice A call to a target with no code succeeds (the low-level call returns success).
+    /// @dev executeBatch does not verify the target has code, so codeless targets return success.
+    function test_executeBatch_success_callToCodelessTarget(address t) public {
         (address account,) = _createK1Account(ACTOR_PK);
+        vm.assume(uint160(t) > 0xffff); // stay clear of all precompiles (which may revert on arbitrary calldata)
+        vm.assume(t != account && t != address(vm) && t.code.length == 0);
 
         vm.prank(account);
-        vm.expectRevert();
-        DefaultAccount(payable(account))
-            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.reverting, ())));
+        DefaultAccount(payable(account)).executeBatch(_singleCall(t, 0, abi.encodeCall(MockTarget.setValue, (1))));
+
+        assertEq(t.code.length, 0);
     }
 
-    // ── isValidSignature ──
+    // ══════════════════════════════════════════════
+    //  isValidSignature — failure returns (0xFFFFFFFF)
+    // ══════════════════════════════════════════════
 
-    function test_isValidSignature_validK1() public {
-        (address account,) = _createK1Account(ACTOR_PK);
+    /// @notice A signature from a key that is not a registered actor returns the failure magic value.
+    /// @dev authenticateActor reverts (AuthenticatorMismatch/DefaultEoaRevoked), caught by verifySignature -> false.
+    function test_isValidSignature_success_returnsFailureForWrongKey(uint256 ownerSeed, uint256 wrongSeed, bytes32 hash)
+        public
+    {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 wrongPk = _boundK1Pk(wrongSeed);
+        (address account,) = _createK1Account(ownerPk);
+        vm.assume(vm.addr(wrongPk) != vm.addr(ownerPk) && vm.addr(wrongPk) != account);
 
-        bytes32 hash = keccak256("validate me");
-        bytes memory authData = _buildK1Auth(ACTOR_PK, hash);
+        bytes memory authData = _buildK1Auth(wrongPk, hash);
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
-        assertEq(result, bytes4(0x1626ba7e));
+        assertEq(result, ERC1271_FAIL);
     }
 
-    function test_isValidSignature_invalidSignature() public {
-        (address account,) = _createK1Account(ACTOR_PK);
+    /// @notice A valid signature from an actor holding a non-signing scope returns the failure magic value.
+    /// @dev verifySignature is false when scope != 0 and SCOPE_SIGNER is unset (here SCOPE_SENDER only).
+    function test_isValidSignature_success_returnsFailureForNonSignerScope(
+        uint256 ownerSeed,
+        uint256 actorSeed,
+        bytes32 hash
+    ) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        (address account,) = _createK1Account(ownerPk);
 
-        bytes32 hash = keccak256("validate me");
-        bytes memory authData = _buildK1Auth(999, hash);
+        uint256 actorPk = _boundK1Pk(actorSeed);
+        address actor = vm.addr(actorPk);
+        vm.assume(actor != vm.addr(ownerPk) && actor != account);
+
+        // Authorize the actor with SENDER scope only — it can act but cannot validate signatures.
+        _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(actor)), k1Authenticator, SCOPE_SENDER);
+
+        bytes memory authData = _buildK1Auth(actorPk, hash);
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
-        assertEq(result, bytes4(0xFFFFFFFF));
+        assertEq(result, ERC1271_FAIL);
     }
 
-    function test_isValidSignature_unknownActorId() public {
-        (address account,) = _createK1Account(ACTOR_PK);
+    /// @notice A signature blob shorter than the 20-byte authenticator prefix returns the failure magic value.
+    /// @dev authenticateActor reverts InvalidAuthLength, which verifySignature catches and reports as false.
+    function test_isValidSignature_success_returnsFailureForShortSignature(
+        uint256 ownerSeed,
+        uint8 lenSeed,
+        bytes32 hash
+    ) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        (address account,) = _createK1Account(ownerPk);
 
-        bytes32 hash = keccak256("validate me");
-        bytes memory authData = _buildK1Auth(999, hash);
+        uint256 len = bound(lenSeed, 0, 19);
+        bytes memory shortSig = new bytes(len);
+
+        bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, shortSig);
+        assertEq(result, ERC1271_FAIL);
+    }
+
+    // ══════════════════════════════════════════════
+    //  isValidSignature — success returns (0x1626ba7e)
+    // ══════════════════════════════════════════════
+
+    /// @notice A valid signature from the unrestricted owner returns the ERC-1271 magic value.
+    /// @dev verifySignature is true because the owner actor has scope == 0 (unrestricted). Fuzzes key and hash.
+    function test_isValidSignature_success_validK1Owner(uint256 pkSeed, bytes32 hash) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        (address account,) = _createK1Account(pk);
+
+        bytes memory authData = _buildK1Auth(pk, hash);
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
-        assertEq(result, bytes4(0xFFFFFFFF));
+        assertEq(result, ERC1271_MAGIC);
+    }
+
+    /// @notice A valid signature from an actor explicitly scoped SCOPE_SIGNER returns the magic value.
+    /// @dev Covers the `scope & SCOPE_SIGNER != 0` leg of verifySignature (as opposed to the scope == 0 leg).
+    function test_isValidSignature_success_scopedSignerActor(uint256 ownerSeed, uint256 actorSeed, bytes32 hash)
+        public
+    {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        (address account,) = _createK1Account(ownerPk);
+
+        uint256 actorPk = _boundK1Pk(actorSeed);
+        address actor = vm.addr(actorPk);
+        vm.assume(actor != vm.addr(ownerPk) && actor != account);
+
+        _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(actor)), k1Authenticator, SCOPE_SIGNER);
+
+        bytes memory authData = _buildK1Auth(actorPk, hash);
+
+        bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
+        assertEq(result, ERC1271_MAGIC);
+    }
+
+    // ══════════════════════════════════════════════
+    //  isAuthorizedCaller
+    // ══════════════════════════════════════════════
+
+    /// @notice The account is always authorized to call itself.
+    /// @dev Covers the hardcoded `caller == address(this)` branch. Fuzzes the owner key to vary the account.
+    function test_isAuthorizedCaller_success_self(uint256 pkSeed) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        (address account,) = _createK1Account(pk);
+
+        assertTrue(DefaultAccount(payable(account)).isAuthorizedCaller(account));
+    }
+
+    /// @notice A registered TRUSTED_EXECUTOR actor is reported as authorized.
+    /// @dev Covers the config-driven true branch: getActorConfig(...).authenticator == TRUSTED_EXECUTOR.
+    function test_isAuthorizedCaller_success_trustedExecutor(uint256 execSeed) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+
+        address executor = address(uint160(bound(execSeed, 10, type(uint160).max)));
+        vm.assume(executor != account && executor != vm.addr(ACTOR_PK));
+
+        _authorizeActor(account, ACTOR_PK, bytes32(bytes20(executor)), TRUSTED_EXECUTOR);
+
+        assertTrue(DefaultAccount(payable(account)).isAuthorizedCaller(executor));
+    }
+
+    /// @notice A registered k1 actor (authenticator != TRUSTED_EXECUTOR) is not an authorized caller.
+    /// @dev Covers the config-driven false branch: a configured actor whose authenticator is the K1 sentinel.
+    function test_isAuthorizedCaller_success_k1ActorNotAuthorized(uint256 actorSeed) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+
+        uint256 actorPk = _boundK1Pk(actorSeed);
+        address actor = vm.addr(actorPk);
+        vm.assume(actor != account && actor != vm.addr(ACTOR_PK));
+
+        _authorizeActor(account, ACTOR_PK, bytes32(bytes20(actor)), k1Authenticator);
+
+        assertFalse(DefaultAccount(payable(account)).isAuthorizedCaller(actor));
+    }
+
+    /// @notice An arbitrary unregistered caller is not authorized.
+    /// @dev Covers the config-driven false branch for an empty config (authenticator == address(0)). Fuzzes caller.
+    function test_isAuthorizedCaller_success_randomCallerNotAuthorized(address caller) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+        vm.assume(caller != account);
+
+        assertFalse(DefaultAccount(payable(account)).isAuthorizedCaller(caller));
     }
 }

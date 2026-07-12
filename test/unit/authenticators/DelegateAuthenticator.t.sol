@@ -4,126 +4,165 @@ pragma solidity ^0.8.30;
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
+/// @notice Fuzzed, branch-complete test suite for DelegateAuthenticator.authenticate.
+///
+///         Source data layout: delegate_address(20) ‖ nested_authenticator(20) ‖ nested_data.
+///         Guards, in source-execution order (all bare `require`, so assert with vm.expectRevert()):
+///           1. require(data.length >= 40)
+///           2. require(nestedAuthenticator != address(this))   // blocks 1-hop recursion
+///           3. require(ACCOUNT_CONFIGURATION.verifySignature(delegate, hash, nestedAuth))
+///         On success returns actorId = bytes32(bytes20(delegate)).
+///
+///         verifySignature(delegate, hash, nestedAuth) is true iff the nested auth resolves to a live
+///         actor on `delegate` whose scope is unrestricted (0x00) or carries SCOPE_SIGNER.
 contract DelegateAuthenticatorTest is AccountConfigurationTest {
-    uint256 constant DELEGATE_PK = 42;
-    uint256 constant DELEGATOR_PK = 43;
+    uint8 constant SCOPE_SIGNER = 0x01;
+    uint8 constant SCOPE_SENDER = 0x02;
+    uint8 constant SCOPE_PAYER = 0x04;
+    uint8 constant SCOPE_CONFIG = 0x08;
+    uint8 constant AUTHORIZE_ACTOR = 0x01;
 
-    function test_authenticate_validDelegation() public {
-        (address delegateAccount,) = _createK1Account(DELEGATE_PK);
+    // ── Guard 1: require(data.length >= 40) ──
 
-        address delegateSigner = vm.addr(DELEGATOR_PK);
-        bytes32 delegatorActorId = bytes32(bytes20(delegateSigner));
-        bytes32 delegateRefActorId = bytes32(bytes20(delegateAccount));
-
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](2);
-        if (delegatorActorId < delegateRefActorId) {
-            actors[0] =
-                AccountConfiguration.InitialActor({actorId: delegatorActorId, authenticator: address(k1Authenticator)});
-            actors[1] = AccountConfiguration.InitialActor({
-                actorId: delegateRefActorId, authenticator: address(delegateAuthenticator)
-            });
-        } else {
-            actors[0] = AccountConfiguration.InitialActor({
-                actorId: delegateRefActorId, authenticator: address(delegateAuthenticator)
-            });
-            actors[1] =
-                AccountConfiguration.InitialActor({actorId: delegatorActorId, authenticator: address(k1Authenticator)});
+    /// @dev Any data shorter than 40 bytes reverts before the delegate/nested slices are read.
+    ///      Fuzzes the full [0,39] length range (including the 39-byte boundary) and the byte content.
+    function test_authenticate_revert_dataTooShort(bytes32 hash, uint256 lenSeed, uint256 fillSeed) public {
+        uint256 len = bound(lenSeed, 0, 39);
+        bytes memory data = new bytes(len);
+        for (uint256 i; i < len; i++) {
+            data[i] = bytes1(uint8(uint256(keccak256(abi.encode(fillSeed, i)))));
         }
 
-        bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        accountConfiguration.createAccount(bytes32(uint256(1)), bytecode, actors);
-
-        bytes32 hash = keccak256("delegate test");
-        bytes memory delegateSig = _signDigest(DELEGATE_PK, hash);
-
-        // Nested auth: k1Authenticator(20) || sig
-        bytes memory nestedAuth = abi.encodePacked(address(k1Authenticator), delegateSig);
-        // delegate data: delegate_address(20) || nestedAuth
-        bytes memory data = abi.encodePacked(delegateAccount, nestedAuth);
-
-        bytes32 actorId = delegateAuthenticator.authenticate(hash, data);
-        assertEq(actorId, delegateRefActorId);
+        vm.expectRevert();
+        delegateAuthenticator.authenticate(hash, data);
     }
 
-    function test_authenticate_revertsOnTooShortData() public {
-        bytes32 hash = keccak256("test");
+    // ── Guard 2: require(nestedAuthenticator != address(this)) — 1-hop recursion block ──
+
+    /// @dev A nested authenticator equal to the DelegateAuthenticator itself is rejected regardless of
+    ///      delegate address or trailing nested data (data is >= 40 bytes so guard 1 passes first).
+    function test_authenticate_revert_selfNestedAuthenticator(address delegate, bytes32 hash, bytes calldata tail)
+        public
+    {
+        address self = address(delegateAuthenticator);
+        bytes memory data = abi.encodePacked(delegate, self, tail);
+        assertGe(data.length, 40);
 
         vm.expectRevert();
-        delegateAuthenticator.authenticate(hash, hex"");
+        delegateAuthenticator.authenticate(hash, data);
     }
 
-    function test_authenticate_revertsOnUnauthorizedNestedActor() public {
-        (address delegateAccount,) = _createK1Account(DELEGATE_PK);
+    // ── Guard 3: require(verifySignature(...)) ──
 
-        bytes32 hash = keccak256("test");
+    /// @dev A well-formed k1 nested auth whose recovered signer is not an actor on the delegate account
+    ///      makes verifySignature return false (authenticateActor reverts, caught as false).
+    function test_authenticate_revert_invalidNestedSignature(uint256 ownerSeed, uint256 wrongSeed, bytes32 hash)
+        public
+    {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 wrongPk = _boundK1Pk(wrongSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(wrongPk));
 
-        bytes memory fakeSig = _signDigest(999, hash);
-        // Nested auth with wrong signer — authenticator recovers wrong address
-        bytes memory nestedAuth = abi.encodePacked(address(k1Authenticator), fakeSig);
+        (address delegateAccount,) = _createK1Account(ownerPk);
+
+        // Signature by a key that is not authorized on the delegate account.
+        bytes memory nestedAuth = abi.encodePacked(k1Authenticator, _signDigest(wrongPk, hash));
         bytes memory data = abi.encodePacked(delegateAccount, nestedAuth);
 
         vm.expectRevert();
         delegateAuthenticator.authenticate(hash, data);
     }
 
-    function test_authenticate_revertsOnDoubleDelegate() public {
-        (address accountA,) = _createK1Account(DELEGATE_PK);
+    /// @dev The nested signature is valid for account A's owner, but the delegate passed is account B, where
+    ///      that signer is not an actor. Confirms the delegate address scopes verification: verifySignature
+    ///      returns false and guard 3 reverts.
+    function test_authenticate_revert_delegateMismatch(uint256 ownerASeed, uint256 ownerBSeed, bytes32 hash) public {
+        uint256 ownerAPk = _boundK1Pk(ownerASeed);
+        uint256 ownerBPk = _boundK1Pk(ownerBSeed);
+        vm.assume(vm.addr(ownerAPk) != vm.addr(ownerBPk));
 
-        bytes32 delegateRefA = bytes32(bytes20(accountA));
-        AccountConfiguration.InitialActor[] memory actorsB = new AccountConfiguration.InitialActor[](1);
-        actorsB[0] =
-            AccountConfiguration.InitialActor({actorId: delegateRefA, authenticator: address(delegateAuthenticator)});
-        bytes memory bytecodeB = _computeERC1167Bytecode(defaultAccountImplementation);
-        address accountB = accountConfiguration.createAccount(bytes32(uint256(10)), bytecodeB, actorsB);
+        (address accountA,) = _createK1AccountWithSalt(ownerAPk, bytes32(uint256(1)));
+        (address accountB,) = _createK1AccountWithSalt(ownerBPk, bytes32(uint256(2)));
+        vm.assume(accountA != accountB);
 
-        bytes32 hash = keccak256("double delegate test");
-        bytes memory k1Sig = _signDigest(DELEGATE_PK, hash);
+        // Valid owner-A signature, but delegate = account B (owner A is not an actor on B).
+        bytes memory nestedAuth = abi.encodePacked(k1Authenticator, _signDigest(ownerAPk, hash));
+        bytes memory data = abi.encodePacked(accountB, nestedAuth);
 
-        // Single-hop B → A: should work
-        bytes memory nestedAuth = abi.encodePacked(address(k1Authenticator), k1Sig);
-        bytes memory singleHopData = abi.encodePacked(accountA, nestedAuth);
-        bytes32 actorId = delegateAuthenticator.authenticate(hash, singleHopData);
-        assertEq(actorId, delegateRefA);
-
-        // Double-hop: try to use accountB as delegate — 1-hop limit triggers
-        bytes memory doubleHopData = abi.encodePacked(accountB, nestedAuth);
-        vm.expectRevert();
-        delegateAuthenticator.authenticate(hash, doubleHopData);
-    }
-
-    function test_authenticate_revertsWhenNestedSignerLacksSignatureScope() public {
-        // Account B: unrestricted owner (DELEGATE_PK) plus a second key scoped to PAYER only.
-        (address delegateAccount,) = _createK1Account(DELEGATE_PK);
-        _authorizeScopedK1Actor(delegateAccount, DELEGATE_PK, DELEGATOR_PK, SCOPE_PAYER);
-
-        bytes32 hash = keccak256("scoped delegate test");
-        // The PAYER-only key is a valid, bound actor on B, but lacks SIGNATURE scope.
-        bytes memory nestedAuth = abi.encodePacked(address(k1Authenticator), _signDigest(DELEGATOR_PK, hash));
-        bytes memory data = abi.encodePacked(delegateAccount, nestedAuth);
-
-        // Delegation now gates SCOPE_SIGNER (verifySignature), so a non-SIGNATURE key must revert.
         vm.expectRevert();
         delegateAuthenticator.authenticate(hash, data);
     }
 
-    function test_authenticate_succeedsWhenNestedSignerHasSignatureScope() public {
-        (address delegateAccount,) = _createK1Account(DELEGATE_PK);
-        _authorizeScopedK1Actor(delegateAccount, DELEGATE_PK, DELEGATOR_PK, SCOPE_SIGNER);
+    /// @dev A nested signer that is a live actor on the delegate account but holds a non-zero scope lacking
+    ///      SCOPE_SIGNER (e.g. PAYER/SENDER/CONFIG combinations) fails verifySignature and guard 3 reverts.
+    function test_authenticate_revert_nestedSignerLacksSignerScope(
+        uint256 ownerSeed,
+        uint256 signerSeed,
+        uint8 scopeSeed,
+        bytes32 hash
+    ) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 signerPk = _boundK1Pk(signerSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(signerPk));
 
-        bytes32 hash = keccak256("scoped delegate test");
-        bytes memory nestedAuth = abi.encodePacked(address(k1Authenticator), _signDigest(DELEGATOR_PK, hash));
+        // Non-zero scope with the SIGNER bit cleared → verifySignature must return false.
+        uint8 scope = uint8(bound(uint256(scopeSeed), 1, 255)) & ~SCOPE_SIGNER;
+        vm.assume(scope != 0);
+
+        (address delegateAccount,) = _createK1Account(ownerPk);
+        _authorizeScopedK1Actor(delegateAccount, ownerPk, signerPk, scope);
+
+        bytes memory nestedAuth = abi.encodePacked(k1Authenticator, _signDigest(signerPk, hash));
+        bytes memory data = abi.encodePacked(delegateAccount, nestedAuth);
+
+        vm.expectRevert();
+        delegateAuthenticator.authenticate(hash, data);
+    }
+
+    // ── Happy paths ──
+
+    /// @dev An unrestricted (scope 0x00) initial owner passes verifySignature via the `scope == 0` branch;
+    ///      authenticate returns actorId = bytes32(bytes20(delegate)).
+    function test_authenticate_success_unrestrictedNestedSigner(uint256 ownerSeed, bytes32 hash) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        (address delegateAccount,) = _createK1Account(ownerPk);
+
+        bytes memory nestedAuth = abi.encodePacked(k1Authenticator, _signDigest(ownerPk, hash));
         bytes memory data = abi.encodePacked(delegateAccount, nestedAuth);
 
         bytes32 actorId = delegateAuthenticator.authenticate(hash, data);
         assertEq(actorId, bytes32(bytes20(delegateAccount)));
     }
 
-    uint8 constant SCOPE_SIGNER = 0x01;
-    uint8 constant SCOPE_PAYER = 0x04;
-    uint8 constant AUTHORIZE_ACTOR = 0x01;
+    /// @dev A scoped actor whose scope carries the SCOPE_SIGNER bit passes verifySignature via the
+    ///      `scope & SCOPE_SIGNER != 0` branch; authenticate returns actorId = bytes32(bytes20(delegate)).
+    function test_authenticate_success_signerScopedNestedSigner(
+        uint256 ownerSeed,
+        uint256 signerSeed,
+        uint8 scopeSeed,
+        bytes32 hash
+    ) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 signerPk = _boundK1Pk(signerSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(signerPk));
 
-    /// @dev Authorizes a new K1 actor (`newPk`) with `scope` on `account`, signed by the
-    ///      unrestricted owner (`ownerPk`) via applySignedActorChanges on the local chain.
+        // Any scope with the SIGNER bit set (always non-zero) → verifySignature true via the SIGNER branch.
+        uint8 scope = uint8(bound(uint256(scopeSeed), 0, 255)) | SCOPE_SIGNER;
+
+        (address delegateAccount,) = _createK1Account(ownerPk);
+        _authorizeScopedK1Actor(delegateAccount, ownerPk, signerPk, scope);
+
+        bytes memory nestedAuth = abi.encodePacked(k1Authenticator, _signDigest(signerPk, hash));
+        bytes memory data = abi.encodePacked(delegateAccount, nestedAuth);
+
+        bytes32 actorId = delegateAuthenticator.authenticate(hash, data);
+        assertEq(actorId, bytes32(bytes20(delegateAccount)));
+    }
+
+    // ── Helpers ──
+
+    /// @dev Authorizes a new K1 actor (`newPk`) with `scope` on `account`, signed by the unrestricted
+    ///      owner (`ownerPk`) via applySignedActorChanges on the local chain.
     function _authorizeScopedK1Actor(address account, uint256 ownerPk, uint256 newPk, uint8 scope) internal {
         AccountConfiguration.ActorConfig memory config = AccountConfiguration.ActorConfig({
             authenticator: address(k1Authenticator), scope: scope, expiry: 0, policyType: 0

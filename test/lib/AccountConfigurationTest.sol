@@ -3,11 +3,17 @@ pragma solidity ^0.8.30;
 
 import {Test} from "forge-std/Test.sol";
 
+import {Base64} from "openzeppelin/utils/Base64.sol";
+import {Math} from "openzeppelin/utils/math/Math.sol";
+import {P256} from "openzeppelin/utils/cryptography/P256.sol";
+import {WebAuthn} from "openzeppelin/utils/cryptography/WebAuthn.sol";
+
 import {AccountConfiguration} from "../../src/AccountConfiguration.sol";
+import {DefaultAccount} from "../../src/accounts/DefaultAccount.sol";
+import {DelegateAuthenticator} from "../../src/authenticators/DelegateAuthenticator.sol";
 import {IAuthenticator} from "../../src/interfaces/IAuthenticator.sol";
 import {P256Authenticator} from "../../src/authenticators/P256Authenticator.sol";
-import {DelegateAuthenticator} from "../../src/authenticators/DelegateAuthenticator.sol";
-import {DefaultAccount} from "../../src/accounts/DefaultAccount.sol";
+import {WebAuthnAuthenticator} from "../../src/authenticators/WebAuthnAuthenticator.sol";
 
 contract AccountConfigurationTest is Test {
     AccountConfiguration public accountConfiguration;
@@ -15,12 +21,14 @@ contract AccountConfigurationTest is Test {
     // K1_AUTHENTICATOR sentinel (address(1)); k1 auth blobs are K1_AUTHENTICATOR(20) || r‖s‖v.
     address public k1Authenticator;
     IAuthenticator public p256Authenticator;
+    IAuthenticator public webAuthnAuthenticator;
     IAuthenticator public delegateAuthenticator;
     address public defaultAccountImplementation;
 
-    /// @dev Test EntryPoint address. 4337 accounts authorize it by registering it as a TRUSTED_EXECUTOR actor
-    ///      (config-driven, revocable), not by hardcoding — tests seed it into the initial actor set at creation.
+    /// @dev Test EntryPoint address; tests register it as a TRUSTED_EXECUTOR actor in the initial actor set.
     address public constant ENTRY_POINT = address(0xEEEE);
+
+    // SECP256K1_ORDER (curve order n) is inherited from forge-std; _boundK1Pk bounds fuzzed keys to [1, n-1].
 
     bytes32 constant SIGNED_ACTOR_CHANGES_TYPEHASH = keccak256(
         "SignedActorChanges(address account,uint256 chainId,uint64 sequence,ActorChange[] actorChanges)"
@@ -33,6 +41,7 @@ contract AccountConfigurationTest is Test {
         accountConfiguration = new AccountConfiguration();
         k1Authenticator = accountConfiguration.K1_AUTHENTICATOR();
         p256Authenticator = IAuthenticator(new P256Authenticator());
+        webAuthnAuthenticator = IAuthenticator(new WebAuthnAuthenticator());
         delegateAuthenticator = IAuthenticator(new DelegateAuthenticator(address(accountConfiguration)));
         defaultAccountImplementation = address(new DefaultAccount(address(accountConfiguration)));
     }
@@ -74,8 +83,7 @@ contract AccountConfigurationTest is Test {
         return abi.encodePacked(r, s, v);
     }
 
-    /// @dev Build a canonical K1 auth blob: K1_AUTHENTICATOR(20) || r‖s‖v. This is the single secp256k1 encoding
-    ///      for the default EOA and every k1 actor; meaning (implicit owner vs scoped key) is decided by config.
+    /// @dev Build a canonical K1 auth blob: K1_AUTHENTICATOR(20) || r‖s‖v.
     function _buildK1Auth(uint256 pk, bytes32 digest) internal view returns (bytes memory) {
         bytes memory sig = _signDigest(pk, digest);
         return abi.encodePacked(k1Authenticator, sig);
@@ -105,5 +113,87 @@ contract AccountConfigurationTest is Test {
                 SIGNED_ACTOR_CHANGES_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(actorChangeHash))
             )
         );
+    }
+
+    // ── Fuzzed key bounding ──
+
+    /// @dev Bound a fuzzed seed to a valid secp256k1 private key in [1, n-1].
+    function _boundK1Pk(uint256 seed) internal pure returns (uint256) {
+        return bound(seed, 1, SECP256K1_ORDER - 1);
+    }
+
+    /// @dev Bound a fuzzed seed to a valid secp256r1 (P-256) private key in [1, n-1].
+    function _boundP256Pk(uint256 seed) internal pure returns (uint256) {
+        return bound(seed, 1, P256.N - 1);
+    }
+
+    // ── P-256 helpers (raw P256Authenticator: r‖s‖x‖y‖preHash = 129 bytes) ──
+
+    /// @dev P-256 public key coordinates for `pk`.
+    function _p256PubKey(uint256 pk) internal view returns (bytes32 x, bytes32 y) {
+        (uint256 ux, uint256 uy) = vm.publicKeyP256(pk);
+        (x, y) = (bytes32(ux), bytes32(uy));
+    }
+
+    /// @dev actorId for a P-256 / WebAuthn key = keccak256(x ‖ y).
+    function _p256ActorId(uint256 pk) internal view returns (bytes32) {
+        (bytes32 x, bytes32 y) = _p256PubKey(pk);
+        return keccak256(abi.encodePacked(x, y));
+    }
+
+    /// @dev Valid P256Authenticator data. s is normalized low-s so OZ P256.verify (which rejects high-s) accepts.
+    function _p256SignData(uint256 pk, bytes32 hash) internal view returns (bytes memory) {
+        (bytes32 x, bytes32 y) = _p256PubKey(pk);
+        (bytes32 r, bytes32 s) = vm.signP256(pk, hash);
+        s = bytes32(Math.min(uint256(s), P256.N - uint256(s)));
+        return abi.encodePacked(r, s, x, y, uint8(0));
+    }
+
+    /// @dev Malleable (high-s) variant of a valid P256 signature: s' = n - lowS > n/2. Must be rejected.
+    function _p256SignDataHighS(uint256 pk, bytes32 hash) internal view returns (bytes memory) {
+        (bytes32 x, bytes32 y) = _p256PubKey(pk);
+        (bytes32 r, bytes32 s) = vm.signP256(pk, hash);
+        uint256 lowS = Math.min(uint256(s), P256.N - uint256(s));
+        return abi.encodePacked(r, bytes32(P256.N - lowS), x, y, uint8(0));
+    }
+
+    // ── WebAuthn helpers (WebAuthnAuthenticator: abi.encode(WebAuthnAuth, x, y)) ──
+    //
+    // The WebAuthnAuthenticator calls WebAuthn.verify(challenge: abi.encode(hash), auth, x, y, requireUV: false).
+    // clientDataJSON prefix `{"type":"webauthn.get","challenge":"` fixes typeIndex = 1, challengeIndex = 23.
+
+    /// @dev Encoded authenticatorData: 32-byte rpIdHash ‖ 1-byte flags ‖ 4-byte counter (37 bytes, > 36 minimum).
+    function _webauthnAuthenticatorData(bytes1 flags) internal pure returns (bytes memory) {
+        return abi.encodePacked(bytes32(0), flags, bytes4(0));
+    }
+
+    function _webauthnClientDataJSON(bytes memory challenge) internal pure returns (string memory) {
+        return string.concat('{"type":"webauthn.get","challenge":"', Base64.encodeURL(challenge), '"}');
+    }
+
+    /// @dev Valid WebAuthnAuthenticator data with User-Present set (requireUV is false in the authenticator).
+    function _webauthnSignData(uint256 pk, bytes32 hash) internal view returns (bytes memory) {
+        return _webauthnSignData(pk, hash, WebAuthn.AUTH_DATA_FLAGS_UP);
+    }
+
+    /// @dev WebAuthnAuthenticator data with caller-chosen authenticator-data flags.
+    function _webauthnSignData(uint256 pk, bytes32 hash, bytes1 flags) internal view returns (bytes memory) {
+        (bytes32 x, bytes32 y) = _p256PubKey(pk);
+        bytes memory authenticatorData = _webauthnAuthenticatorData(flags);
+        string memory clientDataJSON = _webauthnClientDataJSON(abi.encode(hash));
+
+        bytes32 msgHash = sha256(abi.encodePacked(authenticatorData, sha256(bytes(clientDataJSON))));
+        (bytes32 r, bytes32 s) = vm.signP256(pk, msgHash);
+        s = bytes32(Math.min(uint256(s), P256.N - uint256(s)));
+
+        WebAuthn.WebAuthnAuth memory auth = WebAuthn.WebAuthnAuth({
+            r: r,
+            s: s,
+            challengeIndex: 23,
+            typeIndex: 1,
+            authenticatorData: authenticatorData,
+            clientDataJSON: clientDataJSON
+        });
+        return abi.encode(auth, x, y);
     }
 }
