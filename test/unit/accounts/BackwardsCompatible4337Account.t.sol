@@ -365,24 +365,37 @@ contract BackwardsCompatible4337AccountTest is AccountConfigurationTest {
         assertEq(BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 1);
     }
 
-    // ── ERC-1271 signing (admin-only) ──
+    // ── ERC-1271 signing (operational authority) ──
 
-    function test_isValidSignature_scopedActorCannotSign() public {
+    function test_isValidSignature_nonOperationalActorCannotSign() public {
         (address account,) = _create4337Account(ACTOR_PK);
         uint256 scopedPk = 201;
-        _authorizeScopedActor(account, ACTOR_PK, scopedPk, SCOPE_SENDER, address(0), bytes32(0));
+        // A payer-only (non-SENDER) actor is not operational.
+        _authorizeScopedActor(account, ACTOR_PK, scopedPk, SCOPE_SPONSOR_PAYER, address(0), bytes32(0));
 
         bytes32 hash = keccak256("sign me");
         bytes memory authData = _buildK1Auth(scopedPk, hash);
 
-        // A scoped (non-admin) actor cannot ERC-1271 sign — signing is admin-only, so validation must fail.
+        // A non-operational scoped actor cannot ERC-1271 sign, so validation must fail.
         assertEq(DefaultAccount(payable(account)).isValidSignature(hash, authData), bytes4(0xFFFFFFFF));
+    }
+
+    function test_isValidSignature_operationalSenderSigns() public {
+        (address account,) = _create4337Account(ACTOR_PK);
+        uint256 senderPk = 202;
+        // A SENDER-without-POLICY actor is operational and can ERC-1271 sign.
+        _authorizeScopedActor(account, ACTOR_PK, senderPk, SCOPE_SENDER, address(0), bytes32(0));
+
+        bytes32 hash = keccak256("sign me");
+        bytes memory authData = _buildK1Auth(senderPk, hash);
+
+        assertEq(DefaultAccount(payable(account)).isValidSignature(hash, authData), bytes4(0x1626ba7e));
     }
 
     function test_isValidSignature_adminSucceeds() public {
         (address account,) = _create4337Account(ACTOR_PK);
 
-        // The unrestricted admin actor (scope == 0x00) is the only actor that can ERC-1271 sign.
+        // The unrestricted admin actor (scope == 0x00) is operational and can ERC-1271 sign.
         bytes32 hash = keccak256("sign me");
         bytes memory authData = _buildK1Auth(ACTOR_PK, hash);
 

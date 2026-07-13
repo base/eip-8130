@@ -594,13 +594,15 @@ contract AuthenticateTest is AccountConfigurationTest {
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    // verifySignature (admin-only)
+    // verifySignature (operational authority)
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice verifySignature returns true only for the admin actor (scope == 0x00); any scoped actor is false.
-    /// @dev Fuzzes the scope space and asserts the boolean equals `scope == 0`, proving ERC-1271 signing is
-    ///      admin-only — there is no SIGNER grant.
-    function test_verifySignature_success_adminOnlyAcrossScopes(
+    /// @notice verifySignature returns true for any operational actor: the admin (scope == 0x00) or a SENDER actor
+    ///         without POLICY. Payer-only / nonce-only (non-SENDER) scopes are not operational and verify false.
+    /// @dev Fuzzes the (POLICY-cleared) scope space and asserts the boolean equals the operational predicate
+    ///      `scope == 0 || (scope & SCOPE_SENDER != 0)`, proving ERC-1271 signing is operational — not admin-only,
+    ///      and with no dedicated SIGNER grant.
+    function test_verifySignature_success_operationalAcrossScopes(
         uint256 ownerSeed,
         uint256 actorSeed,
         uint8 scopeSeed,
@@ -615,11 +617,60 @@ contract AuthenticateTest is AccountConfigurationTest {
         vm.assume(vm.addr(actorPk) != account);
         _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(vm.addr(actorPk))), address(k1Authenticator), scope);
 
-        bool expected = scope == 0;
+        bool expected = scope == 0 || (scope & SCOPE_SENDER != 0);
         assertEq(accountConfiguration.verifySignature(account, hash, _buildK1Auth(actorPk, hash)), expected);
     }
 
-    /// @notice A policy-bearing actor is NEVER a valid ERC-1271 signer (signing is admin-only).
+    /// @notice A SENDER actor without POLICY is operational and verifies true via verifySignature.
+    /// @dev Positive guard for the operational-authority path: signing is authority a SENDER key already holds via
+    ///      calls, so it does not require the admin scope. Covers SENDER alone and SENDER combined with the
+    ///      SELF_PAYER / NONCE capability bits (still no POLICY).
+    function test_verifySignature_success_trueForSenderWithoutPolicy(uint256 ownerSeed, uint256 actorSeed, bytes32 hash)
+        public
+    {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 actorPk = _boundK1Pk(actorSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(actorPk));
+
+        (address account,) = _createK1Account(ownerPk);
+        vm.assume(vm.addr(actorPk) != account);
+        bytes32 actorId = bytes32(bytes20(vm.addr(actorPk)));
+
+        _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), SCOPE_SENDER);
+        assertTrue(accountConfiguration.verifySignature(account, hash, _buildK1Auth(actorPk, hash)));
+
+        _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), SCOPE_SENDER | SCOPE_SELF_PAYER);
+        assertTrue(accountConfiguration.verifySignature(account, hash, _buildK1Auth(actorPk, hash)));
+
+        _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), SCOPE_SENDER | SCOPE_NONCE);
+        assertTrue(accountConfiguration.verifySignature(account, hash, _buildK1Auth(actorPk, hash)));
+    }
+
+    /// @notice A non-SENDER capability-only actor (SELF_PAYER-only, SPONSOR_PAYER-only, NONCE-only) is NOT
+    ///         operational and verifies false.
+    /// @dev Negative guard: only admin or SENDER-without-POLICY are operational.
+    function test_verifySignature_success_falseForNonSenderScopes(uint256 ownerSeed, uint256 actorSeed, bytes32 hash)
+        public
+    {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 actorPk = _boundK1Pk(actorSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(actorPk));
+
+        (address account,) = _createK1Account(ownerPk);
+        vm.assume(vm.addr(actorPk) != account);
+        bytes32 actorId = bytes32(bytes20(vm.addr(actorPk)));
+
+        _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), SCOPE_SELF_PAYER);
+        assertFalse(accountConfiguration.verifySignature(account, hash, _buildK1Auth(actorPk, hash)));
+
+        _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), SCOPE_SPONSOR_PAYER);
+        assertFalse(accountConfiguration.verifySignature(account, hash, _buildK1Auth(actorPk, hash)));
+
+        _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), SCOPE_NONCE);
+        assertFalse(accountConfiguration.verifySignature(account, hash, _buildK1Auth(actorPk, hash)));
+    }
+
+    /// @notice A policy-bearing actor is NEVER a valid ERC-1271 signer (a POLICY actor is not operational).
     /// @dev verifySignature must return false for a scoped SCOPE_POLICY actor.
     function test_verifySignature_success_falseForPolicyActor(
         uint256 ownerSeed,
@@ -638,7 +689,10 @@ contract AuthenticateTest is AccountConfigurationTest {
         vm.assume(vm.addr(sessionPk) != account);
         bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
         _authorizeGatedActor(account, ownerPk, sessionActorId, SCOPE_POLICY, manager, commitment);
+        assertFalse(accountConfiguration.verifySignature(account, hash, _buildK1Auth(sessionPk, hash)));
 
+        // SENDER | POLICY is still not operational: the POLICY bit disqualifies it even though SENDER is set.
+        _authorizeGatedActor(account, ownerPk, sessionActorId, SCOPE_SENDER | SCOPE_POLICY, manager, commitment);
         assertFalse(accountConfiguration.verifySignature(account, hash, _buildK1Auth(sessionPk, hash)));
     }
 

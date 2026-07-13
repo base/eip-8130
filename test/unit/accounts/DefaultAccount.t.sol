@@ -26,8 +26,10 @@ contract DefaultAccountTest is AccountConfigurationTest {
     bytes4 constant ERC1271_MAGIC = 0x1626ba7e;
     bytes4 constant ERC1271_FAIL = 0xFFFFFFFF;
 
-    // Scope bits: ERC-1271 signing is admin-only (scope == 0x00); SENDER and SPONSOR_PAYER are non-admin scopes.
+    // Scope bits: ERC-1271 signing is operational (admin scope == 0x00, or SENDER without POLICY). SELF_PAYER and
+    // SPONSOR_PAYER are non-SENDER capability scopes that are not operational on their own.
     uint8 constant SCOPE_SENDER = 0x01;
+    uint8 constant SCOPE_SELF_PAYER = 0x08;
     uint8 constant SCOPE_SPONSOR_PAYER = 0x10;
 
     // TRUSTED_EXECUTOR sentinel: the authenticator value that marks an actor as a direct-execution caller.
@@ -271,9 +273,9 @@ contract DefaultAccountTest is AccountConfigurationTest {
         assertEq(result, ERC1271_FAIL);
     }
 
-    /// @notice A valid signature from an actor holding a non-admin scope returns the failure magic value.
-    /// @dev verifySignature is false when scope != 0 (ERC-1271 signing is admin-only); here SCOPE_SENDER.
-    function test_isValidSignature_success_returnsFailureForNonAdminScope(
+    /// @notice A valid signature from a payer-only (non-SENDER, non-admin) actor returns the failure magic value.
+    /// @dev verifySignature is false for a non-operational actor; here SCOPE_SELF_PAYER (no SENDER, no admin).
+    function test_isValidSignature_success_returnsFailureForNonOperationalScope(
         uint256 ownerSeed,
         uint256 actorSeed,
         bytes32 hash
@@ -285,13 +287,35 @@ contract DefaultAccountTest is AccountConfigurationTest {
         address actor = vm.addr(actorPk);
         vm.assume(actor != vm.addr(ownerPk) && actor != account);
 
-        // Authorize the actor with SENDER scope only — it can act but cannot validate signatures.
-        _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(actor)), k1Authenticator, SCOPE_SENDER);
+        // Authorize the actor with SELF_PAYER scope only — it is not operational and cannot validate signatures.
+        _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(actor)), k1Authenticator, SCOPE_SELF_PAYER);
 
         bytes memory authData = _buildK1Auth(actorPk, hash);
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, ERC1271_FAIL);
+    }
+
+    /// @notice A valid signature from an operational SENDER-without-POLICY actor returns the ERC-1271 magic value.
+    /// @dev verifySignature is true for an operational actor: signing encodes authority a SENDER key already holds
+    ///      via calls, so it does not require the admin scope.
+    function test_isValidSignature_success_operationalSenderSigns(uint256 ownerSeed, uint256 actorSeed, bytes32 hash)
+        public
+    {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        (address account,) = _createK1Account(ownerPk);
+
+        uint256 actorPk = _boundK1Pk(actorSeed);
+        address actor = vm.addr(actorPk);
+        vm.assume(actor != vm.addr(ownerPk) && actor != account);
+
+        // Authorize the actor with SENDER scope only (no POLICY) — it is operational and can validate signatures.
+        _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(actor)), k1Authenticator, SCOPE_SENDER);
+
+        bytes memory authData = _buildK1Auth(actorPk, hash);
+
+        bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
+        assertEq(result, ERC1271_MAGIC);
     }
 
     /// @notice A signature blob shorter than the 20-byte authenticator prefix returns the failure magic value.
@@ -327,9 +351,9 @@ contract DefaultAccountTest is AccountConfigurationTest {
         assertEq(result, ERC1271_MAGIC);
     }
 
-    /// @notice ERC-1271 signing is admin-only: a scoped (non-admin) actor never validates, even for the former
-    ///         SIGNER bit (0x10, now SCOPE_SPONSOR_PAYER). Only the scope-0 admin returns the magic value.
-    /// @dev There is no SIGNER grant anymore; a scoped actor's valid signature returns the failure magic value.
+    /// @notice A non-operational scoped actor never validates, even for the former SIGNER bit (0x10, now
+    ///         SCOPE_SPONSOR_PAYER). Only an operational actor (admin, or SENDER-without-POLICY) returns the magic.
+    /// @dev There is no SIGNER grant anymore; a sponsor-payer actor's valid signature returns the failure magic value.
     function test_isValidSignature_success_scopedActorCannotSign(uint256 ownerSeed, uint256 actorSeed, bytes32 hash)
         public
     {

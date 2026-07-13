@@ -11,11 +11,13 @@ import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 ///         Guards, in source-execution order, each reverting with a custom error:
 ///           1. InvalidDataLength       — data.length < 40
 ///           2. RecursiveDelegation     — nestedAuthenticator == address(this) (blocks 1-hop recursion)
-///           3. InvalidNestedSignature  — verifySignature(delegate, hash, nestedAuth) is false
+///           3. InvalidNestedSignature  — the nested auth does not resolve to the admin actor on `delegate`
 ///         On success returns actorId = bytes32(bytes20(delegate)).
 ///
-///         verifySignature(delegate, hash, nestedAuth) is true iff the nested auth resolves to the admin
-///         actor on `delegate` (scope == 0x00) — ERC-1271 signing is admin-only, there is no SIGNER grant.
+///         The delegate vouch requires the nested auth to resolve to the ADMIN actor on `delegate` (scope ==
+///         0x00). This admin-only requirement is enforced independently of verifySignature (via authenticateActor
+///         + an explicit scope == 0 check): verifySignature is now operational (a SENDER-without-POLICY key can
+///         sign), but such a key must NOT be able to vouch as a delegate, so a non-admin nested actor reverts.
 contract DelegateAuthenticatorTest is AccountConfigurationTest {
     uint8 constant SCOPE_SENDER = 0x01;
     uint8 constant SCOPE_POLICY = 0x02;
@@ -54,10 +56,10 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
         delegateAuthenticator.authenticate(hash, data);
     }
 
-    // ── Guard 3: require(verifySignature(...)) ──
+    // ── Guard 3: nested actor must be admin (authenticateActor + scope == 0, decoupled from verifySignature) ──
 
     /// @dev A well-formed k1 nested auth whose recovered signer is not an actor on the delegate account
-    ///      makes verifySignature return false (authenticateActor reverts, caught as false).
+    ///      makes authenticateActor revert (caught) so the delegate vouch reverts InvalidNestedSignature.
     function test_authenticate_revert_invalidNestedSignature(uint256 ownerSeed, uint256 wrongSeed, bytes32 hash)
         public
     {
@@ -76,8 +78,8 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
     }
 
     /// @dev The nested signature is valid for account A's owner, but the delegate passed is account B, where
-    ///      that signer is not an actor. Confirms the delegate address scopes verification: verifySignature
-    ///      returns false and guard 3 reverts.
+    ///      that signer is not an actor. Confirms the delegate address scopes verification: authenticateActor
+    ///      reverts (caught) and guard 3 reverts InvalidNestedSignature.
     function test_authenticate_revert_delegateMismatch(uint256 ownerASeed, uint256 ownerBSeed, bytes32 hash) public {
         uint256 ownerAPk = _boundK1Pk(ownerASeed);
         uint256 ownerBPk = _boundK1Pk(ownerBSeed);
@@ -96,7 +98,7 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
     }
 
     /// @dev A nested signer that is a live actor on the delegate account but holds any non-zero (non-admin) scope
-    ///      fails verifySignature (signing is admin-only) and guard 3 reverts.
+    ///      is rejected: the delegate vouch requires admin (scope == 0x00) and guard 3 reverts.
     function test_authenticate_revert_nestedSignerIsScoped(
         uint256 ownerSeed,
         uint256 signerSeed,
@@ -107,7 +109,7 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
         uint256 signerPk = _boundK1Pk(signerSeed);
         vm.assume(vm.addr(ownerPk) != vm.addr(signerPk));
 
-        // Any non-zero scope → non-admin → verifySignature must return false. Clear POLICY so the scoped actor
+        // Any non-zero scope → non-admin → the delegate vouch must revert. Clear POLICY so the scoped actor
         // needs no policyData at authorization time.
         uint8 scope = uint8(bound(uint256(scopeSeed), 1, 255)) & ~SCOPE_POLICY;
         vm.assume(scope != 0);
@@ -122,9 +124,34 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
         delegateAuthenticator.authenticate(hash, data);
     }
 
+    /// @dev Regression guard for the operational/admin decoupling: a SENDER-without-POLICY nested actor on the
+    ///      delegate account CAN verifySignature (it is operational), yet it MUST NOT satisfy the delegate vouch,
+    ///      which stays admin-only. Asserts verifySignature is true for the same actor, then that the vouch reverts.
+    function test_authenticate_revert_operationalSenderCannotVouch(uint256 ownerSeed, uint256 signerSeed, bytes32 hash)
+        public
+    {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 signerPk = _boundK1Pk(signerSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(signerPk));
+
+        (address delegateAccount,) = _createK1Account(ownerPk);
+        vm.assume(vm.addr(signerPk) != delegateAccount);
+        _authorizeScopedK1Actor(delegateAccount, ownerPk, signerPk, SCOPE_SENDER);
+
+        bytes memory nestedAuth = abi.encodePacked(k1Authenticator, _signDigest(signerPk, hash));
+
+        // The SENDER-without-POLICY actor is operational: verifySignature returns true.
+        assertTrue(accountConfiguration.verifySignature(delegateAccount, hash, nestedAuth));
+
+        // But it cannot vouch as a delegate — the nested check stays admin-only.
+        bytes memory data = abi.encodePacked(delegateAccount, nestedAuth);
+        vm.expectRevert(DelegateAuthenticator.InvalidNestedSignature.selector);
+        delegateAuthenticator.authenticate(hash, data);
+    }
+
     // ── Happy paths ──
 
-    /// @dev An unrestricted (scope 0x00) initial owner passes verifySignature via the `scope == 0` branch;
+    /// @dev An unrestricted (scope 0x00) initial owner is admin, so the delegate vouch succeeds;
     ///      authenticate returns actorId = bytes32(bytes20(delegate)).
     function test_authenticate_success_unrestrictedNestedSigner(uint256 ownerSeed, bytes32 hash) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
@@ -138,7 +165,7 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
     }
 
     /// @dev The former SIGNER bit (0x10, now SCOPE_SPONSOR_PAYER) no longer grants signing: a nested actor holding
-    ///      it is non-admin, so verifySignature returns false and guard 3 reverts.
+    ///      it is non-admin (and non-operational), so the delegate vouch reverts.
     function test_authenticate_revert_formerSignerBitCannotSign(uint256 ownerSeed, uint256 signerSeed, bytes32 hash)
         public
     {

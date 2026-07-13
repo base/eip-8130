@@ -163,7 +163,8 @@ contract AccountConfiguration {
     /// @notice Actor can sponsor gas on behalf of a different sender (payer != sender).
     uint8 public constant SCOPE_SPONSOR_PAYER = 0x10;
 
-    // Note: ERC-1271 signing is admin-only (scope == 0x00), not a grant — there is no SIGNER scope bit.
+    // Note: ERC-1271 signing is authorized for any operational actor (admin scope == 0x00, or a SENDER actor
+    // without POLICY), not a separate grant — there is no SIGNER scope bit. See verifySignature.
 
     // 0x20, 0x40, 0x80 are spare (unused).
 
@@ -597,23 +598,27 @@ contract AccountConfiguration {
     /// @notice Validates an account signature in `authenticator(20) || data` format; never reverts.
     ///
     /// @dev ERC-1271-style boolean check: returns false on any failure (invalid signature, unknown/revoked actor,
-    ///      actorId not bound to the presented authenticator, or a non-admin scoped actor). authenticateActor
+    ///      actorId not bound to the presented authenticator, or a non-operational actor). authenticateActor
     ///      reverts on failure, so it is called externally and the revert is caught.
     ///
     /// @param account The account the signature is validated against.
     /// @param hash The digest that was signed.
     /// @param signature Authenticator(20) || authenticator-specific data.
     ///
-    /// @return verified True if the signature is valid and the resolved actor is the admin.
+    /// @return verified True if the signature is valid and the resolved actor is operational (admin, or a SENDER
+    ///         actor that does not carry POLICY).
     function verifySignature(address account, bytes32 hash, bytes calldata signature)
         external
         view
         returns (bool verified)
     {
         try this.authenticateActor(account, hash, signature) returns (uint8 scope, address) {
-            // ERC-1271 signing is authorized only for the admin actor (scope == 0x00); there is no SIGNER grant.
-            // Scoped signing is expressed at the account layer via a POLICY key's approved-hash pattern, not here.
-            return scope == 0;
+            // ERC-1271 signing is authorized for any operational actor: the admin (scope == 0x00), or a SENDER actor
+            // that is not gated by a policy (SCOPE_SENDER set AND SCOPE_POLICY unset). Signing is an encoding of
+            // authority a SENDER actor already holds via calls, not a separate grant, so it needs no dedicated scope
+            // bit. A POLICY-bearing actor is not operational and cannot sign: a signature acts outside its policy
+            // gate, so honoring one would let it act off its gate.
+            return scope == 0 || ((scope & SCOPE_SENDER != 0) && (scope & SCOPE_POLICY == 0));
         } catch {
             return false;
         }
