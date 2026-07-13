@@ -42,9 +42,9 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
         account = accountConfiguration.createAccount(bytes32(uint256(0xbeef)), bytecode, actors);
     }
 
-    function _lockAccount(address account, uint16 unlockDelay) internal {
-        vm.prank(account);
-        accountConfiguration.lock(unlockDelay);
+    /// @dev Hard-lock `account` via the signed lock path, authorized by its admin owner key `pk`.
+    function _lockAccount(uint256 pk, address account, uint16 unlockDelay) internal {
+        _signedLock(pk, account, unlockDelay);
     }
 
     function _singleCall(address t, uint256 v, bytes memory d) internal pure returns (Call[] memory calls) {
@@ -112,7 +112,7 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
         (address account,) = _createHighRateK1Account(ACTOR_PK);
         vm.deal(account, 1 ether);
 
-        _lockAccount(account, 1 hours);
+        _lockAccount(ACTOR_PK, account, 1 hours);
 
         vm.prank(account);
         vm.expectRevert(DefaultHighRateAccount.AccountLocked.selector);
@@ -123,7 +123,7 @@ contract DefaultHighRateAccountTest is AccountConfigurationTest {
     function test_executeBatch_allowsZeroValueCallsWhenLocked() public {
         (address account,) = _createHighRateK1Account(ACTOR_PK);
 
-        _lockAccount(account, 1 hours);
+        _lockAccount(ACTOR_PK, account, 1 hours);
 
         vm.prank(account);
         DefaultHighRateAccount(payable(account))

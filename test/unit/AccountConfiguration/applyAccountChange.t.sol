@@ -4,31 +4,22 @@ pragma solidity ^0.8.30;
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
-/// @notice Branch-complete, fuzz-by-default suite for the account lock surface: lock(uint16), initiateUnlock(),
-///         isLocked, getLockStatus, the onlyUnlocked modifier and _checkAndClearLock. lock/initiateUnlock act on
-///         msg.sender, so the account is pranked as itself; lock() is callable by any address as itself, so most
-///         lock-side tests prank an arbitrary fuzzed address. Tests that must drive an onlyUnlocked-guarded config
+/// @notice Branch-complete, fuzz-by-default suite for the account lock surface: applySignedLockChanges (op = lock /
+///         unlock), isLocked, getLockStatus, the onlyUnlocked modifier and _checkAndClearLock. Lock state changes
+///         ONLY through applySignedLockChanges — a relayable, admin-authorized (scope 0) signed call — so lock-side
+///         tests use a controllable key: an uninitialized EOA at vm.addr(pk) signs with its inline default-EOA self
+///         (scope 0 admin), and anyone (here the test) relays. Tests that must drive an onlyUnlocked-guarded config
 ///         path (applySignedActorChanges) create a real k1 account so the authenticated actor can change actors.
 contract AccountLockTest is AccountConfigurationTest {
     // ── Local fuzz-bound helpers ──
 
-    /// @dev Keep a fuzzed msg.sender out of the zero address, the system contract, and the forge-std cheatcode /
-    ///      console addresses so vm.prank drives a clean, code-free account acting as itself.
+    /// @dev Keep a fuzzed account out of the zero address, the system contract, and the forge-std cheatcode /
+    ///      console addresses so it acts as a clean, code-free account.
     function _assumeSafeAccount(address account) internal view {
         vm.assume(account != address(0));
         vm.assume(account != address(accountConfiguration));
         vm.assume(account != VM_ADDRESS);
         vm.assume(account != CONSOLE);
-    }
-
-    function _lockAccount(address account, uint16 unlockDelay) internal {
-        vm.prank(account);
-        accountConfiguration.lock(unlockDelay);
-    }
-
-    function _initiateUnlock(address account) internal {
-        vm.prank(account);
-        accountConfiguration.initiateUnlock();
     }
 
     /// @dev A single authorize-actor change granting an unrestricted k1 owner (scope 0, no expiry, no policy).
@@ -48,58 +39,169 @@ contract AccountLockTest is AccountConfigurationTest {
         });
     }
 
-    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    // REVERTS (source order: lock -> initiateUnlock -> onlyUnlocked on other functions)
-    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-
-    /// @notice lock(0) reverts ZeroUnlockDelay for any account acting as itself.
-    /// @dev Exercises the `unlockDelay == 0` guard in lock(); the onlyUnlocked prelude passes (fresh, unlocksAt == 0).
-    function test_lock_revert_zeroUnlockDelay(address account) public {
-        _assumeSafeAccount(account);
-
-        vm.prank(account);
-        vm.expectRevert(AccountConfiguration.ZeroUnlockDelay.selector);
-        accountConfiguration.lock(0);
+    /// @dev Authorize a k1 actor (actorId = bytes32(bytes20(newSigner))) with `scope` on `account`, signed by the
+    ///      account's admin owner `ownerPk`.
+    function _authorizeK1ActorWithScope(address account, uint256 ownerPk, address newSigner, uint8 scope) internal {
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
+            changeType: 0x01,
+            actorId: bytes32(bytes20(newSigner)),
+            data: abi.encode(
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0}),
+                bytes("")
+            )
+        });
+        uint64 chainId = uint64(block.chainid);
+        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        bytes32 digest = _computeActorChangeBatchDigest(account, chainId, seq, changes);
+        bytes memory auth = _buildK1Auth(ownerPk, digest);
+        accountConfiguration.applySignedActorChanges(account, chainId, changes, auth);
     }
 
-    /// @notice lock() reverts AccountIsLocked when the account is already hard-locked.
-    /// @dev Second lock hits onlyUnlocked -> _checkAndClearLock with unlocksAt == type(uint40).max (locked branch).
-    function test_lock_revert_whenAlreadyHardLocked(address account, uint16 firstDelay, uint16 secondDelay) public {
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+    // REVERTS (source order: authorization -> lock op -> unlock op -> onlyUnlocked on other functions)
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+
+    /// @notice applySignedLockChanges reverts UnauthorizedLockChange when the signer is a scoped (non-admin) actor.
+    /// @dev The owner authorizes a SCOPE_SENDER k1 actor, which then signs a lock op; scope != 0 is rejected after
+    ///      authentication, before any lock-state work.
+    function test_applySignedLockChanges_revert_whenSignerNotAdmin(uint256 ownerSeed, uint256 scopedSeed, uint16 delay)
+        public
+    {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 scopedPk = _boundK1Pk(scopedSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(scopedPk));
+        delay = uint16(bound(delay, 1, type(uint16).max));
+        (address account,) = _createK1Account(ownerPk);
+        address scopedSigner = vm.addr(scopedPk);
+        vm.assume(scopedSigner != account);
+
+        _authorizeK1ActorWithScope(account, ownerPk, scopedSigner, accountConfiguration.SCOPE_SENDER());
+
+        bytes memory auth = _lockAuth(scopedPk, account, delay);
+        vm.expectRevert(AccountConfiguration.UnauthorizedLockChange.selector);
+        accountConfiguration.applySignedLockChanges(account, LOCK_OP, delay, auth);
+    }
+
+    /// @notice applySignedLockChanges reverts UnknownLockOp for any op other than LOCK_OP / UNLOCK_OP.
+    function test_applySignedLockChanges_revert_unknownOp(uint256 pkSeed, uint8 op, uint16 delay) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+        vm.assume(op != LOCK_OP && op != UNLOCK_OP);
+
+        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        bytes32 digest = _computeLockChangeDigest(account, block.chainid, op, delay, seq);
+        bytes memory auth = _buildK1Auth(pk, digest);
+
+        vm.expectRevert(AccountConfiguration.UnknownLockOp.selector);
+        accountConfiguration.applySignedLockChanges(account, op, delay, auth);
+    }
+
+    /// @notice A lock op (op = 1) with a zero unlock delay reverts ZeroUnlockDelay.
+    /// @dev Exercises the `unlockDelay == 0` guard on the lock branch; the unlocked-state check passes (fresh account).
+    function test_lock_revert_zeroUnlockDelay(uint256 pkSeed) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+
+        bytes memory auth = _lockAuth(pk, account, 0);
+        vm.expectRevert(AccountConfiguration.ZeroUnlockDelay.selector);
+        accountConfiguration.applySignedLockChanges(account, LOCK_OP, 0, auth);
+    }
+
+    /// @notice A lock op reverts AccountIsLocked when the account is already hard-locked.
+    /// @dev Second lock hits _checkAndClearLock with unlocksAt == type(uint40).max (locked branch).
+    function test_lock_revert_whenAlreadyHardLocked(uint256 pkSeed, uint16 firstDelay, uint16 secondDelay) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
         _assumeSafeAccount(account);
         firstDelay = uint16(bound(firstDelay, 1, type(uint16).max));
         secondDelay = uint16(bound(secondDelay, 1, type(uint16).max));
 
-        _lockAccount(account, firstDelay);
+        _signedLock(pk, account, firstDelay);
 
-        vm.prank(account);
+        bytes memory auth = _lockAuth(pk, account, secondDelay);
         vm.expectRevert(AccountConfiguration.AccountIsLocked.selector);
-        accountConfiguration.lock(secondDelay);
+        accountConfiguration.applySignedLockChanges(account, LOCK_OP, secondDelay, auth);
     }
 
-    /// @notice initiateUnlock() reverts NotLocked when the account has never been locked (unlocksAt == 0).
-    /// @dev The `unlocksAt != type(uint40).max` guard fires on a fresh account whose unlocksAt is 0.
-    function test_initiateUnlock_revert_whenNeverLocked(address account) public {
+    /// @notice An unlock op (op = 2) with a non-zero unlock delay reverts InvalidUnlockDelay.
+    /// @dev The delay guard fires before the hard-locked-state check, so it trips even on a fresh account.
+    function test_unlock_revert_nonZeroUnlockDelay(uint256 pkSeed, uint16 delay) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+        delay = uint16(bound(delay, 1, type(uint16).max));
+
+        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        bytes32 digest = _computeLockChangeDigest(account, block.chainid, UNLOCK_OP, delay, seq);
+        bytes memory auth = _buildK1Auth(pk, digest);
+
+        vm.expectRevert(AccountConfiguration.InvalidUnlockDelay.selector);
+        accountConfiguration.applySignedLockChanges(account, UNLOCK_OP, delay, auth);
+    }
+
+    /// @notice An unlock op reverts NotLocked when the account has never been locked (unlocksAt == 0).
+    function test_initiateUnlock_revert_whenNeverLocked(uint256 pkSeed) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
         _assumeSafeAccount(account);
 
-        vm.prank(account);
+        bytes memory auth = _unlockAuth(pk, account);
         vm.expectRevert(AccountConfiguration.NotLocked.selector);
-        accountConfiguration.initiateUnlock();
+        accountConfiguration.applySignedLockChanges(account, UNLOCK_OP, 0, auth);
     }
 
-    /// @notice initiateUnlock() reverts NotLocked once an unlock has already been initiated.
-    /// @dev After initiateUnlock, unlocksAt is a finite timestamp (!= max), so a second initiateUnlock reverts.
-    function test_initiateUnlock_revert_whenUnlockAlreadyInitiated(address account, uint16 delay, uint256 t0) public {
+    /// @notice An unlock op reverts NotLocked once an unlock has already been initiated.
+    /// @dev After the first unlock, unlocksAt is a finite timestamp (!= max), so a second unlock reverts.
+    function test_initiateUnlock_revert_whenUnlockAlreadyInitiated(uint256 pkSeed, uint16 delay, uint256 t0) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
         _assumeSafeAccount(account);
         delay = uint16(bound(delay, 1, type(uint16).max));
         t0 = bound(t0, 1, 1e9);
 
-        _lockAccount(account, delay);
+        _signedLock(pk, account, delay);
         vm.warp(t0);
-        _initiateUnlock(account);
+        _signedUnlock(pk, account);
 
-        vm.prank(account);
+        bytes memory auth = _unlockAuth(pk, account);
         vm.expectRevert(AccountConfiguration.NotLocked.selector);
-        accountConfiguration.initiateUnlock();
+        accountConfiguration.applySignedLockChanges(account, UNLOCK_OP, 0, auth);
+    }
+
+    /// @notice A replayed lock auth fails: the local sequence advanced on the first success, so the signed digest no
+    ///         longer matches and authentication fails.
+    function test_applySignedLockChanges_revert_whenAuthReplayed(uint256 pkSeed, uint16 delay) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+        delay = uint16(bound(delay, 1, type(uint16).max));
+
+        bytes memory auth = _lockAuth(pk, account, delay); // signed over sequence 0
+        accountConfiguration.applySignedLockChanges(account, LOCK_OP, delay, auth); // sequence 0 -> 1
+
+        vm.expectRevert();
+        accountConfiguration.applySignedLockChanges(account, LOCK_OP, delay, auth);
+    }
+
+    /// @notice A lock auth signed over a sequence other than the account's current one fails to authenticate.
+    function test_applySignedLockChanges_revert_whenSequenceWrong(uint256 pkSeed, uint16 delay, uint64 seqOffset)
+        public
+    {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+        delay = uint16(bound(delay, 1, type(uint16).max));
+        seqOffset = uint64(bound(seqOffset, 1, type(uint64).max - 1));
+
+        uint64 wrongSeq = accountConfiguration.getChangeSequences(account).local + seqOffset;
+        bytes32 digest = _computeLockChangeDigest(account, block.chainid, LOCK_OP, delay, wrongSeq);
+        bytes memory auth = _buildK1Auth(pk, digest);
+
+        vm.expectRevert();
+        accountConfiguration.applySignedLockChanges(account, LOCK_OP, delay, auth);
     }
 
     /// @notice applySignedActorChanges reverts AccountIsLocked while the target account is hard-locked.
@@ -109,7 +211,7 @@ contract AccountLockTest is AccountConfigurationTest {
         delay = uint16(bound(delay, 1, type(uint16).max));
         (address account,) = _createK1Account(pk);
 
-        _lockAccount(account, delay);
+        _signedLock(pk, account, delay);
 
         AccountConfiguration.ActorChange[] memory changes = _oneAuthorizeChange(bytes32(bytes20(vm.addr(pk))));
         uint64 chainId = uint64(block.chainid);
@@ -124,11 +226,13 @@ contract AccountLockTest is AccountConfigurationTest {
     /// @notice importAccount reverts AccountIsLocked while the target account is hard-locked.
     /// @dev The onlyUnlocked(account) modifier runs before the import body, so the lock guard is asserted in
     ///      isolation on a second, distinct function (empty initialActors never reached).
-    function test_importAccount_revert_whenLocked(address account, uint16 delay) public {
+    function test_importAccount_revert_whenLocked(uint256 pkSeed, uint16 delay) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
         _assumeSafeAccount(account);
         delay = uint16(bound(delay, 1, type(uint16).max));
 
-        _lockAccount(account, delay);
+        _signedLock(pk, account, delay);
 
         AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](0);
         vm.expectRevert(AccountConfiguration.AccountIsLocked.selector);
@@ -139,13 +243,15 @@ contract AccountLockTest is AccountConfigurationTest {
     // HAPPY PATHS / BRANCH COVERAGE
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice lock() hard-locks the account: unlocksAt == type(uint40).max and the delay is stored.
+    /// @notice A lock op hard-locks the account: unlocksAt == type(uint40).max and the delay is stored.
     /// @dev getLockStatus reports locked, not-yet-initiated, sentinel unlocksAt and the stored delay; isLocked true.
-    function test_lock_success_setsHardLockStatus(address account, uint16 delay) public {
+    function test_lock_success_setsHardLockStatus(uint256 pkSeed, uint16 delay) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
         _assumeSafeAccount(account);
         delay = uint16(bound(delay, 1, type(uint16).max));
 
-        _lockAccount(account, delay);
+        _signedLock(pk, account, delay);
 
         (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 storedDelay) =
             accountConfiguration.getLockStatus(account);
@@ -156,41 +262,45 @@ contract AccountLockTest is AccountConfigurationTest {
         assertTrue(accountConfiguration.isLocked(account));
     }
 
-    /// @notice lock() emits AccountLocked(account, unlockDelay) exactly once. Sole assertion of this event.
-    function test_lock_success_emitsAccountLocked(address account, uint16 delay) public {
+    /// @notice A lock op emits AccountLocked(account, unlockDelay) exactly once. Sole assertion of this event.
+    function test_lock_success_emitsAccountLocked(uint256 pkSeed, uint16 delay) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
         _assumeSafeAccount(account);
         delay = uint16(bound(delay, 1, type(uint16).max));
 
+        bytes memory auth = _lockAuth(pk, account, delay);
         vm.expectEmit(true, false, false, true, address(accountConfiguration));
         emit AccountConfiguration.AccountLocked(account, delay);
-        vm.prank(account);
-        accountConfiguration.lock(delay);
+        accountConfiguration.applySignedLockChanges(account, LOCK_OP, delay, auth);
     }
 
     /// @notice An account can be re-locked after a prior unlock delay has fully elapsed.
     /// @dev Drives _checkAndClearLock through its expiry-clear branch (block.timestamp >= unlocksAt, unlocksAt != 0):
     ///      the stale timestamp is cleared to 0 and the fresh lock succeeds, hard-locking again with the new delay.
     function test_lock_success_relockAfterUnlockExpired(
-        address account,
+        uint256 pkSeed,
         uint16 firstDelay,
         uint16 secondDelay,
         uint256 t0,
         uint256 extra
     ) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
         _assumeSafeAccount(account);
         firstDelay = uint16(bound(firstDelay, 1, type(uint16).max));
         secondDelay = uint16(bound(secondDelay, 1, type(uint16).max));
         t0 = bound(t0, 1, 1e9);
         extra = bound(extra, 0, 1e9);
 
-        _lockAccount(account, firstDelay);
+        _signedLock(pk, account, firstDelay);
         vm.warp(t0);
-        _initiateUnlock(account);
+        _signedUnlock(pk, account);
 
         vm.warp(t0 + firstDelay + extra); // at or past unlocksAt: account is unlocked
         assertFalse(accountConfiguration.isLocked(account));
 
-        _lockAccount(account, secondDelay);
+        _signedLock(pk, account, secondDelay);
 
         (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 storedDelay) =
             accountConfiguration.getLockStatus(account);
@@ -200,16 +310,18 @@ contract AccountLockTest is AccountConfigurationTest {
         assertEq(storedDelay, secondDelay);
     }
 
-    /// @notice initiateUnlock() sets unlocksAt = block.timestamp + delay and zeroes the stored delay.
+    /// @notice An unlock op sets unlocksAt = block.timestamp + delay and zeroes the stored delay.
     /// @dev Before the delay elapses the account is still locked but now reports hasInitiatedUnlock; unlockDelay is 0.
-    function test_initiateUnlock_success_setsUnlocksAtAndClearsDelay(address account, uint16 delay, uint256 t0) public {
+    function test_initiateUnlock_success_setsUnlocksAtAndClearsDelay(uint256 pkSeed, uint16 delay, uint256 t0) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
         _assumeSafeAccount(account);
         delay = uint16(bound(delay, 1, type(uint16).max));
         t0 = bound(t0, 1, 1e9);
 
-        _lockAccount(account, delay);
+        _signedLock(pk, account, delay);
         vm.warp(t0);
-        _initiateUnlock(account);
+        _signedUnlock(pk, account);
 
         (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 storedDelay) =
             accountConfiguration.getLockStatus(account);
@@ -220,19 +332,21 @@ contract AccountLockTest is AccountConfigurationTest {
         assertTrue(accountConfiguration.isLocked(account));
     }
 
-    /// @notice initiateUnlock() emits AccountUnlockInitiated(account, unlocksAt) exactly once. Sole assertion.
-    function test_initiateUnlock_success_emitsAccountUnlockInitiated(address account, uint16 delay, uint256 t0) public {
+    /// @notice An unlock op emits AccountUnlockInitiated(account, unlocksAt) exactly once. Sole assertion.
+    function test_initiateUnlock_success_emitsAccountUnlockInitiated(uint256 pkSeed, uint16 delay, uint256 t0) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
         _assumeSafeAccount(account);
         delay = uint16(bound(delay, 1, type(uint16).max));
         t0 = bound(t0, 1, 1e9);
 
-        _lockAccount(account, delay);
+        _signedLock(pk, account, delay);
         vm.warp(t0);
 
+        bytes memory auth = _unlockAuth(pk, account);
         vm.expectEmit(true, false, false, true, address(accountConfiguration));
         emit AccountConfiguration.AccountUnlockInitiated(account, uint40(t0 + delay));
-        vm.prank(account);
-        accountConfiguration.initiateUnlock();
+        accountConfiguration.applySignedLockChanges(account, UNLOCK_OP, 0, auth);
     }
 
     /// @notice isLocked is false for an account that has never been locked (unlocksAt == 0).
@@ -243,30 +357,34 @@ contract AccountLockTest is AccountConfigurationTest {
     }
 
     /// @notice isLocked stays true for a hard-locked account at any reachable timestamp (unlocksAt == max sentinel).
-    function test_isLocked_success_trueWhileHardLocked(address account, uint16 delay, uint256 ts) public {
+    function test_isLocked_success_trueWhileHardLocked(uint256 pkSeed, uint16 delay, uint256 ts) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
         _assumeSafeAccount(account);
         delay = uint16(bound(delay, 1, type(uint16).max));
 
-        _lockAccount(account, delay);
+        _signedLock(pk, account, delay);
 
         vm.warp(bound(ts, 1, 1e12)); // any timestamp below the uint40 sentinel keeps block.timestamp < unlocksAt
         assertTrue(accountConfiguration.isLocked(account));
     }
 
-    /// @notice isLocked remains true after initiateUnlock while block.timestamp is strictly before unlocksAt.
+    /// @notice isLocked remains true after an unlock is initiated while block.timestamp is strictly before unlocksAt.
     function test_isLocked_success_trueBeforeUnlockDelayElapses(
-        address account,
+        uint256 pkSeed,
         uint16 delay,
         uint256 t0,
         uint256 within
     ) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
         _assumeSafeAccount(account);
         delay = uint16(bound(delay, 1, type(uint16).max));
         t0 = bound(t0, 1, 1e9);
 
-        _lockAccount(account, delay);
+        _signedLock(pk, account, delay);
         vm.warp(t0);
-        _initiateUnlock(account);
+        _signedUnlock(pk, account);
 
         vm.warp(bound(within, t0, t0 + delay - 1)); // strictly before unlocksAt == t0 + delay
         assertTrue(accountConfiguration.isLocked(account));
@@ -274,20 +392,19 @@ contract AccountLockTest is AccountConfigurationTest {
 
     /// @notice isLocked flips to false once block.timestamp reaches or passes unlocksAt after an initiated unlock.
     /// @dev Includes the exact boundary (extra == 0): isLocked is `block.timestamp < unlocksAt`, so == is unlocked.
-    function test_isLocked_success_falseAfterUnlockDelayElapses(
-        address account,
-        uint16 delay,
-        uint256 t0,
-        uint256 extra
-    ) public {
+    function test_isLocked_success_falseAfterUnlockDelayElapses(uint256 pkSeed, uint16 delay, uint256 t0, uint256 extra)
+        public
+    {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
         _assumeSafeAccount(account);
         delay = uint16(bound(delay, 1, type(uint16).max));
         t0 = bound(t0, 1, 1e9);
         extra = bound(extra, 0, 1e9);
 
-        _lockAccount(account, delay);
+        _signedLock(pk, account, delay);
         vm.warp(t0);
-        _initiateUnlock(account);
+        _signedUnlock(pk, account);
 
         vm.warp(t0 + delay + extra); // at or past unlocksAt
         assertFalse(accountConfiguration.isLocked(account));
@@ -308,19 +425,21 @@ contract AccountLockTest is AccountConfigurationTest {
     /// @dev getLockStatus is a pure view: it never runs _checkAndClearLock, so the finite unlocksAt is not zeroed and
     ///      the hasInitiatedUnlock branch (unlocksAt != 0 && != max) reports true even though the account is unlocked.
     function test_getLockStatus_success_afterUnlockElapsedNotCleared(
-        address account,
+        uint256 pkSeed,
         uint16 delay,
         uint256 t0,
         uint256 extra
     ) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
         _assumeSafeAccount(account);
         delay = uint16(bound(delay, 1, type(uint16).max));
         t0 = bound(t0, 1, 1e9);
         extra = bound(extra, 0, 1e9);
 
-        _lockAccount(account, delay);
+        _signedLock(pk, account, delay);
         vm.warp(t0);
-        _initiateUnlock(account);
+        _signedUnlock(pk, account);
 
         vm.warp(t0 + delay + extra); // past unlocksAt, but no onlyUnlocked call to clear it
 
@@ -332,7 +451,7 @@ contract AccountLockTest is AccountConfigurationTest {
         assertEq(storedDelay, 0);
     }
 
-    /// @notice Full lock -> initiateUnlock -> warp-past -> config change cycle: once the delay elapses,
+    /// @notice Full lock -> initiate-unlock -> warp-past -> config change cycle: once the delay elapses,
     ///         _checkAndClearLock lets an onlyUnlocked config change through and the new actor is authorized.
     /// @dev Drives the expiry-clear branch of _checkAndClearLock on the real applySignedActorChanges path.
     function test_applySignedActorChanges_success_afterFullUnlockCycle(
@@ -353,9 +472,9 @@ contract AccountLockTest is AccountConfigurationTest {
         vm.assume(newActor != vm.addr(pk));
         bytes32 newActorId = bytes32(bytes20(newActor));
 
-        _lockAccount(account, delay);
+        _signedLock(pk, account, delay);
         vm.warp(t0);
-        _initiateUnlock(account);
+        _signedUnlock(pk, account);
         vm.warp(t0 + delay + extra); // at or past unlocksAt: unlocked
         assertFalse(accountConfiguration.isLocked(account));
 

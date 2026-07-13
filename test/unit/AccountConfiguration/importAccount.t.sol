@@ -147,21 +147,22 @@ contract ImportAccountTest is AccountConfigurationTest {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     /// @notice Verifies importAccount reverts when the account is hard-locked (onlyUnlocked runs before all else).
-    /// @dev lock() sets unlocksAt = type(uint40).max, so the account stays locked regardless of warp; any non-zero
-    ///      unlock delay locks it. The onlyUnlocked modifier trips before the chainId/sequence/signature checks.
+    /// @dev A lock op sets unlocksAt = type(uint40).max, so the account stays locked regardless of warp; any non-zero
+    ///      unlock delay locks it. The onlyUnlocked modifier trips before the chainId/sequence/signature checks, so
+    ///      the account is a controllable EOA (its inline default-EOA self signs the lock) and the actors/sig are
+    ///      never reached.
     function test_importAccount_revert_accountIsLocked(uint256 ownerSeed, uint16 delay, bool multichain) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         vm.assume(delay != 0);
+        address account = vm.addr(ownerPk);
 
-        AccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(ownerPk));
+        AccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(account);
         uint256 chainId = _acceptedChainId(multichain);
-        (MockERC1271Wallet wallet, bytes memory sig) = _walletAndSig(ownerPk, chainId, actors);
 
-        vm.prank(address(wallet));
-        accountConfiguration.lock(delay);
+        _signedLock(ownerPk, account, delay);
 
         vm.expectRevert(AccountConfiguration.AccountIsLocked.selector);
-        accountConfiguration.importAccount(address(wallet), chainId, actors, sig);
+        accountConfiguration.importAccount(account, chainId, actors, "");
     }
 
     /// @notice Verifies importAccount reverts for a chainId that is neither 0 (multichain) nor the current chain.

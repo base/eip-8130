@@ -98,7 +98,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         pk = _boundK1Pk(pk);
         (address account, bytes32 ownerId) = _createK1Account(pk);
         vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
-        _lockAccount(account);
+        _lockAccount(pk, account);
 
         AccountConfiguration.ActorChange[] memory ch = _authorizeChange(actorId, address(k1Authenticator), 0, "");
         bytes memory auth = _authOver(account, pk, ch);
@@ -871,8 +871,8 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
     }
 
-    function _lockAccount(address account) internal {
-        vm.prank(account);
-        accountConfiguration.lock(1 hours);
+    /// @dev Hard-lock `account` via the signed lock path, authorized by its admin owner key `pk`.
+    function _lockAccount(uint256 pk, address account) internal {
+        _signedLock(pk, account, 1 hours);
     }
 }

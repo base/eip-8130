@@ -111,6 +111,13 @@ contract AccountConfiguration {
     bytes32 public constant ACTORCHANGE_TYPEHASH =
         keccak256("ActorChange(uint8 changeType,bytes32 actorId,bytes data)");
 
+    /// @notice Typehash binding a signed lock-state change to its account, chainId, op, unlock delay, and sequence.
+    ///
+    /// @dev NOT compliant with EIP-712, to mitigate phishing attacks. Lock changes are local-channel only, so the
+    ///      digest always binds the current chainId (there is no multichain lock).
+    bytes32 public constant LOCK_CHANGE_TYPEHASH =
+        keccak256("SignedLockChange(address account,uint256 chainId,uint8 op,uint16 unlockDelay,uint64 sequence)");
+
     // ----------------------------------------------------------------------------------------------------------------
     // ACTOR CHANGE TYPES
     // ----------------------------------------------------------------------------------------------------------------
@@ -120,6 +127,16 @@ contract AccountConfiguration {
 
     /// @notice Revoke an actor from the account
     uint8 public constant REVOKE_ACTOR = 0x02;
+
+    // ----------------------------------------------------------------------------------------------------------------
+    // LOCK CHANGE OPS
+    // ----------------------------------------------------------------------------------------------------------------
+
+    /// @notice applySignedLockChanges op that hard-locks the account.
+    uint8 public constant LOCK_OP = 0x01;
+
+    /// @notice applySignedLockChanges op that initiates the unlock of a hard-locked account.
+    uint8 public constant UNLOCK_OP = 0x02;
 
     // ----------------------------------------------------------------------------------------------------------------
     // ACTOR ELEVATED SCOPES
@@ -252,11 +269,21 @@ contract AccountConfiguration {
     /// @notice The importAccount ERC-1271 signature check did not return the magic value.
     error InvalidImportSignature();
 
-    /// @notice lock() was called with a zero unlock delay.
+    /// @notice A lock op (op = 1) carried a zero unlock delay.
     error ZeroUnlockDelay();
 
-    /// @notice initiateUnlock() was called when the account was not in the locked (unlocksAt == max) state.
+    /// @notice An unlock op (op = 2) was requested when the account was not in the hard-locked (unlocksAt == max)
+    ///         state (never locked, or an unlock was already initiated).
     error NotLocked();
+
+    /// @notice applySignedLockChanges carried an unrecognized op (neither LOCK_OP nor UNLOCK_OP).
+    error UnknownLockOp();
+
+    /// @notice An unlock op (op = 2) carried a non-zero unlock delay (unlock delay is set only by the lock op).
+    error InvalidUnlockDelay();
+
+    /// @notice The authenticated actor lacks the scope required to change the lock state (admin, scope 0, only).
+    error UnauthorizedLockChange();
 
     /// @notice The auth blob is shorter than the 20-byte authenticator selector prefix.
     error InvalidAuthLength();
@@ -500,35 +527,67 @@ contract AccountConfiguration {
     // ACCOUNT LOCKS
     // ----------------------------------------------------------------------------------------------------------------
 
-    /// @notice Locks the caller's account to freeze actor configuration until an unlock is initiated and elapses.
+    /// @notice Applies a signed lock-state change (hard-lock or initiate-unlock) to an account.
     ///
-    /// @dev Reverts with AccountIsLocked when the account is already locked.
-    /// @dev Reverts with ZeroUnlockDelay when `unlockDelay` is zero.
+    /// @dev Lock state changes ONLY through this signed EVM entry point. Authorization comes entirely from the
+    ///      signature, so anyone may relay the call; the digest is authenticated against the account's actors and
+    ///      the resolved actor must be unrestricted (scope 0, admin) — there is no elevated scope for changing the
+    ///      lock. Lock changes are local-channel only: the digest binds `block.chainid` and a monotonic per-account
+    ///      `localSequence` consumed on each call (mirroring applySignedActorChanges so both signed entry points
+    ///      stay coherent on the same counter).
+    /// @dev op = LOCK_OP (1): only from the unlocked state (reverts AccountIsLocked if currently locked). Stores
+    ///      `unlockDelay` and sets the hard-locked state (unlocksAt == type(uint40).max). Emits AccountLocked.
+    /// @dev op = UNLOCK_OP (2): only from the hard-locked state with no pending unlock (reverts NotLocked
+    ///      otherwise); `unlockDelay` MUST be 0. Sets unlocksAt = block.timestamp + storedDelay, zeroes the stored
+    ///      delay. Emits AccountUnlockInitiated.
+    /// @dev Reverts with InvalidAuthLength, InvalidSignature, AuthenticationFailed, AuthenticatorMismatch,
+    ///      ActorExpired, or DefaultEoaRevoked when `auth` fails to authenticate a live actor.
+    /// @dev Reverts with UnauthorizedLockChange when the authenticated actor is not unrestricted (scope != 0).
+    /// @dev Reverts with ZeroUnlockDelay when a lock op carries a zero unlock delay.
+    /// @dev Reverts with AccountIsLocked when a lock op targets an already-locked account.
+    /// @dev Reverts with InvalidUnlockDelay when an unlock op carries a non-zero unlock delay.
+    /// @dev Reverts with NotLocked when an unlock op targets an account that is not hard-locked.
+    /// @dev Reverts with UnknownLockOp when `op` is neither LOCK_OP nor UNLOCK_OP.
     ///
-    /// @param unlockDelay Delay in seconds, after initiateUnlock, before the account unlocks (max uint16, ~18 hours).
-    function lock(uint16 unlockDelay) external onlyUnlocked(msg.sender) {
-        // Require non-zero unlock delay
-        if (unlockDelay == 0) revert ZeroUnlockDelay();
+    /// @param account The account whose lock state is changed.
+    /// @param op The lock operation: LOCK_OP (1) to hard-lock, UNLOCK_OP (2) to initiate an unlock.
+    /// @param unlockDelay Delay in seconds before the account unlocks after an unlock is initiated (lock op only,
+    ///        max uint16, ~18 hours); MUST be 0 for the unlock op.
+    /// @param auth Authenticator(20) || authenticator-specific data authenticating an unrestricted actor.
+    function applySignedLockChanges(address account, uint8 op, uint16 unlockDelay, bytes calldata auth) external {
+        // Local channel only: bind the digest to the current chain and consume the local sequence (post-increment,
+        // hashing the pre-increment value — identical to applySignedActorChanges so both paths share one counter).
+        uint64 sequence = _accountState[account].localSequence++;
 
-        AccountState storage config = _accountState[msg.sender];
+        bytes32 digest = _computeSignedLockChangesDigest(account, block.chainid, op, unlockDelay, sequence);
+        (uint8 scope,) = authenticateActor(account, digest, auth);
 
-        config.unlocksAt = type(uint40).max;
-        config.unlockDelay = unlockDelay;
-        emit AccountLocked(msg.sender, unlockDelay);
-    }
+        // Only an unrestricted actor (scope 0) may change the lock; there is no elevated "admin" scope bit.
+        if (scope != 0) revert UnauthorizedLockChange();
 
-    /// @notice Initiates unlocking the caller's account; it becomes unlocked once the configured delay elapses.
-    ///
-    /// @dev Reverts with NotLocked when the account is not in the locked state.
-    function initiateUnlock() external {
-        AccountState storage config = _accountState[msg.sender];
+        AccountState storage config = _accountState[account];
 
-        // Require account is locked and unlock has not been initiated
-        if (config.unlocksAt != type(uint40).max) revert NotLocked();
+        if (op == LOCK_OP) {
+            // Lock only from the unlocked state; clear any stale (expired) unlock timestamp first.
+            if (_checkAndClearLock(account)) revert AccountIsLocked();
+            // Require non-zero unlock delay.
+            if (unlockDelay == 0) revert ZeroUnlockDelay();
 
-        config.unlocksAt = uint40(block.timestamp + config.unlockDelay);
-        config.unlockDelay = 0;
-        emit AccountUnlockInitiated(msg.sender, config.unlocksAt);
+            config.unlocksAt = type(uint40).max;
+            config.unlockDelay = unlockDelay;
+            emit AccountLocked(account, unlockDelay);
+        } else if (op == UNLOCK_OP) {
+            // The unlock op never sets the delay; it consumes the delay stored by the lock op.
+            if (unlockDelay != 0) revert InvalidUnlockDelay();
+            // Require the account is hard-locked and an unlock has not already been initiated.
+            if (config.unlocksAt != type(uint40).max) revert NotLocked();
+
+            config.unlocksAt = uint40(block.timestamp + config.unlockDelay);
+            config.unlockDelay = 0;
+            emit AccountUnlockInitiated(account, config.unlocksAt);
+        } else {
+            revert UnknownLockOp();
+        }
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -996,6 +1055,19 @@ contract AccountConfiguration {
                 keccak256(abi.encodePacked(actorChangeHashes))
             )
         );
+    }
+
+    /// @dev Computes the digest signed over an applySignedLockChanges call, binding the lock op and its unlock delay
+    ///      to `account`, `chainId`, and `sequence` via LOCK_CHANGE_TYPEHASH. Lock changes are local-channel only,
+    ///      so callers always pass the current chainId.
+    function _computeSignedLockChangesDigest(
+        address account,
+        uint256 chainId,
+        uint8 op,
+        uint16 unlockDelay,
+        uint64 sequence
+    ) internal pure returns (bytes32) {
+        return keccak256(abi.encode(LOCK_CHANGE_TYPEHASH, account, chainId, op, unlockDelay, sequence));
     }
 
     // ----------------------------------------------------------------------------------------------------------------

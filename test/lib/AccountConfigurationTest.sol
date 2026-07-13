@@ -37,6 +37,12 @@ contract AccountConfigurationTest is Test {
 
     bytes32 constant ACTORCHANGE_TYPEHASH = keccak256("ActorChange(uint8 changeType,bytes32 actorId,bytes data)");
 
+    bytes32 constant LOCK_CHANGE_TYPEHASH =
+        keccak256("SignedLockChange(address account,uint256 chainId,uint8 op,uint16 unlockDelay,uint64 sequence)");
+
+    uint8 constant LOCK_OP = 0x01;
+    uint8 constant UNLOCK_OP = 0x02;
+
     function setUp() public virtual {
         accountConfiguration = new AccountConfiguration();
         k1Authenticator = accountConfiguration.K1_AUTHENTICATOR();
@@ -117,6 +123,44 @@ contract AccountConfigurationTest is Test {
                 SIGNED_ACTOR_CHANGES_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(actorChangeHash))
             )
         );
+    }
+
+    // ── Signed lock-change helpers ──
+    //
+    // Lock state changes go through applySignedLockChanges: a relayable, admin-authorized (scope 0) signed call.
+    // These helpers drive it for an account controlled by `pk` — either the account's inline default-EOA self (an
+    // uninitialized EOA at vm.addr(pk)) or a k1 admin actor whose actorId is bytes32(bytes20(vm.addr(pk))).
+
+    function _computeLockChangeDigest(address account, uint256 chainId, uint8 op, uint16 unlockDelay, uint64 sequence)
+        internal
+        pure
+        returns (bytes32)
+    {
+        return keccak256(abi.encode(LOCK_CHANGE_TYPEHASH, account, chainId, op, unlockDelay, sequence));
+    }
+
+    /// @dev Admin auth blob for a lock op (op = 1) at the account's current local sequence.
+    function _lockAuth(uint256 pk, address account, uint16 unlockDelay) internal view returns (bytes memory) {
+        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        bytes32 digest = _computeLockChangeDigest(account, block.chainid, LOCK_OP, unlockDelay, seq);
+        return _buildK1Auth(pk, digest);
+    }
+
+    /// @dev Admin auth blob for an unlock op (op = 2) at the account's current local sequence.
+    function _unlockAuth(uint256 pk, address account) internal view returns (bytes memory) {
+        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        bytes32 digest = _computeLockChangeDigest(account, block.chainid, UNLOCK_OP, 0, seq);
+        return _buildK1Auth(pk, digest);
+    }
+
+    /// @dev Relay a signed lock op (op = 1) authorized by `pk`.
+    function _signedLock(uint256 pk, address account, uint16 unlockDelay) internal {
+        accountConfiguration.applySignedLockChanges(account, LOCK_OP, unlockDelay, _lockAuth(pk, account, unlockDelay));
+    }
+
+    /// @dev Relay a signed unlock op (op = 2) authorized by `pk`.
+    function _signedUnlock(uint256 pk, address account) internal {
+        accountConfiguration.applySignedLockChanges(account, UNLOCK_OP, 0, _unlockAuth(pk, account));
     }
 
     // ── Fuzzed key bounding ──
