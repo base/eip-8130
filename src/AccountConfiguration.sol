@@ -86,7 +86,7 @@ contract AccountConfiguration {
 
     /// @dev ERC-1271 isValidSignature(bytes32,bytes) selector, which also equals the ERC-1271 magic return value
     ///      (0x1626ba7e); used both to build the import staticcall and to validate its result.
-    bytes4 constant ERC1271_SELECTOR = bytes4(keccak256("isValidSignature(bytes32,bytes)"));
+    bytes4 internal constant ERC1271_SELECTOR = bytes4(keccak256("isValidSignature(bytes32,bytes)"));
 
     /// @notice Typehash binding an importAccount signature to its salt, chainId, and initial actor set.
     ///
@@ -407,35 +407,27 @@ contract AccountConfiguration {
         external
         returns (address account)
     {
-        account = computeAddress(userSalt, bytecode, initialActors);
+        bytes32 effectiveSalt;
+        bytes memory deploymentCode;
+        (account, effectiveSalt, deploymentCode) = _prepareDeployment(userSalt, bytecode, initialActors);
 
-        // Block re-initialization of an already-bootstrapped account. localSequence doubles as the initialized flag,
-        // so a prior createAccount/import set it to 1; multichainSequence guards an account that established 8130
-        // state via a global (chainId 0) change. This must be explicit: now that authorizeActor is an upsert it no
-        // longer reverts on a duplicate initial actor, and the create2 below is intentionally swallowed (pop), so a
-        // duplicate createAccount would otherwise silently re-initialize.
-        if (_accountState[account].localSequence != 0 || _accountState[account].multichainSequence != 0) {
-            revert AlreadyInitialized();
-        }
+        // Block re-initialization of an already-bootstrapped account. This must be explicit: authorizeActor is now an
+        // upsert (no duplicate-actor revert) and the create2 below is intentionally swallowed (pop), so a duplicate
+        // createAccount would otherwise silently re-initialize.
+        if (_isInitialized(account)) revert AlreadyInitialized();
 
-        // Mark the account initialized: localSequence doubles as the initialized flag, so setting it to 1 blocks
-        // importAccount (which requires localSequence == 0) from running against an already-created account.
-        // Created accounts have contract code at a CREATE2 address, so the default EOA path (recovered == account)
-        // is unreachable; disable it by default so the account is canonically ECDSA-owner-free (quantum-safe by
-        // default). This folds into the same slot write as localSequence, costing no extra SSTORE. Set *before*
-        // initializing actors so a self-actorId k1 initial actor can re-enable the inline self (parity with import).
+        // Mark initialized (localSequence = 1) and disable the implicit default-EOA path. A created account has code
+        // at its CREATE2 address, so the recovered==account owner path is unreachable; default it off (canonically
+        // ECDSA-owner-free / quantum-safe), folded into the same slot write. Set *before* initializing actors so a
+        // self-actorId k1 initial actor can re-enable the inline self (parity with import).
         _accountState[account].localSequence = 1;
         _accountState[account].flags = FLAG_REVOKE_DEFAULT_EOA;
 
         _initializeAccount(account, initialActors);
 
-        // Create account code at the CREATE2 address derived from the packed actors commitment. The return value
-        // MUST be checked: CREATE2 returns address(0) on failure (bytecode too large per EIP-170, a leading 0xEF
-        // byte per EIP-3541, or out of gas). On success it returns the deployed address, which equals `account` by
-        // construction. Reverting on mismatch unwinds every state write above, so a failed deploy can never leave an
-        // initialized-but-codeless account behind.
-        bytes memory deploymentCode = _buildDeploymentCode(bytecode);
-        bytes32 effectiveSalt = _computeEffectiveSalt(userSalt, initialActors);
+        // Deploy at the derived address. create2 returns address(0) on failure (EIP-170 size, EIP-3541 leading 0xEF,
+        // or out of gas); reverting on mismatch unwinds every state write above, so a failed deploy can never leave
+        // an initialized-but-codeless account behind.
         address deployed;
         assembly ("memory-safe") {
             deployed := create2(0, add(deploymentCode, 0x20), mload(deploymentCode), effectiveSalt)
@@ -469,10 +461,8 @@ contract AccountConfiguration {
     ) external onlyUnlocked(account) {
         if (chainId != 0 && chainId != block.chainid) revert InvalidChainId();
 
-        // Import is a one-time bootstrap for accounts with no 8130 state yet
-        if (_accountState[account].localSequence != 0 || _accountState[account].multichainSequence != 0) {
-            revert AlreadyInitialized();
-        }
+        // Import is a one-time bootstrap for accounts with no 8130 state yet.
+        if (_isInitialized(account)) revert AlreadyInitialized();
         _accountState[account].localSequence = 1;
 
         bytes32 digest = _computeImportDigest(account, chainId, initialActors);
@@ -693,22 +683,24 @@ contract AccountConfiguration {
         view
         returns (address)
     {
-        bytes32 effectiveSalt = _computeEffectiveSalt(userSalt, initialActors);
-        bytes32 codeHash = keccak256(_buildDeploymentCode(bytecode));
-        bytes32 create2Hash = keccak256(abi.encodePacked(bytes1(0xFF), address(this), effectiveSalt, codeHash));
-        return address(uint160(uint256(create2Hash)));
+        (address account,,) = _prepareDeployment(userSalt, bytecode, initialActors);
+        return account;
     }
 
     // ----------------------------------------------------------------------------------------------------------------
     // STORAGE VIEWS
     // ----------------------------------------------------------------------------------------------------------------
 
-    /// @notice Returns whether `actorId` is currently a live actor on `account`.
+    /// @notice Returns whether `actorId` is currently authorized on `account` (a stored actor entry exists, or the
+    ///         inline k1 self is enabled).
+    ///
+    /// @dev Does NOT check expiry: an expired-but-not-revoked actor still returns true. This is intentional —
+    ///      _revokeActor relies on it to revoke expired actors — so callers needing liveness must check expiry too.
     ///
     /// @param account The account to check.
     /// @param actorId The actor identifier to check.
     ///
-    /// @return True if the actor is authorized and live.
+    /// @return True if the actor is authorized (possibly expired).
     function isActor(address account, bytes32 actorId) public view returns (bool) {
         // A populated _actorConfig entry is always live: any non-self actor, or a non-k1 self authenticator.
         if (_actorConfig[actorId][account].authenticator >= K1_AUTHENTICATOR) return true;
@@ -731,7 +723,9 @@ contract AccountConfiguration {
     /// @return The resolved actor configuration, or the all-zero config if the actor is not live.
     function getActorConfig(address account, bytes32 actorId) external view returns (ActorConfig memory) {
         ActorConfig memory config = _actorConfig[actorId][account];
-        if (config.authenticator != address(0)) return config;
+        // Non-zero authenticator = a stored entry. Uses the same `>= K1_AUTHENTICATOR` namespace idiom as isActor:
+        // every stored authenticator is K1_AUTHENTICATOR (0x1) or a contract, so this is equivalent to != address(0).
+        if (config.authenticator >= K1_AUTHENTICATOR) return config;
         if (actorId == bytes32(bytes20(account)) && !_isDefaultEoaRevoked(account)) {
             AccountState storage st = _accountState[account];
             return
@@ -850,17 +844,22 @@ contract AccountConfiguration {
     ///         elapsed (the "cleared by the next op" rule).
     function _checkAndClearLock(address account) internal returns (bool locked) {
         AccountState storage st = _accountState[account];
-        uint8 flags = st.flags;
-        if (flags & FLAG_LOCKED == 0) return false; // already unlocked
-        if (flags & FLAG_UNLOCK_INITIATED == 0) return true; // hard-locked, no pending unlock
-
-        // An unlock has been initiated: still frozen until the stored timestamp elapses.
-        if (block.timestamp < st.lockUnion) return true;
-
-        // Elapsed: clear the lock bits and the union so the account returns to the unlocked state.
-        st.flags = flags & ~(FLAG_LOCKED | FLAG_UNLOCK_INITIATED);
-        st.lockUnion = 0;
+        if (_isLocked(st)) return true;
+        // Not locked, but FLAG_LOCKED still set means an initiated unlock has now elapsed: clear the lock bits and
+        // union so the account returns to a clean unlocked slot.
+        if (st.flags & FLAG_LOCKED != 0) {
+            st.flags &= ~(FLAG_LOCKED | FLAG_UNLOCK_INITIATED);
+            st.lockUnion = 0;
+        }
         return false;
+    }
+
+    /// @dev True once the account has been bootstrapped via createAccount or importAccount. localSequence doubles as
+    ///      the initialized flag (set to 1 at bootstrap); multichainSequence covers an account that established 8130
+    ///      state via a global (chainId 0) change.
+    function _isInitialized(address account) private view returns (bool) {
+        AccountState storage st = _accountState[account];
+        return st.localSequence != 0 || st.multichainSequence != 0;
     }
 
     // ----------------------------------------------------------------------------------------------------------------
@@ -902,6 +901,10 @@ contract AccountConfiguration {
         internal
         nonZeroAccount(account)
     {
+        // Only reject the zero authenticator (the empty-slot sentinel). A non-zero authenticator with no code is
+        // accepted deliberately: authenticators may be counterfactual (deployed later) and some are intentionally
+        // codeless sentinels (e.g. EXTERNAL_POLICY_AUTHENTICATOR). A bad authenticator simply fails fail-closed at
+        // authentication time, mirroring the reference PolicyManager's treatment of a zero-commitment policy actor.
         if (config.authenticator < K1_AUTHENTICATOR) revert InvalidAuthenticator();
 
         // Slice the signed policy by scope & SCOPE_POLICY. The commitment is opaque to the protocol. This contract
@@ -1010,6 +1013,21 @@ contract AccountConfiguration {
             _disableInlineSelf(_accountState[account]);
         }
         emit ActorRevoked(account, actorId);
+    }
+
+    /// @dev Derives the CREATE2 inputs once for both {createAccount} and {computeAddress}: the effective salt, the
+    ///      deployment code, and the resulting counterfactual address. Sharing this avoids rebuilding and re-hashing
+    ///      the (up to ~24KB) deployment code — and recomputing the actors commitment — twice per creation.
+    function _prepareDeployment(bytes32 userSalt, bytes calldata bytecode, InitialActor[] calldata initialActors)
+        private
+        view
+        returns (address account, bytes32 effectiveSalt, bytes memory deploymentCode)
+    {
+        effectiveSalt = _computeEffectiveSalt(userSalt, initialActors);
+        deploymentCode = _buildDeploymentCode(bytecode);
+        bytes32 codeHash = keccak256(deploymentCode);
+        bytes32 create2Hash = keccak256(abi.encodePacked(bytes1(0xFF), address(this), effectiveSalt, codeHash));
+        account = address(uint160(uint256(create2Hash)));
     }
 
     /// @dev CREATE2 salt for account creation. This is a deterministic commitment (not a signed message), so it
@@ -1217,34 +1235,15 @@ contract AccountConfiguration {
     // ----------------------------------------------------------------------------------------------------------------
 
     /// @notice Constructs the deployment code for an account in a manner that doesn't immediately run constructor code.
-    /// @dev Constructs DEPLOYMENT_HEADER(n) || bytecode. The 14-byte EVM loader
-    ///      copies trailing bytecode into memory and returns it.
-    function _buildDeploymentCode(bytes calldata bytecode) internal pure returns (bytes memory code) {
-        // Bytecode must be less than 65536 bytes
+    /// @dev Returns a 14-byte EVM loader followed by `bytecode`. The loader copies the trailing `bytecode` into
+    ///      memory and returns it as the deployed runtime:
+    ///        PUSH2 n; PUSH1 0x0e; PUSH1 0x00; CODECOPY   // copy n bytes from code offset 14 to mem 0
+    ///        PUSH2 n; PUSH1 0x00; RETURN                 // return mem[0..n]
+    function _buildDeploymentCode(bytes calldata bytecode) internal pure returns (bytes memory) {
         uint256 n = bytecode.length;
         if (n > 0xFFFF) revert BytecodeTooLarge();
-
-        // Construct the deployment code with 14-byte header then provided bytecode
-        code = new bytes(14 + n);
-        code[0] = 0x61; //  PUSH2
-        code[1] = bytes1(uint8(n >> 8));
-        code[2] = bytes1(uint8(n));
-        code[3] = 0x60; //  PUSH1
-        code[4] = 0x0E; //  14 (offset)
-        code[5] = 0x60; //  PUSH1
-        code[6] = 0x00; //  0 (mem dest)
-        code[7] = 0x39; //  CODECOPY
-        code[8] = 0x61; //  PUSH2
-        code[9] = bytes1(uint8(n >> 8));
-        code[10] = bytes1(uint8(n));
-        code[11] = 0x60; // PUSH1
-        code[12] = 0x00; // 0 (mem offset)
-        code[13] = 0xF3; // RETURN
-
-        // Append the provided bytecode
-        for (uint256 i; i < n; i++) {
-            code[14 + i] = bytecode[i];
-        }
-        return code;
+        return abi.encodePacked(
+            bytes1(0x61), bytes2(uint16(n)), hex"600e600039", bytes1(0x61), bytes2(uint16(n)), hex"6000f3", bytecode
+        );
     }
 }
