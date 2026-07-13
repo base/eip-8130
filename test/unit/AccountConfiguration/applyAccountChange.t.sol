@@ -111,7 +111,7 @@ contract AccountLockTest is AccountConfigurationTest {
     }
 
     /// @notice A lock op reverts AccountIsLocked when the account is already hard-locked.
-    /// @dev Second lock hits _checkAndClearLock with unlocksAt == type(uint40).max (locked branch).
+    /// @dev Second lock hits _checkAndClearLock with FLAG_LOCKED set and FLAG_UNLOCK_INITIATED clear (hard-locked branch).
     function test_lock_revert_whenAlreadyHardLocked(uint256 pkSeed, uint16 firstDelay, uint16 secondDelay) public {
         uint256 pk = _boundK1Pk(pkSeed);
         address account = vm.addr(pk);
@@ -142,7 +142,7 @@ contract AccountLockTest is AccountConfigurationTest {
         accountConfiguration.applySignedLockChanges(account, UNLOCK_OP, delay, auth);
     }
 
-    /// @notice An unlock op reverts NotLocked when the account has never been locked (unlocksAt == 0).
+    /// @notice An unlock op reverts NotLocked when the account has never been locked (FLAG_LOCKED clear).
     function test_initiateUnlock_revert_whenNeverLocked(uint256 pkSeed) public {
         uint256 pk = _boundK1Pk(pkSeed);
         address account = vm.addr(pk);
@@ -154,7 +154,7 @@ contract AccountLockTest is AccountConfigurationTest {
     }
 
     /// @notice An unlock op reverts NotLocked once an unlock has already been initiated.
-    /// @dev After the first unlock, unlocksAt is a finite timestamp (!= max), so a second unlock reverts.
+    /// @dev After the first unlock, FLAG_UNLOCK_INITIATED is set, so a second unlock reverts.
     function test_initiateUnlock_revert_whenUnlockAlreadyInitiated(uint256 pkSeed, uint16 delay, uint256 t0) public {
         uint256 pk = _boundK1Pk(pkSeed);
         address account = vm.addr(pk);
@@ -243,8 +243,9 @@ contract AccountLockTest is AccountConfigurationTest {
     // HAPPY PATHS / BRANCH COVERAGE
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice A lock op hard-locks the account: unlocksAt == type(uint40).max and the delay is stored.
-    /// @dev getLockStatus reports locked, not-yet-initiated, sentinel unlocksAt and the stored delay; isLocked true.
+    /// @notice A lock op hard-locks the account: FLAG_LOCKED set, delay stored in lockUnion.
+    /// @dev getLockStatus reports locked, not-yet-initiated, the synthesized max sentinel for unlocksAt and the stored
+    ///      delay; isLocked true.
     function test_lock_success_setsHardLockStatus(uint256 pkSeed, uint16 delay) public {
         uint256 pk = _boundK1Pk(pkSeed);
         address account = vm.addr(pk);
@@ -276,7 +277,7 @@ contract AccountLockTest is AccountConfigurationTest {
     }
 
     /// @notice An account can be re-locked after a prior unlock delay has fully elapsed.
-    /// @dev Drives _checkAndClearLock through its expiry-clear branch (block.timestamp >= unlocksAt, unlocksAt != 0):
+    /// @dev Drives _checkAndClearLock through its lazy-clear branch (UNLOCK_INITIATED set, block.timestamp >= stored unlocksAt):
     ///      the stale timestamp is cleared to 0 and the fresh lock succeeds, hard-locking again with the new delay.
     function test_lock_success_relockAfterUnlockExpired(
         uint256 pkSeed,
@@ -349,14 +350,15 @@ contract AccountLockTest is AccountConfigurationTest {
         accountConfiguration.applySignedLockChanges(account, UNLOCK_OP, 0, auth);
     }
 
-    /// @notice isLocked is false for an account that has never been locked (unlocksAt == 0).
+    /// @notice isLocked is false for an account that has never been locked (FLAG_LOCKED clear).
     function test_isLocked_success_falseWhenNeverLocked(address account, uint256 ts) public {
         _assumeSafeAccount(account);
         vm.warp(bound(ts, 1, 1e12));
         assertFalse(accountConfiguration.isLocked(account));
     }
 
-    /// @notice isLocked stays true for a hard-locked account at any reachable timestamp (unlocksAt == max sentinel).
+    /// @notice isLocked stays true for a hard-locked account at any timestamp (FLAG_LOCKED set, no pending unlock —
+    ///         hard-lock is timestamp-independent).
     function test_isLocked_success_trueWhileHardLocked(uint256 pkSeed, uint16 delay, uint256 ts) public {
         uint256 pk = _boundK1Pk(pkSeed);
         address account = vm.addr(pk);
@@ -365,7 +367,7 @@ contract AccountLockTest is AccountConfigurationTest {
 
         _signedLock(pk, account, delay);
 
-        vm.warp(bound(ts, 1, 1e12)); // any timestamp below the uint40 sentinel keeps block.timestamp < unlocksAt
+        vm.warp(bound(ts, 1, 1e12)); // hard-lock ignores the clock: FLAG_LOCKED set with no pending unlock
         assertTrue(accountConfiguration.isLocked(account));
     }
 
@@ -422,8 +424,8 @@ contract AccountLockTest is AccountConfigurationTest {
 
     /// @notice getLockStatus after the delay elapses (with no intervening onlyUnlocked call) still surfaces the
     ///         initiated-unlock state: unlocked, but hasInitiatedUnlock true and unlocksAt unchanged.
-    /// @dev getLockStatus is a pure view: it never runs _checkAndClearLock, so the finite unlocksAt is not zeroed and
-    ///      the hasInitiatedUnlock branch (unlocksAt != 0 && != max) reports true even though the account is unlocked.
+    /// @dev getLockStatus is a pure view: it never runs _checkAndClearLock, so the lock flags/union are not cleared and
+    ///      the FLAG_UNLOCK_INITIATED branch reports hasInitiatedUnlock true even though the account is now unlocked.
     function test_getLockStatus_success_afterUnlockElapsedNotCleared(
         uint256 pkSeed,
         uint16 delay,
@@ -490,5 +492,35 @@ contract AccountLockTest is AccountConfigurationTest {
         // The onlyUnlocked prelude cleared the stale unlock timestamp back to 0.
         (,, uint40 unlocksAt,) = accountConfiguration.getLockStatus(account);
         assertEq(unlocksAt, 0);
+    }
+
+    /// @notice applySignedActorChanges still reverts AccountIsLocked after an unlock is initiated but before its delay
+    ///         elapses: config stays frozen for the whole notice window, not just while hard-locked.
+    /// @dev Drives the pending-unlock branch of _checkAndClearLock (FLAG_UNLOCK_INITIATED set, block.timestamp <
+    ///      stored unlocksAt) on the real onlyUnlocked-guarded config path — distinct from the hard-locked branch.
+    function test_applySignedActorChanges_revert_whileUnlockPending(
+        uint256 pkSeed,
+        uint16 delay,
+        uint256 t0,
+        uint256 within
+    ) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        delay = uint16(bound(delay, 1, type(uint16).max));
+        t0 = bound(t0, 1, 1e9);
+        (address account,) = _createK1Account(pk);
+
+        _signedLock(pk, account, delay);
+        vm.warp(t0);
+        _signedUnlock(pk, account);
+        vm.warp(bound(within, t0, t0 + delay - 1)); // strictly before unlocksAt == t0 + delay: still frozen
+
+        AccountConfiguration.ActorChange[] memory changes = _oneAuthorizeChange(bytes32(bytes20(vm.addr(pk))));
+        uint64 chainId = uint64(block.chainid);
+        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        bytes32 digest = _computeActorChangeBatchDigest(account, chainId, seq, changes);
+        bytes memory auth = _buildK1Auth(pk, digest);
+
+        vm.expectRevert(AccountConfiguration.AccountIsLocked.selector);
+        accountConfiguration.applySignedActorChanges(account, chainId, changes, auth);
     }
 }

@@ -54,8 +54,15 @@ contract AccountConfiguration {
 
     /// @notice Per-account packed state: sequences, lock status, and the inline home for the account's k1 self key.
     ///
-    /// @dev Packed into a single storage slot (exactly 32 bytes).
+    /// @dev Packed into a single storage slot; the field layout is normative (nodes read the raw slot for mempool
+    ///      rate-limit tiering, see the EIP's Account Lock section). Field order and widths match the spec's
+    ///      account-state table: multichainSequence, localSequence, flags, lockUnion, defaultEOAScope,
+    ///      defaultEOAExpiry, then 3 reserved bytes that MUST stay zero.
     ///      localSequence > 0 doubles as the account initialized flag.
+    ///      `flags` is a bitfield: bit 0 (FLAG_REVOKE_DEFAULT_EOA) disables the k1 self key; bit 1 (FLAG_LOCKED)
+    ///      freezes actor configuration; bit 2 (FLAG_UNLOCK_INITIATED) selects how `lockUnion` is interpreted.
+    ///      `lockUnion` is a union field: while FLAG_UNLOCK_INITIATED is clear it holds the configured unlock delay
+    ///      (seconds, uint16 range); while set it holds unlocksAt (the timestamp at which the unlock takes effect).
     ///      The defaultEOA* fields are the inline home for the account's own secp256k1 ("self") key — the actor whose
     ///      actorId is bytes32(bytes20(account)). When FLAG_REVOKE_DEFAULT_EOA is unset, a k1 signature recovering to
     ///      the account authenticates with this inline config (all-zero = full owner; non-zero scope/expiry = a
@@ -66,11 +73,11 @@ contract AccountConfiguration {
     struct AccountState {
         uint64 multichainSequence; // 8 bytes
         uint64 localSequence; // 8 bytes – also serves as initialized flag
-        uint40 unlocksAt; // 5 bytes
-        uint16 unlockDelay; // 2 bytes
-        uint8 flags; // 1 byte – bitfield; bit 0 = default EOA revoked (see FLAG_REVOKE_DEFAULT_EOA)
+        uint8 flags; // 1 byte – bitfield: bit 0 REVOKE_DEFAULT_EOA, bit 1 LOCKED, bit 2 UNLOCK_INITIATED
+        uint40 lockUnion; // 5 bytes – union: unlockDelay while UNLOCK_INITIATED clear, else unlocksAt (timestamp)
         uint8 defaultEOAScope; // 1 byte – inline self k1 scope (0 = full owner)
         uint48 defaultEOAExpiry; // 6 bytes – inline self k1 expiry (Unix seconds; 0 = no expiry)
+        // 3 bytes reserved (remaining slot bytes); MUST stay zero.
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -191,6 +198,17 @@ contract AccountConfiguration {
     ///         clears it (re-enabling the inline self, possibly scoped).
     uint8 public constant FLAG_REVOKE_DEFAULT_EOA = 0x01;
 
+    /// @notice AccountState.flags bit (spec `LOCKED`): when set, actor configuration is frozen — all config changes
+    ///         and delegation are rejected on both the account-changes and applySignedActorChanges paths. The only
+    ///         permitted operation while locked is initiating an unlock. Cleared lazily once an initiated unlock
+    ///         elapses (see applySignedLockChanges).
+    uint8 public constant FLAG_LOCKED = 0x02;
+
+    /// @notice AccountState.flags bit (spec `UNLOCK_INITIATED`): selects how the packed `lockUnion` field is read.
+    ///         While clear, `lockUnion` holds the configured unlock delay (seconds); while set, it holds unlocksAt
+    ///         (the timestamp at which the pending unlock takes effect). Only meaningful when FLAG_LOCKED is set.
+    uint8 public constant FLAG_UNLOCK_INITIATED = 0x04;
+
     /// @dev secp256k1 half-order (n/2). Per EIP-2, only the lower-half `s` value is accepted to reject signature
     ///      malleability. Equal to (secp256k1n - 1) / 2.
     uint256 internal constant SECP256K1_HALF_ORDER = 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0;
@@ -273,8 +291,8 @@ contract AccountConfiguration {
     /// @notice A lock op (op = 1) carried a zero unlock delay.
     error ZeroUnlockDelay();
 
-    /// @notice An unlock op (op = 2) was requested when the account was not in the hard-locked (unlocksAt == max)
-    ///         state (never locked, or an unlock was already initiated).
+    /// @notice An unlock op (op = 2) was requested when the account was not in the hard-locked state (FLAG_LOCKED set,
+    ///         FLAG_UNLOCK_INITIATED clear) — i.e. never locked, or an unlock was already initiated.
     error NotLocked();
 
     /// @notice applySignedLockChanges carried an unrecognized op (neither LOCK_OP nor UNLOCK_OP).
@@ -540,11 +558,11 @@ contract AccountConfiguration {
     ///      stay coherent on the same counter). Because both entry points share this counter, a pre-signed local
     ///      actor change and a lock op contend for the same sequence: whichever is relayed first consumes it and
     ///      invalidates the other until it is re-signed at the next sequence.
-    /// @dev op = LOCK_OP (1): only from the unlocked state (reverts AccountIsLocked if currently locked). Stores
-    ///      `unlockDelay` and sets the hard-locked state (unlocksAt == type(uint40).max). Emits AccountLocked.
+    /// @dev op = LOCK_OP (1): only from the unlocked state (reverts AccountIsLocked if currently locked). Sets
+    ///      FLAG_LOCKED and stores `unlockDelay` in `lockUnion`. Emits AccountLocked.
     /// @dev op = UNLOCK_OP (2): only from the hard-locked state with no pending unlock (reverts NotLocked
-    ///      otherwise); `unlockDelay` MUST be 0. Sets unlocksAt = block.timestamp + storedDelay, zeroes the stored
-    ///      delay. Emits AccountUnlockInitiated.
+    ///      otherwise); `unlockDelay` MUST be 0. Sets FLAG_UNLOCK_INITIATED and overwrites `lockUnion` with
+    ///      unlocksAt = block.timestamp + storedDelay. Emits AccountUnlockInitiated.
     /// @dev Reverts with InvalidAuthLength, InvalidSignature, AuthenticationFailed, AuthenticatorMismatch,
     ///      ActorExpired, or DefaultEoaRevoked when `auth` fails to authenticate a live actor.
     /// @dev Reverts with UnauthorizedLockChange when the authenticated actor is not unrestricted (scope != 0).
@@ -573,23 +591,27 @@ contract AccountConfiguration {
         AccountState storage config = _accountState[account];
 
         if (op == LOCK_OP) {
-            // Lock only from the unlocked state; clear any stale (expired) unlock timestamp first.
+            // Lock only from the unlocked state; lazily clear any elapsed unlock (also clears LOCKED) first.
             if (_checkAndClearLock(account)) revert AccountIsLocked();
             // Require non-zero unlock delay.
             if (unlockDelay == 0) revert ZeroUnlockDelay();
 
-            config.unlocksAt = type(uint40).max;
-            config.unlockDelay = unlockDelay;
+            // Post-clear the lock bits are clear, so set FLAG_LOCKED and stash the delay in the union.
+            config.flags |= FLAG_LOCKED;
+            config.lockUnion = unlockDelay;
             emit AccountLocked(account, unlockDelay);
         } else if (op == UNLOCK_OP) {
             // The unlock op never sets the delay; it consumes the delay stored by the lock op.
             if (unlockDelay != 0) revert InvalidUnlockDelay();
-            // Require the account is hard-locked and an unlock has not already been initiated.
-            if (config.unlocksAt != type(uint40).max) revert NotLocked();
+            // Require the account is hard-locked (LOCKED set) with no unlock already initiated (UNLOCK_INITIATED clear).
+            uint8 flags = config.flags;
+            if (flags & FLAG_LOCKED == 0 || flags & FLAG_UNLOCK_INITIATED != 0) revert NotLocked();
 
-            config.unlocksAt = uint40(block.timestamp + config.unlockDelay);
-            config.unlockDelay = 0;
-            emit AccountUnlockInitiated(account, config.unlocksAt);
+            // Reinterpret the union: it held the stored delay, now it holds the effective unlock timestamp.
+            uint40 unlocksAt = uint40(block.timestamp + uint16(config.lockUnion));
+            config.flags = flags | FLAG_UNLOCK_INITIATED;
+            config.lockUnion = unlocksAt;
+            emit AccountUnlockInitiated(account, unlocksAt);
         } else {
             revert UnknownLockOp();
         }
@@ -780,7 +802,7 @@ contract AccountConfiguration {
     ///
     /// @return True if the account is locked at the current block timestamp.
     function isLocked(address account) external view returns (bool) {
-        return block.timestamp < _accountState[account].unlocksAt;
+        return _isLocked(_accountState[account]);
     }
 
     /// @notice Returns the account's full lock status.
@@ -797,26 +819,46 @@ contract AccountConfiguration {
         returns (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 unlockDelay)
     {
         AccountState storage config = _accountState[account];
-        return (
-            block.timestamp < config.unlocksAt, // locked if current time is before unlocksAt
-            config.unlocksAt != 0 && config.unlocksAt != type(uint40).max, // hasInitiatedUnlock if unlocksAt non-zero and not max
-            config.unlocksAt,
-            config.unlockDelay
-        );
+        uint8 flags = config.flags;
+        if (flags & FLAG_LOCKED == 0) {
+            // Unlocked: no lock bits set.
+            return (false, false, 0, 0);
+        }
+        if (flags & FLAG_UNLOCK_INITIATED == 0) {
+            // Hard-locked: lockUnion holds the configured delay; synthesize the max sentinel for unlocksAt.
+            return (true, false, type(uint40).max, uint16(config.lockUnion));
+        }
+        // Unlock initiated: lockUnion holds the effective unlock timestamp; the delay has been consumed.
+        uint40 unlocksAt = config.lockUnion;
+        return (block.timestamp < unlocksAt, true, unlocksAt, 0);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // INTERNAL FUNCTIONS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice Returns true if the account is locked; clears the stored unlock timestamp once it has expired.
-    function _checkAndClearLock(address account) internal returns (bool locked) {
-        // Early return if account is locked
-        uint40 unlocksAt = _accountState[account].unlocksAt;
-        if (block.timestamp < unlocksAt) return true;
+    /// @notice Returns whether the account's configuration is currently frozen, WITHOUT mutating storage.
+    function _isLocked(AccountState storage st) private view returns (bool) {
+        uint8 flags = st.flags;
+        if (flags & FLAG_LOCKED == 0) return false; // not locked
+        if (flags & FLAG_UNLOCK_INITIATED == 0) return true; // hard-locked
+        return block.timestamp < st.lockUnion; // pending unlock: frozen until the timestamp elapses
+    }
 
-        // Account is unlocked, clear storage if non-zero
-        if (unlocksAt != 0) _accountState[account].unlocksAt = 0;
+    /// @notice Returns true if the account is locked; lazily clears the lock flags/union once an initiated unlock has
+    ///         elapsed (the "cleared by the next op" rule).
+    function _checkAndClearLock(address account) internal returns (bool locked) {
+        AccountState storage st = _accountState[account];
+        uint8 flags = st.flags;
+        if (flags & FLAG_LOCKED == 0) return false; // already unlocked
+        if (flags & FLAG_UNLOCK_INITIATED == 0) return true; // hard-locked, no pending unlock
+
+        // An unlock has been initiated: still frozen until the stored timestamp elapses.
+        if (block.timestamp < st.lockUnion) return true;
+
+        // Elapsed: clear the lock bits and the union so the account returns to the unlocked state.
+        st.flags = flags & ~(FLAG_LOCKED | FLAG_UNLOCK_INITIATED);
+        st.lockUnion = 0;
         return false;
     }
 
