@@ -14,14 +14,14 @@ import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 ///           3. InvalidNestedSignature  — verifySignature(delegate, hash, nestedAuth) is false
 ///         On success returns actorId = bytes32(bytes20(delegate)).
 ///
-///         verifySignature(delegate, hash, nestedAuth) is true iff the nested auth resolves to a live
-///         actor on `delegate` whose scope is unrestricted (0x00) or carries SCOPE_SIGNER.
+///         verifySignature(delegate, hash, nestedAuth) is true iff the nested auth resolves to the admin
+///         actor on `delegate` (scope == 0x00) — ERC-1271 signing is admin-only, there is no SIGNER grant.
 contract DelegateAuthenticatorTest is AccountConfigurationTest {
     uint8 constant SCOPE_SENDER = 0x01;
     uint8 constant SCOPE_POLICY = 0x02;
     uint8 constant SCOPE_NONCE = 0x04;
-    uint8 constant SCOPE_PAYER = 0x08;
-    uint8 constant SCOPE_SIGNER = 0x10;
+    uint8 constant SCOPE_SELF_PAYER = 0x08;
+    uint8 constant SCOPE_SPONSOR_PAYER = 0x10;
     uint8 constant AUTHORIZE_ACTOR = 0x01;
 
     // ── Guard 1: require(data.length >= 40) ──
@@ -95,9 +95,9 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
         delegateAuthenticator.authenticate(hash, data);
     }
 
-    /// @dev A nested signer that is a live actor on the delegate account but holds a non-zero scope lacking
-    ///      SCOPE_SIGNER (e.g. PAYER/SENDER/NONCE combinations) fails verifySignature and guard 3 reverts.
-    function test_authenticate_revert_nestedSignerLacksSignerScope(
+    /// @dev A nested signer that is a live actor on the delegate account but holds any non-zero (non-admin) scope
+    ///      fails verifySignature (signing is admin-only) and guard 3 reverts.
+    function test_authenticate_revert_nestedSignerIsScoped(
         uint256 ownerSeed,
         uint256 signerSeed,
         uint8 scopeSeed,
@@ -107,9 +107,9 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
         uint256 signerPk = _boundK1Pk(signerSeed);
         vm.assume(vm.addr(ownerPk) != vm.addr(signerPk));
 
-        // Non-zero scope with the SIGNER bit cleared → verifySignature must return false. Clear POLICY too so the
-        // scoped actor needs no policyData at authorization time.
-        uint8 scope = uint8(bound(uint256(scopeSeed), 1, 255)) & ~SCOPE_SIGNER & ~SCOPE_POLICY;
+        // Any non-zero scope → non-admin → verifySignature must return false. Clear POLICY so the scoped actor
+        // needs no policyData at authorization time.
+        uint8 scope = uint8(bound(uint256(scopeSeed), 1, 255)) & ~SCOPE_POLICY;
         vm.assume(scope != 0);
 
         (address delegateAccount,) = _createK1Account(ownerPk);
@@ -137,30 +137,23 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
         assertEq(actorId, bytes32(bytes20(delegateAccount)));
     }
 
-    /// @dev A scoped actor whose scope carries the SCOPE_SIGNER bit passes verifySignature via the
-    ///      `scope & SCOPE_SIGNER != 0` branch; authenticate returns actorId = bytes32(bytes20(delegate)).
-    function test_authenticate_success_signerScopedNestedSigner(
-        uint256 ownerSeed,
-        uint256 signerSeed,
-        uint8 scopeSeed,
-        bytes32 hash
-    ) public {
+    /// @dev The former SIGNER bit (0x10, now SCOPE_SPONSOR_PAYER) no longer grants signing: a nested actor holding
+    ///      it is non-admin, so verifySignature returns false and guard 3 reverts.
+    function test_authenticate_revert_formerSignerBitCannotSign(uint256 ownerSeed, uint256 signerSeed, bytes32 hash)
+        public
+    {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         uint256 signerPk = _boundK1Pk(signerSeed);
         vm.assume(vm.addr(ownerPk) != vm.addr(signerPk));
 
-        // Any scope with the SIGNER bit set (always non-zero) → verifySignature true via the SIGNER branch. Clear
-        // POLICY: a policy-bearing actor is never a valid signer (and would need policyData to authorize).
-        uint8 scope = (uint8(bound(uint256(scopeSeed), 0, 255)) | SCOPE_SIGNER) & ~SCOPE_POLICY;
-
         (address delegateAccount,) = _createK1Account(ownerPk);
-        _authorizeScopedK1Actor(delegateAccount, ownerPk, signerPk, scope);
+        _authorizeScopedK1Actor(delegateAccount, ownerPk, signerPk, SCOPE_SPONSOR_PAYER);
 
         bytes memory nestedAuth = abi.encodePacked(k1Authenticator, _signDigest(signerPk, hash));
         bytes memory data = abi.encodePacked(delegateAccount, nestedAuth);
 
-        bytes32 actorId = delegateAuthenticator.authenticate(hash, data);
-        assertEq(actorId, bytes32(bytes20(delegateAccount)));
+        vm.expectRevert(DelegateAuthenticator.InvalidNestedSignature.selector);
+        delegateAuthenticator.authenticate(hash, data);
     }
 
     // ── Helpers ──

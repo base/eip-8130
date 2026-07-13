@@ -130,7 +130,7 @@ contract AccountConfiguration {
 
     /// @notice Actor is gated to a policy: every call it makes must land on the resolved manager (this contract
     ///         stores manager + commitment; the protocol enforces that the actor's calls only ever reach that
-    ///         target). This contract does not reject scope combinations (e.g. SCOPE_POLICY | SCOPE_PAYER) — any
+    ///         target). This contract does not reject scope combinations (e.g. SCOPE_POLICY | SCOPE_SELF_PAYER) — any
     ///         use-time exclusivity between SCOPE_POLICY and the account's other capabilities is protocol-side, not
     ///         enforced here.
     uint8 public constant SCOPE_POLICY = 0x02;
@@ -140,11 +140,13 @@ contract AccountConfiguration {
     ///         entirely protocol-side.
     uint8 public constant SCOPE_NONCE = 0x04;
 
-    /// @notice Actor can pay for transactions with account as payer
-    uint8 public constant SCOPE_PAYER = 0x08;
+    /// @notice Actor can self-pay gas for the account's own operations (payer == sender).
+    uint8 public constant SCOPE_SELF_PAYER = 0x08;
 
-    /// @notice Actor can sign arbitrary messages with account
-    uint8 public constant SCOPE_SIGNER = 0x10;
+    /// @notice Actor can sponsor gas on behalf of a different sender (payer != sender).
+    uint8 public constant SCOPE_SPONSOR_PAYER = 0x10;
+
+    // Note: ERC-1271 signing is admin-only (scope == 0x00), not a grant — there is no SIGNER scope bit.
 
     // 0x20, 0x40, 0x80 are spare (unused).
 
@@ -536,23 +538,23 @@ contract AccountConfiguration {
     /// @notice Validates an account signature in `authenticator(20) || data` format; never reverts.
     ///
     /// @dev ERC-1271-style boolean check: returns false on any failure (invalid signature, unknown/revoked actor,
-    ///      actorId not bound to the presented authenticator, or an actor lacking SIGNER scope). authenticateActor
+    ///      actorId not bound to the presented authenticator, or a non-admin scoped actor). authenticateActor
     ///      reverts on failure, so it is called externally and the revert is caught.
     ///
     /// @param account The account the signature is validated against.
     /// @param hash The digest that was signed.
     /// @param signature Authenticator(20) || authenticator-specific data.
     ///
-    /// @return verified True if the signature is valid and the resolved actor may sign messages.
+    /// @return verified True if the signature is valid and the resolved actor is the admin.
     function verifySignature(address account, bytes32 hash, bytes calldata signature)
         external
         view
         returns (bool verified)
     {
         try this.authenticateActor(account, hash, signature) returns (uint8 scope, address) {
-            // Unrestricted (scope 0) always verifies. Otherwise the actor must hold SCOPE_SIGNER and must NOT be
-            // policy-bearing: a policy-gated actor is never a valid ERC-1271 signer, even if SIGNER is also set.
-            return scope == 0 || ((scope & SCOPE_SIGNER != 0) && (scope & SCOPE_POLICY == 0));
+            // ERC-1271 signing is authorized only for the admin actor (scope == 0x00); there is no SIGNER grant.
+            // Scoped signing is expressed at the account layer via a POLICY key's approved-hash pattern, not here.
+            return scope == 0;
         } catch {
             return false;
         }
@@ -792,7 +794,7 @@ contract AccountConfiguration {
         if (config.authenticator < K1_AUTHENTICATOR) revert InvalidAuthenticator();
 
         // Slice the signed policy by scope & SCOPE_POLICY. The commitment is opaque to the protocol. This contract
-        // does not reject scope combinations (e.g. SCOPE_POLICY | SCOPE_PAYER) — any use-time exclusivity between
+        // does not reject scope combinations (e.g. SCOPE_POLICY | SCOPE_SELF_PAYER) — any use-time exclusivity between
         // SCOPE_POLICY and the account's other capabilities is protocol-side, not enforced here.
         (address manager, bytes32 commitment) = _slicePolicy(config.scope, policyData);
 

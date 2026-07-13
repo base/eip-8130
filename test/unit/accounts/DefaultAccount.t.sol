@@ -26,9 +26,9 @@ contract DefaultAccountTest is AccountConfigurationTest {
     bytes4 constant ERC1271_MAGIC = 0x1626ba7e;
     bytes4 constant ERC1271_FAIL = 0xFFFFFFFF;
 
-    // Scope bits: SIGNER gates isValidSignature; SENDER is a non-signing scope.
+    // Scope bits: ERC-1271 signing is admin-only (scope == 0x00); SENDER and SPONSOR_PAYER are non-admin scopes.
     uint8 constant SCOPE_SENDER = 0x01;
-    uint8 constant SCOPE_SIGNER = 0x10;
+    uint8 constant SCOPE_SPONSOR_PAYER = 0x10;
 
     // TRUSTED_EXECUTOR sentinel: the authenticator value that marks an actor as a direct-execution caller.
     address constant TRUSTED_EXECUTOR = address(uint160(uint256(keccak256("trustedExecutor"))));
@@ -271,9 +271,9 @@ contract DefaultAccountTest is AccountConfigurationTest {
         assertEq(result, ERC1271_FAIL);
     }
 
-    /// @notice A valid signature from an actor holding a non-signing scope returns the failure magic value.
-    /// @dev verifySignature is false when scope != 0 and SCOPE_SIGNER is unset (here SCOPE_SENDER only).
-    function test_isValidSignature_success_returnsFailureForNonSignerScope(
+    /// @notice A valid signature from an actor holding a non-admin scope returns the failure magic value.
+    /// @dev verifySignature is false when scope != 0 (ERC-1271 signing is admin-only); here SCOPE_SENDER.
+    function test_isValidSignature_success_returnsFailureForNonAdminScope(
         uint256 ownerSeed,
         uint256 actorSeed,
         bytes32 hash
@@ -327,9 +327,10 @@ contract DefaultAccountTest is AccountConfigurationTest {
         assertEq(result, ERC1271_MAGIC);
     }
 
-    /// @notice A valid signature from an actor explicitly scoped SCOPE_SIGNER returns the magic value.
-    /// @dev Covers the `scope & SCOPE_SIGNER != 0` leg of verifySignature (as opposed to the scope == 0 leg).
-    function test_isValidSignature_success_scopedSignerActor(uint256 ownerSeed, uint256 actorSeed, bytes32 hash)
+    /// @notice ERC-1271 signing is admin-only: a scoped (non-admin) actor never validates, even for the former
+    ///         SIGNER bit (0x10, now SCOPE_SPONSOR_PAYER). Only the scope-0 admin returns the magic value.
+    /// @dev There is no SIGNER grant anymore; a scoped actor's valid signature returns the failure magic value.
+    function test_isValidSignature_success_scopedActorCannotSign(uint256 ownerSeed, uint256 actorSeed, bytes32 hash)
         public
     {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
@@ -339,12 +340,12 @@ contract DefaultAccountTest is AccountConfigurationTest {
         address actor = vm.addr(actorPk);
         vm.assume(actor != vm.addr(ownerPk) && actor != account);
 
-        _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(actor)), k1Authenticator, SCOPE_SIGNER);
+        _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(actor)), k1Authenticator, SCOPE_SPONSOR_PAYER);
 
         bytes memory authData = _buildK1Auth(actorPk, hash);
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
-        assertEq(result, ERC1271_MAGIC);
+        assertEq(result, ERC1271_FAIL);
     }
 
     // ══════════════════════════════════════════════

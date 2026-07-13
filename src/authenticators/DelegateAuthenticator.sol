@@ -54,7 +54,7 @@ contract DelegateAuthenticator is IAuthenticator {
         address nestedAuthenticator = address(bytes20(nestedAuth[:20]));
         if (nestedAuthenticator == address(this)) revert RecursiveDelegation();
 
-        // Nested signer must have SIGNATURE scope on the delegate account.
+        // Nested actor must be the admin (scope == 0x00) of the delegate account — ERC-1271 signing is admin-only.
         if (!ACCOUNT_CONFIGURATION.verifySignature(delegate, hash, nestedAuth)) revert InvalidNestedSignature();
     }
 }

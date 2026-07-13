@@ -76,8 +76,8 @@ contract DefaultAccount is Receiver {
     //  ERC-1271
     // ══════════════════════════════════════════════
 
-    /// @notice Validates an ERC-1271 signature via AccountConfiguration; requires the verified actor to hold
-    ///         SIGNER scope or be an unrestricted owner. Never reverts.
+    /// @notice Validates an ERC-1271 signature via AccountConfiguration; requires the verified actor to be the
+    ///         unrestricted admin (scope == 0x00) — ERC-1271 signing is admin-only. Never reverts.
     ///
     /// @param hash The digest to authenticate.
     /// @param signature Auth data in `authenticator || data` format.

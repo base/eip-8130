@@ -22,8 +22,8 @@ contract AuthenticateTest is AccountConfigurationTest {
     uint8 constant SCOPE_SENDER = 0x01;
     uint8 constant SCOPE_POLICY = 0x02;
     uint8 constant SCOPE_NONCE = 0x04;
-    uint8 constant SCOPE_PAYER = 0x08;
-    uint8 constant SCOPE_SIGNER = 0x10;
+    uint8 constant SCOPE_SELF_PAYER = 0x08;
+    uint8 constant SCOPE_SPONSOR_PAYER = 0x10;
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // REVERTS (source order)
@@ -594,13 +594,13 @@ contract AuthenticateTest is AccountConfigurationTest {
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    // verifySignature (SIGNER gate + POLICY exclusion)
+    // verifySignature (admin-only)
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice verifySignature returns true iff scope is unrestricted or carries SCOPE_SIGNER (POLICY bit cleared).
-    /// @dev Fuzzes the scope space with SCOPE_POLICY masked out (no policyData) and asserts the boolean equals
-    ///      `scope == 0 || scope & SIGNER != 0`, proving the SIGNER gate across scope combinations.
-    function test_verifySignature_success_signerGateAcrossScopes(
+    /// @notice verifySignature returns true only for the admin actor (scope == 0x00); any scoped actor is false.
+    /// @dev Fuzzes the scope space and asserts the boolean equals `scope == 0`, proving ERC-1271 signing is
+    ///      admin-only — there is no SIGNER grant.
+    function test_verifySignature_success_adminOnlyAcrossScopes(
         uint256 ownerSeed,
         uint256 actorSeed,
         uint8 scopeSeed,
@@ -615,13 +615,13 @@ contract AuthenticateTest is AccountConfigurationTest {
         vm.assume(vm.addr(actorPk) != account);
         _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(vm.addr(actorPk))), address(k1Authenticator), scope);
 
-        bool expected = scope == 0 || scope & SCOPE_SIGNER != 0;
+        bool expected = scope == 0;
         assertEq(accountConfiguration.verifySignature(account, hash, _buildK1Auth(actorPk, hash)), expected);
     }
 
-    /// @notice A policy-bearing actor is NEVER a valid ERC-1271 signer, even when SIGNER is also set.
-    /// @dev verifySignature must return false for a SCOPE_POLICY | SCOPE_SIGNER actor (POLICY excludes signing).
-    function test_verifySignature_success_falseForPolicySignerActor(
+    /// @notice A policy-bearing actor is NEVER a valid ERC-1271 signer (signing is admin-only).
+    /// @dev verifySignature must return false for a scoped SCOPE_POLICY actor.
+    function test_verifySignature_success_falseForPolicyActor(
         uint256 ownerSeed,
         uint256 sessionSeed,
         address manager,
@@ -637,7 +637,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(sessionPk) != account);
         bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
-        _authorizeGatedActor(account, ownerPk, sessionActorId, SCOPE_POLICY | SCOPE_SIGNER, manager, commitment);
+        _authorizeGatedActor(account, ownerPk, sessionActorId, SCOPE_POLICY, manager, commitment);
 
         assertFalse(accountConfiguration.verifySignature(account, hash, _buildK1Auth(sessionPk, hash)));
     }

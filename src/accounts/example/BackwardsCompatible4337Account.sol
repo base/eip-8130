@@ -54,7 +54,7 @@ contract BackwardsCompatible4337Account is DefaultAccount {
 
     /// @dev Elevated-scope bitflags, mirroring AccountConfiguration. A scope of 0x00 is an unrestricted owner.
     uint8 internal constant SCOPE_SENDER = 0x01; // may initiate transactions (authorize the op's calls)
-    uint8 internal constant SCOPE_PAYER = 0x08; // may spend account funds paying for the op
+    uint8 internal constant SCOPE_SELF_PAYER = 0x08; // may self-pay gas for the account's own op (payer == sender)
 
     constructor(address accountConfiguration) DefaultAccount(accountConfiguration) {}
 
@@ -94,7 +94,7 @@ contract BackwardsCompatible4337Account is DefaultAccount {
     ///
     ///      Op authentication (both paths) enforces the verified actor's elevated scope:
     ///        - the actor must be unrestricted (scope 0x00) or hold {SCOPE_SENDER} to authorize the calls;
-    ///        - a self-funded op (`missingAccountFunds != 0`) additionally requires {SCOPE_PAYER}.
+    ///        - a self-funded op (`missingAccountFunds != 0`) additionally requires {SCOPE_SELF_PAYER}.
     ///      This reduced 4337 bridge does not replicate the native-dispatch policy-target gate: a SCOPE_POLICY
     ///      actor without SCOPE_SENDER is rejected here by construction (see {_authorize}), and this repo does not
     ///      implement protocol-side lane/exclusivity checks for actors that combine SCOPE_POLICY with SCOPE_SENDER.
@@ -151,7 +151,7 @@ contract BackwardsCompatible4337Account is DefaultAccount {
     ///         independently reviewable and overridable.
     /// @dev Enforces:
     ///        - scope 0x00 is an unrestricted owner; any other actor must hold {SCOPE_SENDER} to authorize the calls;
-    ///        - a self-funded op (`missingAccountFunds != 0`) additionally requires {SCOPE_PAYER}.
+    ///        - a self-funded op (`missingAccountFunds != 0`) additionally requires {SCOPE_SELF_PAYER}.
     ///      A SCOPE_POLICY actor without SCOPE_SENDER fails the check below by construction — this reduced 4337
     ///      bridge does not give policy-gated actors special call-target enforcement (that is native-dispatch,
     ///      protocol-side behavior out of scope for this repo). An actor combining SCOPE_POLICY | SCOPE_SENDER is
@@ -162,7 +162,7 @@ contract BackwardsCompatible4337Account is DefaultAccount {
         // scope 0x00 = unrestricted owner; otherwise the actor must explicitly hold the required scopes.
         if (scope != 0) {
             if (scope & SCOPE_SENDER == 0) return false;
-            if (missingAccountFunds != 0 && scope & SCOPE_PAYER == 0) return false;
+            if (missingAccountFunds != 0 && scope & SCOPE_SELF_PAYER == 0) return false;
         }
         return true;
     }

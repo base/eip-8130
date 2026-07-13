@@ -335,8 +335,8 @@ contract UpgradeableAccountTest is AccountConfigurationTest {
         (address account,) = _createUpgradeableAccount(ACTOR_PK);
         UpgradeableAccountV2 v2Impl = new UpgradeableAccountV2(address(accountConfiguration));
 
-        // Admin is exactly scope == 0: a SIGNER-scoped key (any non-zero scope) cannot authorize an upgrade.
-        _addScopedActor(account, ACTOR_PK, SCOPED_PK, accountConfiguration.SCOPE_SIGNER());
+        // Admin is exactly scope == 0: a scoped key (any non-zero scope) cannot authorize an upgrade.
+        _addScopedActor(account, ACTOR_PK, SCOPED_PK, accountConfiguration.SCOPE_SPONSOR_PAYER());
 
         bytes32 digest = _upgradeDigest(account, address(0), address(v2Impl), "");
         bytes memory auth = _buildK1Auth(SCOPED_PK, digest);

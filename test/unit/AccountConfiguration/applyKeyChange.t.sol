@@ -8,8 +8,8 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
     uint8 constant SCOPE_SENDER = 0x01;
     uint8 constant SCOPE_POLICY = 0x02;
     uint8 constant SCOPE_NONCE = 0x04;
-    uint8 constant SCOPE_PAYER = 0x08;
-    uint8 constant SCOPE_SIGNER = 0x10;
+    uint8 constant SCOPE_SELF_PAYER = 0x08;
+    uint8 constant SCOPE_SPONSOR_PAYER = 0x10;
 
     /// @notice Authorizing a non-self actor registers it with the given authenticator and unrestricted scope.
     function test_authorizeActor_success_unrestricted(uint256 pk, bytes32 actorId) public {
@@ -182,7 +182,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         assertEq(accountConfiguration.getActorConfig(eoa, selfActorId).scope, firstScope);
 
         // Second admin-signed change rescopes the live self actor in place to a non-admin scope.
-        uint8 newScope = SCOPE_SENDER | SCOPE_PAYER;
+        uint8 newScope = SCOPE_SENDER | SCOPE_SELF_PAYER;
         _rescopeSelf(eoa, eoaPk, newScope);
 
         AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);

@@ -396,8 +396,8 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
 
         uint8[4] memory otherScopes = [
             uint8(0),
-            accountConfiguration.SCOPE_SIGNER(),
-            accountConfiguration.SCOPE_PAYER(),
+            accountConfiguration.SCOPE_SELF_PAYER(),
+            accountConfiguration.SCOPE_SPONSOR_PAYER(),
             accountConfiguration.SCOPE_NONCE()
         ];
         for (uint256 i; i < otherScopes.length; i++) {

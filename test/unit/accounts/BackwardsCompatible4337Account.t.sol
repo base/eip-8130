@@ -29,8 +29,8 @@ contract BackwardsCompatible4337AccountTest is AccountConfigurationTest {
     uint256 constant ACTOR_PK = 100;
 
     uint8 constant SCOPE_SENDER = 0x01;
-    uint8 constant SCOPE_PAYER = 0x08;
-    uint8 constant SCOPE_SIGNER = 0x10;
+    uint8 constant SCOPE_SELF_PAYER = 0x08;
+    uint8 constant SCOPE_SPONSOR_PAYER = 0x10;
 
     bytes32 constant SIGNED_ACTOR_CHANGES_MAGIC = keccak256("ERC4337Account.signedActorChanges.v1");
 
@@ -365,27 +365,26 @@ contract BackwardsCompatible4337AccountTest is AccountConfigurationTest {
         assertEq(BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 1);
     }
 
-    // ── SIGNER scope (ERC-1271) ──
+    // ── ERC-1271 signing (admin-only) ──
 
-    function test_isValidSignature_requiresSignerScope() public {
+    function test_isValidSignature_scopedActorCannotSign() public {
         (address account,) = _create4337Account(ACTOR_PK);
-        uint256 senderOnlyPk = 201;
-        _authorizeScopedActor(account, ACTOR_PK, senderOnlyPk, SCOPE_SENDER, address(0), bytes32(0));
+        uint256 scopedPk = 201;
+        _authorizeScopedActor(account, ACTOR_PK, scopedPk, SCOPE_SENDER, address(0), bytes32(0));
 
         bytes32 hash = keccak256("sign me");
-        bytes memory authData = _buildK1Auth(senderOnlyPk, hash);
+        bytes memory authData = _buildK1Auth(scopedPk, hash);
 
-        // A SENDER-only actor lacks SIGNER scope, so ERC-1271 validation must fail.
+        // A scoped (non-admin) actor cannot ERC-1271 sign — signing is admin-only, so validation must fail.
         assertEq(DefaultAccount(payable(account)).isValidSignature(hash, authData), bytes4(0xFFFFFFFF));
     }
 
-    function test_isValidSignature_signerScopeSucceeds() public {
+    function test_isValidSignature_adminSucceeds() public {
         (address account,) = _create4337Account(ACTOR_PK);
-        uint256 signerPk = 202;
-        _authorizeScopedActor(account, ACTOR_PK, signerPk, SCOPE_SIGNER, address(0), bytes32(0));
 
+        // The unrestricted admin actor (scope == 0x00) is the only actor that can ERC-1271 sign.
         bytes32 hash = keccak256("sign me");
-        bytes memory authData = _buildK1Auth(signerPk, hash);
+        bytes memory authData = _buildK1Auth(ACTOR_PK, hash);
 
         assertEq(DefaultAccount(payable(account)).isValidSignature(hash, authData), bytes4(0x1626ba7e));
     }
@@ -406,20 +405,20 @@ contract BackwardsCompatible4337AccountTest is AccountConfigurationTest {
 
     function test_validateUserOp_requiresSenderScope() public {
         (address account,) = _create4337Account(ACTOR_PK);
-        uint256 signerOnlyPk = 204;
-        _authorizeScopedActor(account, ACTOR_PK, signerOnlyPk, SCOPE_SIGNER, address(0), bytes32(0));
+        uint256 nonSenderPk = 204;
+        _authorizeScopedActor(account, ACTOR_PK, nonSenderPk, SCOPE_SPONSOR_PAYER, address(0), bytes32(0));
 
         bytes32 userOpHash = keccak256("op");
-        PackedUserOperation memory userOp = _buildUserOp(account, _buildK1Auth(signerOnlyPk, userOpHash));
+        PackedUserOperation memory userOp = _buildUserOp(account, _buildK1Auth(nonSenderPk, userOpHash));
 
-        // A SIGNER-only actor cannot initiate transactions: no SENDER scope.
+        // An actor without SENDER scope cannot initiate transactions.
         vm.prank(ENTRY_POINT);
         assertEq(BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0), 1);
     }
 
-    // ── PAYER scope (self-funded ops) ──
+    // ── SELF_PAYER scope (self-funded ops) ──
 
-    function test_validateUserOp_selfFundedRequiresPayerScope() public {
+    function test_validateUserOp_selfFundedRequiresSelfPayerScope() public {
         (address account,) = _create4337Account(ACTOR_PK);
         vm.deal(account, 1 ether);
         uint256 senderOnlyPk = 205;
@@ -428,16 +427,16 @@ contract BackwardsCompatible4337AccountTest is AccountConfigurationTest {
         bytes32 userOpHash = keccak256("op");
         PackedUserOperation memory userOp = _buildUserOp(account, _buildK1Auth(senderOnlyPk, userOpHash));
 
-        // SENDER but not PAYER: cannot authorize spending the account's funds on gas.
+        // SENDER but not SELF_PAYER: cannot authorize spending the account's funds on gas.
         vm.prank(ENTRY_POINT);
         assertEq(BackwardsCompatible4337Account(payable(account)).validateUserOp(userOp, userOpHash, 0.1 ether), 1);
     }
 
-    function test_validateUserOp_senderPayerScope_selfFundedSucceeds() public {
+    function test_validateUserOp_senderSelfPayerScope_selfFundedSucceeds() public {
         (address account,) = _create4337Account(ACTOR_PK);
         vm.deal(account, 1 ether);
         uint256 pk = 206;
-        _authorizeScopedActor(account, ACTOR_PK, pk, SCOPE_SENDER | SCOPE_PAYER, address(0), bytes32(0));
+        _authorizeScopedActor(account, ACTOR_PK, pk, SCOPE_SENDER | SCOPE_SELF_PAYER, address(0), bytes32(0));
 
         bytes32 userOpHash = keccak256("op");
         PackedUserOperation memory userOp = _buildUserOp(account, _buildK1Auth(pk, userOpHash));
