@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.30;
+pragma solidity 0.8.36;
 
 /// @notice Generates runtime bytecode for an ERC-1967 proxy with a hardcoded default
 ///         implementation. Works immediately on deployment — no initialization required.
