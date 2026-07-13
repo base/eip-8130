@@ -26,9 +26,24 @@ import {RecurringAllowance} from "./RecurringAllowance.sol";
 ///        - A recipient allowlist may only be attached to one of those selectors (enforced at install).
 ///        - Spend limits are consumed only for those selectors when called on a limited token (`approve` included,
 ///          so an allowance grant cannot exceed the remaining budget). `anySelector` on a limited token is rejected
-///          at install; pin an explicit selector allowlist instead. Non-spend selectors on a limited token are still
-///          governed only by that allowlist — do not list methods that move value outside the tracked set.
+///          at install; pin an explicit selector allowlist instead.
+///        - WARNING: any *other* selector on a limited token is gated by the allowlist but NOT debited from the
+///          cap. Value-moving methods this policy cannot decode — e.g. ERC-20 `increaseAllowance`/`decreaseAllowance`,
+///          ERC-721 `safeTransferFrom`, any ERC-1155 transfer — therefore bypass the spend cap entirely if listed.
+///          Do NOT allow such selectors on a token you are trying to bound; only `transfer`/`transferFrom`/`approve`
+///          are tracked.
 ///        - Native-ETH limits are consumed from each call's `value`, independent of calldata.
+///
+///      Approvals vs. periods: `approve` is debited from the *current* period at grant time, but an ERC-20 allowance
+///      is standing on-chain state that outlives the period and is pulled by a third party this policy never sees. A
+///      grantee can therefore pull a still-live approval from an earlier period in the same wall-clock window as a
+///      fresh-period `transfer`, so real token outflow across a period boundary can exceed a single period's cap.
+///      Per-period accounting is exact for the key's own actions; it cannot bound reuse of standing allowances.
+///
+///      Calldata length: empty calldata is allowed (a `receive()` / plain value transfer, gated by the target
+///      allowlist and native-ETH cap); calldata of 1–3 bytes is rejected ({MissingSelector}) as it cannot carry a
+///      4-byte selector; 4+ bytes is treated as a selector (so a fallback reachable via 4+ byte data is gated by the
+///      selector rules).
 contract SessionPolicy is Policy {
     using RecurringAllowance for RecurringAllowance.State;
 
@@ -310,7 +325,8 @@ contract SessionPolicy is Policy {
                 }
             }
 
-            // 3a. ERC-20 spend limit: consume the target token's cap for decodable spend selectors.
+            // 3a. ERC-20 spend limit: consume the target token's cap for decodable spend selectors. Note `approve`
+            // debits at grant time; a standing allowance can still be reused across periods (see contract NatSpec).
             if (_isErc20Selector(selector)) {
                 TokenSpend storage tokenCap = _tokenSpend[commitment][action.target];
                 if (tokenCap.set) {
