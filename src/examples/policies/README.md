@@ -29,7 +29,9 @@ protocol-side, not enforced by this contract.
    Because reaching this manager already proves it is the key's gate, `execute` does not re-check the target: it
    reads the acting `actorId` from the [transaction-context precompile](../../interfaces/ITransactionContext.sol)
    (`getTransactionSenderActorId()`) and needs the live `getPolicyCommitment(account, actorId)` (a single SLOAD)
-   to locate the installed binding — a revoked key has a zero commitment and stops immediately. Actor expiry is
+   to locate the installed binding — a revoked key has a zero commitment and stops immediately. (A real binding's
+   commitment is a `keccak256` hash, never zero, so this manager treats a `SCOPE_POLICY` actor configured with a
+   zero `commitment` as having no active policy — there is nothing installable to enforce.) Actor expiry is
    checked separately via `getActorConfig` (expiry does not clear the commitment slot). It then invokes the policy,
    which enforces the committed policy against the per-use action and returns an `executeBatch` call plan that the
    manager — an execution-enabled actor (`TRUSTED_EXECUTOR`) — forwards to the account.
@@ -143,7 +145,7 @@ as a *policy-only* actor — it has no authority of its own, it only carries a b
 AccountConfiguration.ActorConfig({
     authenticator: EXTERNAL_POLICY_AUTHENTICATOR, // recognized actor; NO direct executeBatch; not 8130-usable
     scope:         0x02,                          // SCOPE_POLICY — gated initiation only (MAY also OR SCOPE_SELF_PAYER
-                                                  //   for self-pay; MUST NOT combine with SENDER)
+                                                  //   for self-pay; SHOULD NOT combine with SENDER — POLICY gates regardless)
     expiry:        0
 });
 ```

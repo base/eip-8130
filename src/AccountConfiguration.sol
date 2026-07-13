@@ -535,7 +535,9 @@ contract AccountConfiguration {
     ///      the resolved actor must be unrestricted (scope 0, admin) — there is no elevated scope for changing the
     ///      lock. Lock changes are local-channel only: the digest binds `block.chainid` and a monotonic per-account
     ///      `localSequence` consumed on each call (mirroring applySignedActorChanges so both signed entry points
-    ///      stay coherent on the same counter).
+    ///      stay coherent on the same counter). Because both entry points share this counter, a pre-signed local
+    ///      actor change and a lock op contend for the same sequence: whichever is relayed first consumes it and
+    ///      invalidates the other until it is re-signed at the next sequence.
     /// @dev op = LOCK_OP (1): only from the unlocked state (reverts AccountIsLocked if currently locked). Stores
     ///      `unlockDelay` and sets the hard-locked state (unlocksAt == type(uint40).max). Emits AccountLocked.
     /// @dev op = UNLOCK_OP (2): only from the hard-locked state with no pending unlock (reverts NotLocked
@@ -1097,7 +1099,9 @@ contract AccountConfiguration {
         if (config.authenticator != authenticator) revert AuthenticatorMismatch();
         // Expiry is read from the same slot; an expired actor fails authentication. 0 = no expiry.
         if (config.expiry != 0 && block.timestamp > config.expiry) revert ActorExpired();
-        return (config.scope, _policyManager[actorId][account]);
+        // Read the policy-manager slot only for a policy-gated actor; non-policy actors (incl. admin) skip the SLOAD.
+        address policyTarget = (config.scope & SCOPE_POLICY != 0) ? _policyManager[actorId][account] : address(0);
+        return (config.scope, policyTarget);
     }
 
     /// @dev The single secp256k1 ("K1") path. Recovers the signer (EIP-2 enforced), then resolves the actor:
@@ -1106,7 +1110,8 @@ contract AccountConfiguration {
     ///          owner; non-zero = a scoped self). A non-k1 self is unreachable here by construction (it requires
     ///          its own authenticator), and mutual exclusion keeps the flag set whenever one is live.
     ///        - otherwise the signer's actorId must carry an explicit K1 config in _actorConfig (any other k1 actor).
-    ///      Both the common self and other-actor paths cost a single SLOAD plus the policy-manager read.
+    ///      Both the common self and other-actor paths cost a single SLOAD; the policy-manager slot is read only for a
+    ///      policy-gated actor (`scope & SCOPE_POLICY != 0`), so non-policy authentications avoid the extra SLOAD.
     function _authenticateK1(address account, bytes32 hash, bytes calldata data)
         internal
         view
@@ -1122,7 +1127,10 @@ contract AccountConfiguration {
             if (st.flags & FLAG_REVOKE_DEFAULT_EOA != 0) revert DefaultEoaRevoked();
             if (st.defaultEOAExpiry != 0 && block.timestamp > st.defaultEOAExpiry) revert ActorExpired();
             bytes32 selfActorId = bytes32(bytes20(account));
-            return (st.defaultEOAScope, _policyManager[selfActorId][account]);
+            uint8 selfScope = st.defaultEOAScope;
+            // Skip the policy-manager SLOAD unless this self key is policy-gated (the common admin self never is).
+            address policyTarget = (selfScope & SCOPE_POLICY != 0) ? _policyManager[selfActorId][account] : address(0);
+            return (selfScope, policyTarget);
         }
 
         bytes32 actorId = bytes32(bytes20(recovered));
@@ -1130,7 +1138,9 @@ contract AccountConfiguration {
         if (config.authenticator != K1_AUTHENTICATOR) revert AuthenticatorMismatch();
         // Expiry is read from the same slot; an expired actor fails authentication. 0 = no expiry.
         if (config.expiry != 0 && block.timestamp > config.expiry) revert ActorExpired();
-        return (config.scope, _policyManager[actorId][account]);
+        // Read the policy-manager slot only for a policy-gated actor; non-policy actors skip the SLOAD.
+        address policyTarget = (config.scope & SCOPE_POLICY != 0) ? _policyManager[actorId][account] : address(0);
+        return (config.scope, policyTarget);
     }
 
     /// @dev True if the account's default (implicit) EOA has been revoked via the AccountState flag.
