@@ -409,7 +409,7 @@ contract AccountConfiguration {
     {
         bytes32 effectiveSalt;
         bytes memory deploymentCode;
-        (account, effectiveSalt, deploymentCode) = _prepare(userSalt, bytecode, initialActors);
+        (account, effectiveSalt, deploymentCode) = _prepareDeployment(userSalt, bytecode, initialActors);
 
         // Block re-initialization of an already-bootstrapped account. This must be explicit: authorizeActor is now an
         // upsert (no duplicate-actor revert) and the create2 below is intentionally swallowed (pop), so a duplicate
@@ -683,7 +683,7 @@ contract AccountConfiguration {
         view
         returns (address)
     {
-        (address account,,) = _prepare(userSalt, bytecode, initialActors);
+        (address account,,) = _prepareDeployment(userSalt, bytecode, initialActors);
         return account;
     }
 
@@ -1018,7 +1018,7 @@ contract AccountConfiguration {
     /// @dev Derives the CREATE2 inputs once for both {createAccount} and {computeAddress}: the effective salt, the
     ///      deployment code, and the resulting counterfactual address. Sharing this avoids rebuilding and re-hashing
     ///      the (up to ~24KB) deployment code — and recomputing the actors commitment — twice per creation.
-    function _prepare(bytes32 userSalt, bytes calldata bytecode, InitialActor[] calldata initialActors)
+    function _prepareDeployment(bytes32 userSalt, bytes calldata bytecode, InitialActor[] calldata initialActors)
         private
         view
         returns (address account, bytes32 effectiveSalt, bytes memory deploymentCode)
