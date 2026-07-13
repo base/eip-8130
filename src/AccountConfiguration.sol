@@ -366,9 +366,11 @@ contract AccountConfiguration {
     // FUNCTIONS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice Deploys a new account with its initial actors, which are always registered as unrestricted owners
-    ///         (scope 0x00, no expiry, no policy); scoped keys and session-key policies are added afterwards via
-    ///         applySignedActorChanges. The implicit default-EOA key is disabled on creation.
+    /// @notice Deploys a new account with its initial actors. Each initial actor is registered with its declared
+    ///         `scope` and, when `scope & SCOPE_POLICY` is set, its `policyData` (an external `manager` is expressible
+    ///         at create; `manager = account` is not, as the address is unknown at commitment time). `expiry` is
+    ///         always 0 at create — scoped-with-expiry keys are added afterwards via applySignedActorChanges. The
+    ///         implicit default-EOA key is disabled on creation.
     ///
     /// @dev Reverts with BytecodeTooLarge when `bytecode` exceeds the maximum encodable length.
     /// @dev Reverts with AlreadyInitialized when the account already has EIP-8130 state.
@@ -379,7 +381,7 @@ contract AccountConfiguration {
     ///
     /// @param userSalt Caller-chosen salt mixed into the CREATE2 address derivation.
     /// @param bytecode Account deployment bytecode to CREATE2 at the derived address.
-    /// @param initialActors Bootstrap owners, strictly ascending by actorId; each becomes an unrestricted owner.
+    /// @param initialActors Bootstrap actors, strictly ascending by actorId; each carries its declared scope/policyData.
     ///
     /// @return account The deployed account address.
     function createAccount(bytes32 userSalt, bytes calldata bytecode, InitialActor[] calldata initialActors)
@@ -438,7 +440,7 @@ contract AccountConfiguration {
     /// @param account The account being imported.
     /// @param chainId Replay domain of the import signature: 0 = multichain (valid on every chain), otherwise it
     ///        must equal the current chain.
-    /// @param initialActors Bootstrap owners, strictly ascending by actorId; each becomes an unrestricted owner.
+    /// @param initialActors Bootstrap actors, strictly ascending by actorId; each carries its declared scope/policyData.
     /// @param signature ERC-1271 signature the account validates over the import digest.
     function importAccount(
         address account,
