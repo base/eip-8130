@@ -119,27 +119,27 @@ contract SessionPolicy is Policy {
     ///      window spans [0, max], so the cumulative spend simply never refreshes within representable time.
     uint40 internal constant ONE_TIME_PERIOD = type(uint40).max;
 
-    /// @dev The action's `target` is not in the committed call-target allowlist.
+    /// @notice The action's `target` is not in the committed call-target allowlist.
     error TargetNotAllowed(address target);
-    /// @dev `selector` is not permitted on `target` (the target pins an explicit selector allowlist that omits it).
+    /// @notice `selector` is not permitted on `target` (the target pins an explicit selector allowlist that omits it).
     error SelectorNotAllowed(address target, bytes4 selector);
-    /// @dev `recipient` (decoded from the ERC-20 call) is not in the selector's committed recipient allowlist.
+    /// @notice `recipient` (decoded from the ERC-20 call) is not in the selector's committed recipient allowlist.
     error RecipientNotAllowed(address target, bytes4 selector, address recipient);
-    /// @dev The action carried 1–3 bytes of calldata: too short to hold a 4-byte selector, so it is rejected rather
-    ///      than guessed.
+    /// @notice The action carried 1–3 bytes of calldata: too short to hold a 4-byte selector, so it is rejected rather
+    ///         than guessed.
     error MissingSelector();
-    /// @dev A configured spend `limit` exceeds uint160 and cannot be stored in the normalized allowance field.
+    /// @notice A configured spend `limit` exceeds uint160 and cannot be stored in the normalized allowance field.
     error LimitTooLarge(address token, uint256 limit);
-    /// @dev A configured spend limit was zero, which would be a no-op cap; reject at install to fail closed.
+    /// @notice A configured spend limit was zero, which would be a no-op cap; reject at install to fail closed.
     error ZeroLimit(address token);
-    /// @dev A recipient allowlist was attached to a selector whose recipient argument this policy cannot decode
-    ///      (only the standard ERC-20 selectors are supported).
+    /// @notice A recipient allowlist was attached to a selector whose recipient argument this policy cannot decode
+    ///         (only the standard ERC-20 selectors are supported).
     error RecipientRuleUnsupportedSelector(bytes4 selector);
-    /// @dev A supported ERC-20 call's calldata was too short to decode its (recipient, amount) arguments.
+    /// @notice A supported ERC-20 call's calldata was too short to decode its (recipient, amount) arguments.
     error MalformedTokenCall(bytes4 selector);
-    /// @dev A limited token must pin its allowed selectors: `anySelector` would let non-ERC20 methods move value
-    ///      without debiting the spend cap. Native-ETH limits (`token == address(0)`) are unaffected — they gate
-    ///      call `value`, not a call target.
+    /// @notice A limited token must pin its allowed selectors: `anySelector` would let non-ERC20 methods move value
+    ///         without debiting the spend cap. Native-ETH limits (`token == address(0)`) are unaffected — they gate
+    ///         call `value`, not a call target.
     error AnySelectorOnLimitedToken(address token);
 
     constructor(address policyManager) Policy(policyManager) {}

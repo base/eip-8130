@@ -92,23 +92,29 @@ contract PolicyManager is ReentrancyGuard {
     ///      enforcement reverted (e.g. revoked/expired binding, over budget, or a failing account call).
     event ExecutionSkipped(address indexed account, address indexed policy, bytes32 indexed actorId);
 
+    /// @notice No installed binding exists for the given `(policy, commitment)`.
     error PolicyNotInstalled(bytes32 commitment);
+    /// @notice A binding for this `(policy, commitment)` is already installed; installs are one-shot per commitment.
     error PolicyAlreadyInstalled(bytes32 commitment);
+    /// @notice The current time is outside the binding's `[validAfter, validUntil)` execution window.
     error OutsideValidityWindow(uint40 validAfter, uint40 validUntil, uint256 timestamp);
+    /// @notice The account has not signed this exact commitment for this manager on the given actor (the resolved
+    ///         policy manager or commitment does not match the binding).
     error CommitmentNotAuthorized(bytes32 actorId, address target, bytes32 commitment);
-    /// @dev The executing account is not the account the commitment was installed for. Commitments are opaque in
-    ///      AccountConfiguration, so this binds execution (and the commitment-keyed policy state) to its owner.
+    /// @notice The executing account is not the account the commitment was installed for. Commitments are opaque in
+    ///         AccountConfiguration, so this binds execution (and the commitment-keyed policy state) to its owner.
     error CommitmentAccountMismatch(address expected, address actual);
-    /// @dev The acting actor has no live policy commitment for the account — i.e. it is not a gated actor of this
-    ///      account, was revoked, or (on the external path) the account did not gate this manager for it.
+    /// @notice The acting actor has no live policy commitment for the account — i.e. it is not a gated actor of this
+    ///         account, was revoked, or (on the external path) the account did not gate this manager for it.
     error NoActivePolicy(bytes32 actorId);
-    /// @dev The acting actor's `ActorConfig.expiry` has passed. Commitment is not cleared on expiry (only on revoke),
-    ///      so the manager must enforce this itself — especially on {executeFor}, which has no protocol auth path.
+    /// @notice The acting actor's `ActorConfig.expiry` has passed. Commitment is not cleared on expiry (only on
+    ///         revoke), so the manager must enforce this itself — especially on {executeFor}, which has no protocol
+    ///         auth path.
     error ActorExpired(bytes32 actorId);
-    /// @dev {executeForMany} array length mismatch between `accounts` and `executionData`.
+    /// @notice {executeForMany} array length mismatch between `accounts` and `executionData`.
     error LengthMismatch();
-    /// @dev The per-account self-call boundary used by {executeForMany} was invoked by someone other than this
-    ///      contract.
+    /// @notice The per-account self-call boundary used by {executeForMany} was invoked by someone other than this
+    ///         contract.
     error OnlySelf();
 
     /// @notice Computes the commitment (binding identifier) for a binding.
