@@ -829,8 +829,8 @@ contract AccountConfiguration {
             return (true, false, type(uint40).max, uint16(config.lockUnion));
         }
         // Unlock initiated: lockUnion holds the effective unlock timestamp; the delay has been consumed.
-        uint40 unlocksAt = config.lockUnion;
-        return (block.timestamp < unlocksAt, true, unlocksAt, 0);
+        uint40 unlockTime = config.lockUnion;
+        return (block.timestamp < unlockTime, true, unlockTime, 0);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -1144,8 +1144,8 @@ contract AccountConfiguration {
         // Expiry is read from the same slot; an expired actor fails authentication. 0 = no expiry.
         if (config.expiry != 0 && block.timestamp > config.expiry) revert ActorExpired();
         // Read the policy-manager slot only for a policy-gated actor; non-policy actors (incl. admin) skip the SLOAD.
-        address policyTarget = (config.scope & SCOPE_POLICY != 0) ? _policyManager[actorId][account] : address(0);
-        return (config.scope, policyTarget);
+        address target = (config.scope & SCOPE_POLICY != 0) ? _policyManager[actorId][account] : address(0);
+        return (config.scope, target);
     }
 
     /// @dev The single secp256k1 ("K1") path. Recovers the signer (EIP-2 enforced), then resolves the actor:
@@ -1173,8 +1173,8 @@ contract AccountConfiguration {
             bytes32 selfActorId = bytes32(bytes20(account));
             uint8 selfScope = st.defaultEOAScope;
             // Skip the policy-manager SLOAD unless this self key is policy-gated (the common admin self never is).
-            address policyTarget = (selfScope & SCOPE_POLICY != 0) ? _policyManager[selfActorId][account] : address(0);
-            return (selfScope, policyTarget);
+            address target = (selfScope & SCOPE_POLICY != 0) ? _policyManager[selfActorId][account] : address(0);
+            return (selfScope, target);
         }
 
         bytes32 actorId = bytes32(bytes20(recovered));

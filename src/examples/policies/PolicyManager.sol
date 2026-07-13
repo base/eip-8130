@@ -193,6 +193,8 @@ contract PolicyManager is ReentrancyGuard {
 
         // Single-SLOAD read of the live signed commitment for the acting actor. Zero means the actor is not a gated
         // key of this account (or was revoked): there is no binding to enforce, so reject.
+        // Note: a zero-commitment SCOPE_POLICY actor is valid per the spec (gating is set by the scope bit, not the
+        // commitment value) but is treated as ungated here — a real binding commits to keccak256 params, never zero.
         bytes32 commitment = ACCOUNT_CONFIGURATION.getPolicyCommitment(account, actorId);
         if (commitment == bytes32(0)) revert NoActivePolicy(actorId);
         _requireNotExpired(account, actorId);
@@ -280,6 +282,7 @@ contract PolicyManager is ReentrancyGuard {
         if (ACCOUNT_CONFIGURATION.getPolicyManager(account, actorId) != address(this)) {
             revert NoActivePolicy(actorId);
         }
+        // Note: a zero-commitment SCOPE_POLICY actor is valid per the spec but treated as ungated here (see execute).
         bytes32 commitment = ACCOUNT_CONFIGURATION.getPolicyCommitment(account, actorId);
         if (commitment == bytes32(0)) revert NoActivePolicy(actorId);
         _requireNotExpired(account, actorId);

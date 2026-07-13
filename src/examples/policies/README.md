@@ -145,7 +145,8 @@ as a *policy-only* actor — it has no authority of its own, it only carries a b
 AccountConfiguration.ActorConfig({
     authenticator: EXTERNAL_POLICY_AUTHENTICATOR, // recognized actor; NO direct executeBatch; not 8130-usable
     scope:         0x02,                          // SCOPE_POLICY — gated initiation only (MAY also OR SCOPE_SELF_PAYER
-                                                  //   for self-pay; SHOULD NOT combine with SENDER — POLICY gates regardless)
+                                                  //   for self-pay; SHOULD NOT combine with SENDER — POLICY gates
+                                                  //   regardless, so SENDER adds no authority the protocol will honor)
     expiry:        0
 });
 ```
