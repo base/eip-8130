@@ -86,7 +86,7 @@ contract AccountConfiguration {
 
     /// @dev ERC-1271 isValidSignature(bytes32,bytes) selector, which also equals the ERC-1271 magic return value
     ///      (0x1626ba7e); used both to build the import staticcall and to validate its result.
-    bytes4 constant ERC1271_SELECTOR = bytes4(keccak256("isValidSignature(bytes32,bytes)"));
+    bytes4 internal constant ERC1271_SELECTOR = bytes4(keccak256("isValidSignature(bytes32,bytes)"));
 
     /// @notice Typehash binding an importAccount signature to its salt, chainId, and initial actor set.
     ///
@@ -901,6 +901,10 @@ contract AccountConfiguration {
         internal
         nonZeroAccount(account)
     {
+        // Only reject the zero authenticator (the empty-slot sentinel). A non-zero authenticator with no code is
+        // accepted deliberately: authenticators may be counterfactual (deployed later) and some are intentionally
+        // codeless sentinels (e.g. EXTERNAL_POLICY_AUTHENTICATOR). A bad authenticator simply fails fail-closed at
+        // authentication time, mirroring the reference PolicyManager's treatment of a zero-commitment policy actor.
         if (config.authenticator < K1_AUTHENTICATOR) revert InvalidAuthenticator();
 
         // Slice the signed policy by scope & SCOPE_POLICY. The commitment is opaque to the protocol. This contract
