@@ -6,7 +6,7 @@ In EIP-8130, a restricted actor (e.g. a session key) is configured with `scope &
 `policy_manager` address and an opaque `policy_commitment` in the Account Configuration contract. The protocol
 gate forces every call that actor makes to land on that single manager. These contracts are an example of what
 that manager can be: one that enforces application-specific limits and then drives the account. `SCOPE_POLICY`
-(`0x10`) may be combined with other scope bits (e.g. `SCOPE_POLICY | SCOPE_SELF_PAYER`) — `AccountConfiguration` does
+(`0x02`) may be combined with other scope bits (e.g. `SCOPE_POLICY | SCOPE_SELF_PAYER`) — `AccountConfiguration` does
 not reject scope combinations; use-time exclusivity between policy gating and an actor's other capabilities is
 protocol-side, not enforced by this contract.
 
@@ -142,14 +142,14 @@ as a *policy-only* actor — it has no authority of its own, it only carries a b
 // actorId = bytes20(provider). The provider never signs an 8130 tx; it acts by being msg.sender.
 AccountConfiguration.ActorConfig({
     authenticator: EXTERNAL_POLICY_AUTHENTICATOR, // recognized actor; NO direct executeBatch; not 8130-usable
-    scope:         0x10,                          // SCOPE_POLICY — gated initiation only (MAY also OR SCOPE_SELF_PAYER
+    scope:         0x02,                          // SCOPE_POLICY — gated initiation only (MAY also OR SCOPE_SELF_PAYER
                                                   //   for self-pay; MUST NOT combine with SENDER)
     expiry:        0
 });
 ```
 
-`SCOPE_NONCE` (`0x20`) is a separate, orthogonal scope bit: it marks an actor as bound to a protocol-side nonce
-lane. This contract stores the bit verbatim and never interprets it — lane allocation/semantics are entirely
+`SCOPE_NONCE` (`0x04`) is a separate, orthogonal scope bit: it permits a restricted actor to use sequenced
+`nonce_key`s. This contract stores the bit verbatim and never interprets it — nonce semantics are entirely
 protocol-side — so it isn't part of the policy flow above and is only mentioned here for completeness.
 
 Critically, the provider must **not** be registered with `TRUSTED_EXECUTOR` — that sentinel grants
