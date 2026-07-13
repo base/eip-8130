@@ -90,6 +90,17 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
         binding; // silence unused
     }
 
+    function test_executeFor_revertsWhenCommitmentZero() public {
+        // The account gated the provider to *this* manager but with a zero (empty) commitment. The manager-match
+        // passes, but the live commitment read resolves to zero, so there is no binding to enforce.
+        address account = _createAccount(bytes32(uint256(1)));
+        _authorizeProvider(account, address(manager), bytes32(0));
+
+        vm.expectRevert(abi.encodeWithSelector(PolicyManager.NoActivePolicy.selector, bytes32(bytes20(provider))));
+        vm.prank(provider);
+        manager.executeFor(account, address(policy), _pull(1));
+    }
+
     function test_executeFor_revertsAfterRevoke() public {
         address account = _optIn(bytes32(uint256(1)), 100e6, MONTH);
 

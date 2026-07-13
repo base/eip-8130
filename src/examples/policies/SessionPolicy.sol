@@ -119,13 +119,23 @@ contract SessionPolicy is Policy {
     ///      window spans [0, max], so the cumulative spend simply never refreshes within representable time.
     uint40 internal constant ONE_TIME_PERIOD = type(uint40).max;
 
+    /// @dev The action's `target` is not in the committed call-target allowlist.
     error TargetNotAllowed(address target);
+    /// @dev `selector` is not permitted on `target` (the target pins an explicit selector allowlist that omits it).
     error SelectorNotAllowed(address target, bytes4 selector);
+    /// @dev `recipient` (decoded from the ERC-20 call) is not in the selector's committed recipient allowlist.
     error RecipientNotAllowed(address target, bytes4 selector, address recipient);
+    /// @dev The action carried 1–3 bytes of calldata: too short to hold a 4-byte selector, so it is rejected rather
+    ///      than guessed.
     error MissingSelector();
+    /// @dev A configured spend `limit` exceeds uint160 and cannot be stored in the normalized allowance field.
     error LimitTooLarge(address token, uint256 limit);
+    /// @dev A configured spend limit was zero, which would be a no-op cap; reject at install to fail closed.
     error ZeroLimit(address token);
+    /// @dev A recipient allowlist was attached to a selector whose recipient argument this policy cannot decode
+    ///      (only the standard ERC-20 selectors are supported).
     error RecipientRuleUnsupportedSelector(bytes4 selector);
+    /// @dev A supported ERC-20 call's calldata was too short to decode its (recipient, amount) arguments.
     error MalformedTokenCall(bytes4 selector);
     /// @dev A limited token must pin its allowed selectors: `anySelector` would let non-ERC20 methods move value
     ///      without debiting the spend cap. Native-ETH limits (`token == address(0)`) are unaffected — they gate
@@ -136,6 +146,14 @@ contract SessionPolicy is Policy {
 
     // ── Views ──
 
+    /// @notice Returns the committed target scope for a binding: whether the target is allowed at all, and whether
+    ///         any selector is permitted on it (i.e. no explicit selector allowlist was configured).
+    ///
+    /// @param commitment The installed binding's commitment.
+    /// @param target     The call target to resolve.
+    ///
+    /// @return allowed     True if `target` is in the binding's call-target allowlist.
+    /// @return anySelector True if any selector is permitted on `target` (no per-selector gating).
     function isTargetAllowed(bytes32 commitment, address target)
         external
         view
@@ -145,6 +163,15 @@ contract SessionPolicy is Policy {
         return (s.allowed, s.anySelector);
     }
 
+    /// @notice Returns the committed selector rule for a `(target, selector)` pair: whether the selector is allowed
+    ///         and whether a recipient allowlist applies to it.
+    ///
+    /// @param commitment The installed binding's commitment.
+    /// @param target     The call target the selector rule belongs to.
+    /// @param selector   The 4-byte function selector to resolve.
+    ///
+    /// @return allowed        True if `selector` is permitted on `target`.
+    /// @return recipientBound True if a recipient allowlist is enforced for this selector.
     function getSelectorRule(bytes32 commitment, address target, bytes4 selector)
         external
         view
@@ -154,6 +181,14 @@ contract SessionPolicy is Policy {
         return (r.allowed, r.recipientBound);
     }
 
+    /// @notice Returns whether `recipient` is in the committed recipient allowlist for a `(target, selector)` pair.
+    ///
+    /// @param commitment The installed binding's commitment.
+    /// @param target     The call target the selector rule belongs to.
+    /// @param selector   The 4-byte function selector the allowlist is attached to.
+    /// @param recipient  The recipient address to check.
+    ///
+    /// @return True if `recipient` is allowed for `selector` on `target`.
     function isRecipientAllowed(bytes32 commitment, address target, bytes4 selector, address recipient)
         external
         view
@@ -162,6 +197,14 @@ contract SessionPolicy is Policy {
         return _recipientAllowed[commitment][target][selector][recipient];
     }
 
+    /// @notice Returns the committed spend cap for a token (or native ETH via `token == address(0)`).
+    ///
+    /// @param commitment The installed binding's commitment.
+    /// @param token      ERC-20 token address, or address(0) for the native-ETH cap.
+    ///
+    /// @return set       True if a spend cap is configured for `token`.
+    /// @return allowance The per-period spend cap (normalized to uint160).
+    /// @return period    The recurring period in seconds, or {ONE_TIME_PERIOD} for a one-time (never-resetting) cap.
     function getTokenLimit(bytes32 commitment, address token)
         external
         view
@@ -171,6 +214,15 @@ contract SessionPolicy is Policy {
         return (t.set, t.allowance, t.period);
     }
 
+    /// @notice Returns the current-period spend usage for a token's cap under a binding.
+    ///
+    /// @dev Reflects the remaining budget for the active window: the returned {RecurringAllowance.PeriodUsage} carries
+    ///      the period bounds and the amount already spent within them.
+    ///
+    /// @param commitment The installed binding's commitment.
+    /// @param token      ERC-20 token address, or address(0) for the native-ETH cap.
+    ///
+    /// @return The current period's usage snapshot (window bounds and spend so far).
     function getCurrentSpend(bytes32 commitment, address token)
         external
         view
@@ -182,6 +234,12 @@ contract SessionPolicy is Policy {
 
     // ── Hooks ──
 
+    /// @dev Decodes the committed {Config} once and flattens it into the commitment-keyed lookup mappings that
+    ///      {_onExecute} reads. Validates and normalizes every spend cap (rejects {ZeroLimit} and {LimitTooLarge},
+    ///      folds a zero period into {ONE_TIME_PERIOD}); for each call scope records the target (rejecting
+    ///      {AnySelectorOnLimitedToken} when a limited token would be left with untracked selectors) and, per
+    ///      selector rule, whether a recipient allowlist applies (rejecting {RecipientRuleUnsupportedSelector} for a
+    ///      selector whose recipient cannot be decoded) plus the recipient set itself.
     function _onInstall(bytes32 commitment, address, bytes calldata policyConfig) internal override {
         Config memory config = abi.decode(policyConfig, (Config));
 
@@ -220,6 +278,12 @@ contract SessionPolicy is Policy {
         }
     }
 
+    /// @dev Enforces every configured dimension against a single decoded {Action} atomically, then returns the
+    ///      account call plan. In order: the target allowlist ({TargetNotAllowed}); for calls carrying a selector,
+    ///      the per-target selector allowlist ({SelectorNotAllowed}) and, when bound, the recipient allowlist
+    ///      ({RecipientNotAllowed}); the ERC-20 spend cap for decodable spend selectors on a limited token; and the
+    ///      native-ETH spend cap consumed from the call `value`. Calldata of 1–3 bytes is rejected ({MissingSelector}).
+    ///      On success returns the `executeBatch` calldata for a single {Call} mirroring the action.
     function _onExecute(bytes32 commitment, address, bytes calldata executionData, address)
         internal
         override
@@ -284,14 +348,17 @@ contract SessionPolicy is Policy {
         return RecurringAllowance.Limit({allowance: cap.allowance, period: cap.period, start: 0, end: type(uint40).max});
     }
 
+    /// @dev Derives the per-(binding, token) usage key so each token's spend accounting is isolated per commitment.
     function _spendKey(bytes32 commitment, address token) internal pure returns (bytes32) {
         return keccak256(abi.encode(commitment, token));
     }
 
+    /// @dev True for the standard ERC-20 selectors this policy can decode for recipient + amount semantics.
     function _isErc20Selector(bytes4 selector) internal pure returns (bool) {
         return selector == TRANSFER || selector == TRANSFER_FROM || selector == APPROVE;
     }
 
+    /// @dev Reads the leading 4-byte selector from `data` (caller guarantees `data.length >= 4`).
     function _selectorOf(bytes memory data) internal pure returns (bytes4 selector) {
         assembly ("memory-safe") {
             selector := mload(add(data, 0x20))

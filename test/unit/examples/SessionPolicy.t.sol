@@ -398,7 +398,132 @@ contract SessionPolicyTest is AccountConfigurationTest {
         manager.install(actorId, binding);
     }
 
+    // ── Selector-length gating ──
+
+    function test_execute_revertsMissingSelectorForShortData() public {
+        // 1–3 bytes of calldata carry no usable selector, so the call is rejected rather than guessed.
+        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
+        scopes[0] = _anySelectorScope(address(target));
+        bytes32 actorId = _install(_config(_noLimits(), scopes));
+
+        _mockActingActor(actorId);
+        vm.expectRevert(SessionPolicy.MissingSelector.selector);
+        vm.prank(account);
+        manager.execute(address(policy), _action(address(target), 0, hex"010203"));
+    }
+
+    function test_execute_allowsEmptyCalldata() public {
+        // 0 bytes of calldata is a plain value call: it skips selector gating entirely.
+        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
+        scopes[0] = _anySelectorScope(bob);
+        bytes32 actorId = _install(_config(_noLimits(), scopes));
+
+        _execute(actorId, bob, 0, "");
+    }
+
+    // ── ERC-20 spend accounting edge cases ──
+
+    function test_execute_zeroAmountTransferSkipsSpend() public {
+        // A zero-value transfer on a limited token must not touch spend accounting (the library rejects zero spends).
+        (bytes32 actorId, bytes32 commitment) = _installWithCommitment(
+            _config(_limit(address(token), 500e18, WEEK), _erc20Scope(address(token), _noRecipients()))
+        );
+
+        _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 0)));
+
+        assertEq(policy.getCurrentSpend(commitment, address(token)).spend, 0);
+    }
+
+    function test_execute_revertsMalformedTransfer() public {
+        // A limited token pins the transfer selector; truncated transfer calldata (< 68 bytes) can't be decoded.
+        bytes32 actorId =
+            _install(_config(_limit(address(token), 500e18, WEEK), _erc20Scope(address(token), _noRecipients())));
+
+        _mockActingActor(actorId);
+        bytes memory malformed = abi.encodePacked(TRANSFER, bytes32(uint256(uint160(bob)))); // selector + 32 = 36 bytes
+        vm.expectRevert(abi.encodeWithSelector(SessionPolicy.MalformedTokenCall.selector, TRANSFER));
+        vm.prank(account);
+        manager.execute(address(policy), _action(address(token), 0, malformed));
+    }
+
+    function test_execute_revertsMalformedTransferFrom() public {
+        // Exercises the transferFrom decode branch: a pinned transferFrom selector with calldata < 100 bytes.
+        SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](1);
+        rules[0] = SessionPolicy.SelectorRule({selector: TRANSFER_FROM, recipients: _noRecipients()});
+        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
+        scopes[0] = SessionPolicy.CallScope({target: address(token), selectorRules: rules});
+        bytes32 actorId = _install(_config(_limit(address(token), 500e18, WEEK), scopes));
+
+        _mockActingActor(actorId);
+        bytes memory malformed = abi.encodePacked(TRANSFER_FROM, bytes32(0), bytes32(0)); // selector + 64 = 68 < 100
+        vm.expectRevert(abi.encodeWithSelector(SessionPolicy.MalformedTokenCall.selector, TRANSFER_FROM));
+        vm.prank(account);
+        manager.execute(address(policy), _action(address(token), 0, malformed));
+    }
+
+    // ── Views ──
+
+    function test_views_reflectInstalledErc20Scope() public {
+        address[] memory recipients = new address[](1);
+        recipients[0] = bob;
+        (, bytes32 commitment) = _installWithCommitment(
+            _config(_limit(address(token), 500e18, WEEK), _erc20Scope(address(token), recipients))
+        );
+
+        (bool allowed, bool anySelector) = policy.isTargetAllowed(commitment, address(token));
+        assertTrue(allowed);
+        assertFalse(anySelector);
+
+        (bool selAllowed, bool recipientBound) = policy.getSelectorRule(commitment, address(token), TRANSFER);
+        assertTrue(selAllowed);
+        assertTrue(recipientBound);
+
+        assertTrue(policy.isRecipientAllowed(commitment, address(token), TRANSFER, bob));
+        assertFalse(policy.isRecipientAllowed(commitment, address(token), TRANSFER, mallory));
+
+        (bool set, uint160 allowance, uint40 period) = policy.getTokenLimit(commitment, address(token));
+        assertTrue(set);
+        assertEq(allowance, 500e18);
+        assertEq(period, WEEK);
+
+        assertEq(policy.getCurrentSpend(commitment, address(token)).spend, 0);
+    }
+
+    function test_views_reflectAnySelectorScopeAndOneTimeLimit() public {
+        (, bytes32 commitment) =
+            _installWithCommitment(_config(_limit(address(0), 1 ether, 0), _anySelectorScopes(address(target))));
+
+        (bool allowed, bool anySelector) = policy.isTargetAllowed(commitment, address(target));
+        assertTrue(allowed);
+        assertTrue(anySelector);
+
+        // Unlisted target resolves to the zero scope.
+        (bool otherAllowed,) = policy.isTargetAllowed(commitment, address(token));
+        assertFalse(otherAllowed);
+
+        // A one-time (period == 0) native cap is normalized to the never-resetting ONE_TIME period.
+        (bool set,, uint40 period) = policy.getTokenLimit(commitment, address(0));
+        assertTrue(set);
+        assertEq(period, type(uint40).max);
+    }
+
     // ── Helpers ──
+
+    bytes4 internal constant TRANSFER_FROM = bytes4(keccak256("transferFrom(address,address,uint256)"));
+
+    function _anySelectorScopes(address t) internal pure returns (SessionPolicy.CallScope[] memory scopes) {
+        scopes = new SessionPolicy.CallScope[](1);
+        scopes[0] = _anySelectorScope(t);
+    }
+
+    /// @dev Like {_install} but also returns the binding's commitment, for asserting on the commitment-keyed views.
+    function _installWithCommitment(bytes memory policyConfig) internal returns (bytes32 actorId, bytes32 commitment) {
+        PolicyManager.PolicyBinding memory binding;
+        (actorId, binding) = _prepareBinding(policyConfig);
+        commitment = manager.commitmentOf(binding);
+        vm.prank(account);
+        manager.install(actorId, binding);
+    }
 
     function _mockActingActor(bytes32 actorId) internal {
         vm.mockCall(
