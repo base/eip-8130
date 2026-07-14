@@ -4,8 +4,8 @@ pragma solidity ^0.8.30;
 import {Address} from "openzeppelin/utils/Address.sol";
 import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
 
-import {AccountConfiguration} from "../../AccountConfiguration.sol";
-import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../interfaces/ITransactionContext.sol";
+import {AccountConfiguration} from "../AccountConfiguration.sol";
+import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../interfaces/ITransactionContext.sol";
 import {Policy} from "./Policy.sol";
 
 /// @dev Recommended `authenticator` for an actor that represents an *external caller* governed by a policy (e.g. a

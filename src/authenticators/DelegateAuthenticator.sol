@@ -20,7 +20,8 @@ contract DelegateAuthenticator is IAuthenticator {
     /// @notice The auth data is shorter than the 40-byte delegate + nested-authenticator prefix.
     error InvalidDataLength();
 
-    /// @notice The nested authenticator points back to this contract; only one delegation hop is permitted.
+    /// @notice The nested authenticator is itself a delegate authenticator (this instance or any other); only one
+    ///         delegation hop is permitted, so a delegate may never vouch through another delegate.
     error RecursiveDelegation();
 
     /// @notice The nested signer is not authorized to sign for the delegate account.
@@ -32,11 +33,18 @@ contract DelegateAuthenticator is IAuthenticator {
         ACCOUNT_CONFIGURATION = AccountConfiguration(accountConfiguration);
     }
 
+    /// @notice Self-identifying marker so one delegate authenticator can detect another (of any instance) and refuse
+    ///         to delegate through it, enforcing the single-hop invariant across separately deployed instances.
+    /// @return Always true for a delegate authenticator.
+    function isDelegateAuthenticator() external pure returns (bool) {
+        return true;
+    }
+
     /// @notice Authenticates by delegating to another account's actor configuration; only one hop is permitted.
     ///
     /// @dev Reverts with InvalidDataLength when `data` is shorter than 40 bytes.
-    /// @dev Reverts with RecursiveDelegation when the nested authenticator is this contract (recursive delegation
-    ///      is not permitted).
+    /// @dev Reverts with RecursiveDelegation when the nested authenticator is this contract or any other delegate
+    ///      authenticator (recursive/chained delegation is not permitted; only a single hop).
     /// @dev Reverts with InvalidNestedSignature when the delegate account does not validate the nested signature.
     ///
     /// @param hash The digest being authenticated.
@@ -50,9 +58,20 @@ contract DelegateAuthenticator is IAuthenticator {
 
         actorId = bytes32(bytes20(delegate));
 
-        // Prevent recursive delegation (only 1 hop permitted)
+        // Prevent recursive delegation (only 1 hop permitted). Rejecting this exact instance is not enough: two
+        // distinct delegate authenticators A and B could otherwise vouch for each other (A->B->A...), so we also
+        // reject any nested authenticator that self-identifies as a delegate authenticator. Honest delegate
+        // authenticators expose isDelegateAuthenticator(); a contract that hides it is not a delegate and cannot form
+        // a delegate cycle through this guard. Only probe addresses with code — the K1 sentinel (address(1),
+        // ecrecover) and other precompiles have none and are never delegates, so we skip them to avoid a spurious
+        // precompile call.
         address nestedAuthenticator = address(bytes20(nestedAuth[:20]));
         if (nestedAuthenticator == address(this)) revert RecursiveDelegation();
+        if (nestedAuthenticator.code.length > 0) {
+            try DelegateAuthenticator(nestedAuthenticator).isDelegateAuthenticator() returns (bool isDelegate) {
+                if (isDelegate) revert RecursiveDelegation();
+            } catch {}
+        }
 
         // The nested actor MUST be the admin (scope == 0x00) of the delegate account. This is enforced
         // independently of verifySignature, which is now operational (signing is not admin-only, but a delegate

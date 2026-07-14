@@ -6,8 +6,6 @@ import {Script, console} from "forge-std/Script.sol";
 import {AccountConfiguration} from "../src/AccountConfiguration.sol";
 import {DefaultAccount} from "../src/accounts/DefaultAccount.sol";
 import {DefaultHighRateAccount} from "../src/accounts/DefaultHighRateAccount.sol";
-import {UpgradeableAccount} from "../src/accounts/UpgradeableAccount.sol";
-import {BackwardsCompatible4337Account} from "../src/accounts/example/BackwardsCompatible4337Account.sol";
 import {P256Authenticator} from "../src/authenticators/P256Authenticator.sol";
 import {WebAuthnAuthenticator} from "../src/authenticators/WebAuthnAuthenticator.sol";
 import {DelegateAuthenticator} from "../src/authenticators/DelegateAuthenticator.sol";
@@ -23,19 +21,16 @@ bytes32 constant SALT = bytes32(0);
 /// @notice Deploys the full EIP-8130 system: the AccountConfiguration system contract, the account
 ///         implementations, and every canonical authenticator.
 ///
-///         Four account implementations are deployed:
+///         Two account implementations are deployed:
 ///           - DefaultAccount                  — the bare building block, deployed standalone as the direct
 ///                                                EIP-7702 delegation target for EOAs (no proxy needed; a 7702 EOA
 ///                                                can just re-delegate to a new address later, so it needs no UUPS
 ///                                                wrapper);
 ///           - DefaultHighRateAccount          — the immutable smart-account variant (deployed behind a 45-byte
-///                                                ERC-1167 proxy);
-///           - UpgradeableAccount              — the general upgradeable smart-account variant (behind
-///                                                UpgradeableProxy);
-///           - BackwardsCompatible4337Account  — an opt-in ERC-4337 example (DefaultAccount + validateUserOp) for
-///                                                accounts that need bundler/EntryPoint support on non-8130 chains.
-///                                                Deployed as a singleton so it's available for callers to use, but
-///                                                neither deployed account depends on it by default.
+///                                                ERC-1167 proxy).
+///
+///         Example/unaudited account variants (UpgradeableAccount, BackwardsCompatible4337Account) live in a
+///         separate repository and are not deployed here.
 ///
 ///         All addresses are canonical: determined solely by salt + bytecode, independent of the
 ///         deployer's address or nonce, and identical on every chain.
@@ -82,14 +77,6 @@ contract Deploy is Script {
         return abi.encodePacked(type(DefaultHighRateAccount).creationCode, abi.encode(accountConfig));
     }
 
-    function _upgradeableAccountInit(address accountConfig) internal pure returns (bytes memory) {
-        return abi.encodePacked(type(UpgradeableAccount).creationCode, abi.encode(accountConfig));
-    }
-
-    function _backwardsCompatible4337Init(address accountConfig) internal pure returns (bytes memory) {
-        return abi.encodePacked(type(BackwardsCompatible4337Account).creationCode, abi.encode(accountConfig));
-    }
-
     function _delegateAuthInit(address accountConfig) internal pure returns (bytes memory) {
         return abi.encodePacked(type(DelegateAuthenticator).creationCode, abi.encode(accountConfig));
     }
@@ -109,8 +96,6 @@ contract Deploy is Script {
         console.log("=== Account implementations ===");
         console.log("DefaultAccount:          ", _addr(_defaultAccountInit(accountConfig)));
         console.log("DefaultHighRateAccount:  ", _addr(_defaultHighRateInit(accountConfig)));
-        console.log("UpgradeableAccount:      ", _addr(_upgradeableAccountInit(accountConfig)));
-        console.log("BackwardsCompatible4337: ", _addr(_backwardsCompatible4337Init(accountConfig)));
         console.log("");
         console.log("=== Authenticators ===");
         console.log("(secp256k1 is built in: AccountConfiguration.K1_AUTHENTICATOR() == address(1))");
@@ -133,15 +118,11 @@ contract Deploy is Script {
 
         // ── Account implementations (singletons; every account proxy — and every 7702 EOA — delegates to one) ──
         //    DefaultAccount is deployed standalone as the direct EIP-7702 delegation target for EOAs.
-        //    DefaultHighRateAccount is the immutable (ERC-1167) smart-account variant; UpgradeableAccount is the
-        //    general upgradeable smart-account variant. BackwardsCompatible4337Account is a separate, opt-in
-        //    example (deployed as a singleton for callers that need it) that neither deployed account depends on
-        //    by default.
+        //    DefaultHighRateAccount is the immutable (ERC-1167) smart-account variant. Upgradeable and 4337 example
+        //    variants live in a separate, unaudited repository and are not deployed here.
 
         address defaultAccount = _create2(_defaultAccountInit(accountConfig));
         address defaultHighRate = _create2(_defaultHighRateInit(accountConfig));
-        address upgradeableAccount = _create2(_upgradeableAccountInit(accountConfig));
-        address backwardsCompatible4337 = _create2(_backwardsCompatible4337Init(accountConfig));
 
         // ── Authenticators (secp256k1 is built into AccountConfiguration; no contract to deploy) ──
 
@@ -155,8 +136,6 @@ contract Deploy is Script {
         console.log("=== Account implementations ===");
         console.log("DefaultAccount:          ", defaultAccount);
         console.log("DefaultHighRateAccount:  ", defaultHighRate);
-        console.log("UpgradeableAccount:      ", upgradeableAccount);
-        console.log("BackwardsCompatible4337: ", backwardsCompatible4337);
         console.log("");
         console.log("=== Authenticators ===");
         console.log("(secp256k1 is built in: AccountConfiguration.K1_AUTHENTICATOR() == address(1))");
