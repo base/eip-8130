@@ -35,12 +35,19 @@ address constant TRUSTED_EXECUTOR = address(uint160(uint256(keccak256("trustedEx
 ///      example ERC-4337 on a chain without native EIP-8130 support) should delegate or deploy to a purpose-built
 ///      account, not to this one. If this bytecode is deployed anyway, it MUST sit behind an upgradeable (UUPS)
 ///      proxy: adopting those features later means swapping in different bytecode, which is only possible if the
-///      deployment is upgradeable. See {UpgradeableAccount} for that upgradeable variant.
+///      deployment is upgradeable. An upgradeable (UUPS) variant is provided as an unaudited example in a separate
+///      repository.
 ///
 /// @author Coinbase
 contract DefaultAccount is Receiver {
     /// @notice The AccountConfiguration system contract that owns this account's authorization state.
     AccountConfiguration public immutable ACCOUNT_CONFIGURATION;
+
+    /// @dev Local mirrors of {AccountConfiguration.SCOPE_SENDER} / {AccountConfiguration.SCOPE_POLICY}: a contract's
+    ///      public constants are not accessible via its type, and reading the getters would add external calls to the
+    ///      execution hot path. Kept in sync with AccountConfiguration.
+    uint8 private constant SCOPE_SENDER = 0x01;
+    uint8 private constant SCOPE_POLICY = 0x02;
 
     /// @notice The caller is neither the account itself nor a registered TRUSTED_EXECUTOR actor.
     error UnauthorizedCaller();
@@ -107,11 +114,20 @@ contract DefaultAccount is Receiver {
     //  INTERNALS
     // ══════════════════════════════════════════════
 
-    /// @dev Authorized if `caller` is the account itself or holds the TRUSTED_EXECUTOR authenticator.
+    /// @dev Authorized if `caller` is the account itself, or holds the TRUSTED_EXECUTOR authenticator with an
+    ///      unexpired config AND operational (sender) authority. Expiry: 0 means none; a non-zero expiry is enforced
+    ///      so a user-set expiry is honored on the execution path. Scope: driving execution requires sender
+    ///      authority — the unrestricted admin (scope == 0x00) or an actor with SCOPE_SENDER that is not gated by a
+    ///      policy (SCOPE_POLICY unset). A POLICY-gated actor must route every call through its manager, so granting
+    ///      it direct executeBatch would bypass that gate; fail closed. This mirrors the operational-actor definition
+    ///      in AccountConfiguration.verifySignature, keeping the execution and signing authorization surfaces aligned.
     function _isAuthorizedCaller(address caller) internal view virtual returns (bool) {
         if (caller == address(this)) return true;
         AccountConfiguration.ActorConfig memory config =
             ACCOUNT_CONFIGURATION.getActorConfig(address(this), bytes32(bytes20(caller)));
-        return config.authenticator == TRUSTED_EXECUTOR;
+        if (config.authenticator != TRUSTED_EXECUTOR) return false;
+        if (config.expiry != 0 && block.timestamp > config.expiry) return false;
+        uint8 scope = config.scope;
+        return scope == 0 || ((scope & SCOPE_SENDER != 0) && (scope & SCOPE_POLICY == 0));
     }
 }

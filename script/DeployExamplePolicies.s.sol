@@ -4,8 +4,8 @@ pragma solidity ^0.8.30;
 import {Script, console} from "forge-std/Script.sol";
 
 import {AccountConfiguration} from "../src/AccountConfiguration.sol";
-import {PolicyManager} from "../src/examples/policies/PolicyManager.sol";
-import {SessionPolicy} from "../src/examples/policies/SessionPolicy.sol";
+import {PolicyManager} from "../src/policies/PolicyManager.sol";
+import {SessionPolicy} from "../src/policies/SessionPolicy.sol";
 
 /// @dev Nick's deterministic deployment proxy — same address on every EVM chain.
 address constant CREATE2_FACTORY = 0x4e59b44847b379578588920cA78FbF26c0B4956C;

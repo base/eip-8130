@@ -5,9 +5,9 @@ import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../../src/interfaces/ITransactionContext.sol";
 import {TRUSTED_EXECUTOR} from "../../../src/accounts/DefaultAccount.sol";
 
-import {PolicyManager} from "../../../src/examples/policies/PolicyManager.sol";
-import {Policy} from "../../../src/examples/policies/Policy.sol";
-import {SessionPolicy} from "../../../src/examples/policies/SessionPolicy.sol";
+import {PolicyManager} from "../../../src/policies/PolicyManager.sol";
+import {Policy} from "../../../src/policies/Policy.sol";
+import {SessionPolicy} from "../../../src/policies/SessionPolicy.sol";
 
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
