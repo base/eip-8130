@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {DefaultHighRateSponsoringAccount} from "../../../src/accounts/DefaultHighRateSponsoringAccount.sol";
+import {CanonicalHighRatePayerAccount} from "../../../src/accounts/CanonicalHighRatePayerAccount.sol";
 import {Call, DefaultAccount} from "../../../src/accounts/DefaultAccount.sol";
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
-contract HighRateSponsoringMockTarget {
+contract HighRatePayerMockTarget {
     uint256 public value;
 
     function setValue(uint256 v) external payable {
@@ -18,18 +18,18 @@ contract HighRateSponsoringMockTarget {
     }
 }
 
-contract DefaultHighRateSponsoringAccountTest is AccountConfigurationTest {
+contract CanonicalHighRatePayerAccountTest is AccountConfigurationTest {
     uint256 constant ACTOR_PK = 100;
-    HighRateSponsoringMockTarget public target;
-    address public highRateSponsoringImplementation;
+    HighRatePayerMockTarget public target;
+    address public highRatePayerImplementation;
 
     function setUp() public override {
         super.setUp();
-        target = new HighRateSponsoringMockTarget();
-        highRateSponsoringImplementation = address(new DefaultHighRateSponsoringAccount(address(accountConfiguration)));
+        target = new HighRatePayerMockTarget();
+        highRatePayerImplementation = address(new CanonicalHighRatePayerAccount(address(accountConfiguration)));
     }
 
-    function _createHighRateSponsoringK1Account(uint256 pk) internal returns (address account, bytes32 actorId) {
+    function _createHighRatePayerK1Account(uint256 pk) internal returns (address account, bytes32 actorId) {
         address signer = vm.addr(pk);
         actorId = bytes32(bytes20(signer));
 
@@ -38,8 +38,8 @@ contract DefaultHighRateSponsoringAccountTest is AccountConfigurationTest {
             actorId: actorId, authenticator: address(k1Authenticator), scope: 0, policyData: ""
         });
 
-        // ERC-1167 clone of DefaultHighRateSponsoringAccount — the fixed delegation required for high-rate sponsoring.
-        bytes memory bytecode = _computeERC1167Bytecode(highRateSponsoringImplementation);
+        // ERC-1167 clone of CanonicalHighRatePayerAccount — the fixed delegation required for high-rate self-paying.
+        bytes memory bytecode = _computeERC1167Bytecode(highRatePayerImplementation);
         account = accountConfiguration.createAccount(bytes32(uint256(0xbeef)), bytecode, actors);
     }
 
@@ -56,95 +56,95 @@ contract DefaultHighRateSponsoringAccountTest is AccountConfigurationTest {
     // ── executeBatch ──
 
     function test_executeBatch_success() public {
-        (address account,) = _createHighRateSponsoringK1Account(ACTOR_PK);
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
 
         vm.prank(account);
-        DefaultHighRateSponsoringAccount(payable(account))
-            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(HighRateSponsoringMockTarget.setValue, (42))));
+        CanonicalHighRatePayerAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(HighRatePayerMockTarget.setValue, (42))));
 
         assertEq(target.value(), 42);
     }
 
     function test_executeBatch_withETHValue() public {
-        (address account,) = _createHighRateSponsoringK1Account(ACTOR_PK);
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
         vm.deal(account, 1 ether);
 
         vm.prank(account);
-        DefaultHighRateSponsoringAccount(payable(account))
+        CanonicalHighRatePayerAccount(payable(account))
             .executeBatch(
-                _singleCall(address(target), 0.5 ether, abi.encodeCall(HighRateSponsoringMockTarget.setValue, (1)))
+                _singleCall(address(target), 0.5 ether, abi.encodeCall(HighRatePayerMockTarget.setValue, (1)))
             );
 
         assertEq(address(target).balance, 0.5 ether);
     }
 
     function test_executeBatch_multipleCalls() public {
-        (address account,) = _createHighRateSponsoringK1Account(ACTOR_PK);
-        HighRateSponsoringMockTarget target2 = new HighRateSponsoringMockTarget();
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
+        HighRatePayerMockTarget target2 = new HighRatePayerMockTarget();
 
         Call[] memory calls = new Call[](2);
-        calls[0] = Call(address(target), 0, abi.encodeCall(HighRateSponsoringMockTarget.setValue, (10)));
-        calls[1] = Call(address(target2), 0, abi.encodeCall(HighRateSponsoringMockTarget.setValue, (20)));
+        calls[0] = Call(address(target), 0, abi.encodeCall(HighRatePayerMockTarget.setValue, (10)));
+        calls[1] = Call(address(target2), 0, abi.encodeCall(HighRatePayerMockTarget.setValue, (20)));
 
         vm.prank(account);
-        DefaultHighRateSponsoringAccount(payable(account)).executeBatch(calls);
+        CanonicalHighRatePayerAccount(payable(account)).executeBatch(calls);
 
         assertEq(target.value(), 10);
         assertEq(target2.value(), 20);
     }
 
     function test_executeBatch_revertsFromNonSelf() public {
-        (address account,) = _createHighRateSponsoringK1Account(ACTOR_PK);
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
 
         vm.prank(address(0xdead));
         vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
-        DefaultHighRateSponsoringAccount(payable(account))
-            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(HighRateSponsoringMockTarget.setValue, (1))));
+        CanonicalHighRatePayerAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(HighRatePayerMockTarget.setValue, (1))));
     }
 
     function test_executeBatch_revertsOnFailedCall() public {
-        (address account,) = _createHighRateSponsoringK1Account(ACTOR_PK);
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
 
         vm.prank(account);
         vm.expectRevert(DefaultAccount.CallFailed.selector);
-        DefaultHighRateSponsoringAccount(payable(account))
-            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(HighRateSponsoringMockTarget.reverting, ())));
+        CanonicalHighRatePayerAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(HighRatePayerMockTarget.reverting, ())));
     }
 
     function test_executeBatch_blocksETHWhenLocked() public {
-        (address account,) = _createHighRateSponsoringK1Account(ACTOR_PK);
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
         vm.deal(account, 1 ether);
 
         _lockAccount(ACTOR_PK, account, 1 hours);
 
         vm.prank(account);
-        vm.expectRevert(DefaultHighRateSponsoringAccount.AccountLocked.selector);
-        DefaultHighRateSponsoringAccount(payable(account))
+        vm.expectRevert(CanonicalHighRatePayerAccount.AccountLocked.selector);
+        CanonicalHighRatePayerAccount(payable(account))
             .executeBatch(
-                _singleCall(address(target), 0.1 ether, abi.encodeCall(HighRateSponsoringMockTarget.setValue, (1)))
+                _singleCall(address(target), 0.1 ether, abi.encodeCall(HighRatePayerMockTarget.setValue, (1)))
             );
     }
 
     function test_executeBatch_allowsZeroValueCallsWhenLocked() public {
-        (address account,) = _createHighRateSponsoringK1Account(ACTOR_PK);
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
 
         _lockAccount(ACTOR_PK, account, 1 hours);
 
         vm.prank(account);
-        DefaultHighRateSponsoringAccount(payable(account))
-            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(HighRateSponsoringMockTarget.setValue, (99))));
+        CanonicalHighRatePayerAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(HighRatePayerMockTarget.setValue, (99))));
 
         assertEq(target.value(), 99);
     }
 
     function test_executeBatch_allowsETHWhenUnlocked() public {
-        (address account,) = _createHighRateSponsoringK1Account(ACTOR_PK);
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
         vm.deal(account, 1 ether);
 
         vm.prank(account);
-        DefaultHighRateSponsoringAccount(payable(account))
+        CanonicalHighRatePayerAccount(payable(account))
             .executeBatch(
-                _singleCall(address(target), 0.5 ether, abi.encodeCall(HighRateSponsoringMockTarget.setValue, (1)))
+                _singleCall(address(target), 0.5 ether, abi.encodeCall(HighRatePayerMockTarget.setValue, (1)))
             );
 
         assertEq(address(target).balance, 0.5 ether);
@@ -153,22 +153,22 @@ contract DefaultHighRateSponsoringAccountTest is AccountConfigurationTest {
     // ── isValidSignature ──
 
     function test_isValidSignature_validK1() public {
-        (address account,) = _createHighRateSponsoringK1Account(ACTOR_PK);
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
 
         bytes32 hash = keccak256("validate me");
         bytes memory authData = _buildK1Auth(ACTOR_PK, hash);
 
-        bytes4 result = DefaultHighRateSponsoringAccount(payable(account)).isValidSignature(hash, authData);
+        bytes4 result = CanonicalHighRatePayerAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0x1626ba7e));
     }
 
     function test_isValidSignature_invalidSignature() public {
-        (address account,) = _createHighRateSponsoringK1Account(ACTOR_PK);
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
 
         bytes32 hash = keccak256("validate me");
         bytes memory authData = _buildK1Auth(999, hash);
 
-        bytes4 result = DefaultHighRateSponsoringAccount(payable(account)).isValidSignature(hash, authData);
+        bytes4 result = CanonicalHighRatePayerAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0xFFFFFFFF));
     }
 }

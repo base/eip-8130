@@ -3,16 +3,17 @@ pragma solidity 0.8.36;
 
 import {Call, DefaultAccount} from "./DefaultAccount.sol";
 
-/// @notice High-rate sponsoring account variant for EIP-8130.
+/// @notice Canonical high-rate self-paying account variant for EIP-8130.
 ///
-///         Intended for accounts that sponsor transactions at a high rate. Because outbound ETH value
-///         transfers are blocked while the account is locked, the only ETH decrease is gas fees — giving
-///         mempools maximum balance predictability and enabling higher rate limits for sponsored txs.
+///         Intended for accounts that self-pay gas at a high rate. While locked, outbound ETH value
+///         transfers are blocked — the account cannot move its own ETH in the transaction — so the
+///         only balance decrease is gas fees. That predictability lets mempools admit higher rate limits
+///         for self-paying txs.
 ///
 ///         Deployed behind a plain 45-byte ERC-1167 minimal proxy: each account is an ERC-1167 clone that
 ///         delegatecalls this shared implementation. That fixed delegation (hardcoded implementation
-///         address) is what allows the account to be admitted for high-rate sponsoring.
-contract DefaultHighRateSponsoringAccount is DefaultAccount {
+///         address) is what allows the account to be admitted for high-rate self-paying.
+contract CanonicalHighRatePayerAccount is DefaultAccount {
     /// @notice A value-bearing call was attempted while the account is locked.
     error AccountLocked();
 
