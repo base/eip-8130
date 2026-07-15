@@ -5,7 +5,7 @@ import {Script, console} from "forge-std/Script.sol";
 
 import {AccountConfiguration} from "../src/AccountConfiguration.sol";
 import {DefaultAccount} from "../src/accounts/DefaultAccount.sol";
-import {DefaultHighRateAccount} from "../src/accounts/DefaultHighRateAccount.sol";
+import {DefaultHighRateSponsoringAccount} from "../src/accounts/DefaultHighRateSponsoringAccount.sol";
 import {P256Authenticator} from "../src/authenticators/P256Authenticator.sol";
 import {WebAuthnAuthenticator} from "../src/authenticators/WebAuthnAuthenticator.sol";
 import {DelegateAuthenticator} from "../src/authenticators/DelegateAuthenticator.sol";
@@ -26,8 +26,8 @@ bytes32 constant SALT = bytes32(0);
 ///                                                EIP-7702 delegation target for EOAs (no proxy needed; a 7702 EOA
 ///                                                can just re-delegate to a new address later, so it needs no UUPS
 ///                                                wrapper);
-///           - DefaultHighRateAccount          — the immutable smart-account variant (deployed behind a 45-byte
-///                                                ERC-1167 proxy).
+///           - DefaultHighRateSponsoringAccount — high-rate sponsoring account (deployed behind a 45-byte
+///                                                ERC-1167 proxy; fixed delegation enables high-rate sponsoring).
 ///
 ///         Example/unaudited account variants (UpgradeableAccount, BackwardsCompatible4337Account) live in a
 ///         separate repository and are not deployed here.
@@ -73,8 +73,8 @@ contract Deploy is Script {
         return abi.encodePacked(type(DefaultAccount).creationCode, abi.encode(accountConfig));
     }
 
-    function _defaultHighRateInit(address accountConfig) internal pure returns (bytes memory) {
-        return abi.encodePacked(type(DefaultHighRateAccount).creationCode, abi.encode(accountConfig));
+    function _defaultHighRateSponsoringInit(address accountConfig) internal pure returns (bytes memory) {
+        return abi.encodePacked(type(DefaultHighRateSponsoringAccount).creationCode, abi.encode(accountConfig));
     }
 
     function _delegateAuthInit(address accountConfig) internal pure returns (bytes memory) {
@@ -95,7 +95,7 @@ contract Deploy is Script {
         console.log("");
         console.log("=== Account implementations ===");
         console.log("DefaultAccount:          ", _addr(_defaultAccountInit(accountConfig)));
-        console.log("DefaultHighRateAccount:  ", _addr(_defaultHighRateInit(accountConfig)));
+        console.log("DefaultHighRateSponsoringAccount:", _addr(_defaultHighRateSponsoringInit(accountConfig)));
         console.log("");
         console.log("=== Authenticators ===");
         console.log("(secp256k1 is built in: AccountConfiguration.K1_AUTHENTICATOR() == address(1))");
@@ -118,11 +118,11 @@ contract Deploy is Script {
 
         // ── Account implementations (singletons; every account proxy — and every 7702 EOA — delegates to one) ──
         //    DefaultAccount is deployed standalone as the direct EIP-7702 delegation target for EOAs.
-        //    DefaultHighRateAccount is the immutable (ERC-1167) smart-account variant. Upgradeable and 4337 example
-        //    variants live in a separate, unaudited repository and are not deployed here.
+        //    DefaultHighRateSponsoringAccount is the ERC-1167 high-rate sponsoring variant. Upgradeable and 4337
+        //    example variants live in a separate, unaudited repository and are not deployed here.
 
         address defaultAccount = _create2(_defaultAccountInit(accountConfig));
-        address defaultHighRate = _create2(_defaultHighRateInit(accountConfig));
+        address defaultHighRateSponsoring = _create2(_defaultHighRateSponsoringInit(accountConfig));
 
         // ── Authenticators (secp256k1 is built into AccountConfiguration; no contract to deploy) ──
 
@@ -135,7 +135,7 @@ contract Deploy is Script {
         console.log("");
         console.log("=== Account implementations ===");
         console.log("DefaultAccount:          ", defaultAccount);
-        console.log("DefaultHighRateAccount:  ", defaultHighRate);
+        console.log("DefaultHighRateSponsoringAccount:", defaultHighRateSponsoring);
         console.log("");
         console.log("=== Authenticators ===");
         console.log("(secp256k1 is built in: AccountConfiguration.K1_AUTHENTICATOR() == address(1))");
