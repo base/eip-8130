@@ -38,7 +38,7 @@ contract CanonicalHighRatePayerAccountTest is AccountConfigurationTest {
             actorId: actorId, authenticator: address(k1Authenticator), scope: 0, policyData: ""
         });
 
-        // ERC-1167 clone of CanonicalHighRatePayerAccount — the fixed delegation required for high-rate self-paying.
+        // ERC-1167 clone of CanonicalHighRatePayerAccount — the fixed delegation required for high-rate paying.
         bytes memory bytecode = _computeERC1167Bytecode(highRatePayerImplementation);
         account = accountConfiguration.createAccount(bytes32(uint256(0xbeef)), bytecode, actors);
     }

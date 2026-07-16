@@ -26,9 +26,9 @@ bytes32 constant SALT = bytes32(0);
 ///                                                EIP-7702 delegation target for EOAs (no proxy needed; a 7702 EOA
 ///                                                can just re-delegate to a new address later, so it needs no UUPS
 ///                                                wrapper);
-///           - CanonicalHighRatePayerAccount   — high-rate self-paying account (deployed behind a 45-byte
-///                                                ERC-1167 proxy; while locked it cannot move its own ETH, so mempools
-///                                                can admit higher rate limits for self-paying txs).
+///           - CanonicalHighRatePayerAccount   — high-rate payer account (deployed behind a 45-byte
+///                                                ERC-1167 proxy; can sponsor or transact itself; while locked it
+///                                                cannot move its own ETH, so mempools can admit higher rate limits).
 ///
 ///         Example/unaudited account variants (UpgradeableAccount, BackwardsCompatible4337Account) live in a
 ///         separate repository and are not deployed here.
@@ -119,7 +119,7 @@ contract Deploy is Script {
 
         // ── Account implementations (singletons; every account proxy — and every 7702 EOA — delegates to one) ──
         //    DefaultAccount is deployed standalone as the direct EIP-7702 delegation target for EOAs.
-        //    CanonicalHighRatePayerAccount is the ERC-1167 high-rate self-paying variant. Upgradeable and 4337
+        //    CanonicalHighRatePayerAccount is the ERC-1167 high-rate payer variant. Upgradeable and 4337
         //    example variants live in a separate, unaudited repository and are not deployed here.
 
         address defaultAccount = _create2(_defaultAccountInit(accountConfig));
