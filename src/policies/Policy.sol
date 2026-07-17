@@ -7,9 +7,15 @@ import {PolicyManager} from "./PolicyManager.sol";
 ///
 /// @notice Minimal base hook interface for policies coordinated by {PolicyManager}.
 ///
-/// @dev A policy turns an account-authorized *commitment* (its `policyConfig`, stored at install) plus a
+/// @dev A policy turns an account-authorized *commitment* (its `policyConfig`, bound at install) plus a
 ///      per-use *action* (`executionData`, supplied when the session key transacts) into an account call plan.
 ///      The plan is ABI-encoded calldata that the manager forwards to the account (e.g. `executeBatch`).
+///
+///      Config delivery (Account Policies convention): the manager always forwards `policyConfig` to
+///      {onExecute}. The manager recomputes the binding commitment from that preimage and checks it against
+///      the actor's signed `policy_commitment` (same check as install), so policies need not store a config
+///      hash. Prefer calldata over persisting config, regardless of size or reuse frequency. Mutable execution
+///      state (e.g. spend counters) is the exception that belongs in storage.
 ///
 ///      This is the example/reference shape for an EIP-8130 actor policy (`scope & SCOPE_POLICY != 0`): the
 ///      manager is the single call target a restricted actor may reach, and policies express *what* that actor
@@ -33,8 +39,9 @@ abstract contract Policy {
 
     /// @notice Hook invoked when the account installs a binding for this policy.
     ///
-    /// @dev MUST revert to refuse installation. Implementations parse and store `policyConfig` keyed by
-    ///      `commitment` so later executions read committed parameters rather than caller-supplied ones.
+    /// @dev MUST revert to refuse installation. Implementations typically validate `policyConfig` and may
+    ///      initialize mutable state keyed by `commitment`. Prefer not to persist the config itself — the
+    ///      manager re-checks the preimage against the signed commitment at every execute.
     ///
     /// @param commitment Deterministic identifier of the account-authorized binding (the policy commitment).
     /// @param account    Account that authorized the binding.
@@ -47,27 +54,35 @@ abstract contract Policy {
     ///
     /// @dev MUST revert to refuse execution. Returns the account call plan, or empty bytes for a no-op.
     ///      Implementations enforce the committed policy against `executionData` and build the plan.
+    ///      `policyConfig` is the binding preimage; the manager has already verified it recomputes to the actor's
+    ///      signed commitment before calling this hook.
     ///
     /// @param commitment    Identifier of the installed binding.
     /// @param account       Account the plan will execute against.
+    /// @param policyConfig  Policy-defined config bytes (often the config preimage; may be empty).
     /// @param executionData Per-use action parameters (e.g. transfer recipient + amount, or a target call).
     /// @param caller        The address that invoked the manager (in EIP-8130, the account itself).
     ///
     /// @return accountCallData ABI-encoded calldata for the manager to forward to `account` (empty = no-op).
-    function onExecute(bytes32 commitment, address account, bytes calldata executionData, address caller)
-        external
-        onlyPolicyManager
-        returns (bytes memory accountCallData)
-    {
-        return _onExecute(commitment, account, executionData, caller);
+    function onExecute(
+        bytes32 commitment,
+        address account,
+        bytes calldata policyConfig,
+        bytes calldata executionData,
+        address caller
+    ) external onlyPolicyManager returns (bytes memory accountCallData) {
+        return _onExecute(commitment, account, policyConfig, executionData, caller);
     }
 
     /// @dev Policy-specific install logic. Revert to refuse.
     function _onInstall(bytes32 commitment, address account, bytes calldata policyConfig) internal virtual;
 
     /// @dev Policy-specific execute logic. Revert to refuse.
-    function _onExecute(bytes32 commitment, address account, bytes calldata executionData, address caller)
-        internal
-        virtual
-        returns (bytes memory accountCallData);
+    function _onExecute(
+        bytes32 commitment,
+        address account,
+        bytes calldata policyConfig,
+        bytes calldata executionData,
+        address caller
+    ) internal virtual returns (bytes memory accountCallData);
 }

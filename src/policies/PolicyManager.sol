@@ -76,11 +76,16 @@ contract PolicyManager is ReentrancyGuard {
     }
 
     /// @notice Lifecycle record stored per (policy, commitment).
+    ///
+    /// @dev `salt` (with `account` / validity window) lets {execute} recompute the commitment from a supplied
+    ///      `policyConfig` preimage and check it against the actor's signed commitment — same check as {install},
+    ///      so policies need not store a config hash of their own.
     struct PolicyRecord {
         bool installed;
         address account;
         uint40 validAfter;
         uint40 validUntil;
+        uint256 salt;
     }
 
     /// @dev policies[policy][commitment] => record.
@@ -104,6 +109,8 @@ contract PolicyManager is ReentrancyGuard {
     /// @notice The executing account is not the account the commitment was installed for. Commitments are opaque in
     ///         AccountConfiguration, so this binds execution (and the commitment-keyed policy state) to its owner.
     error CommitmentAccountMismatch(address expected, address actual);
+    /// @notice The supplied `policyConfig` does not recompute to the actor's signed commitment (wrong preimage).
+    error PolicyConfigMismatch(bytes32 expected, bytes32 actual);
     /// @notice The acting actor has no live policy commitment for the account — i.e. it is not a gated actor of this
     ///         account, was revoked, or (on the external path) the account did not gate this manager for it.
     error NoActivePolicy(bytes32 actorId);
@@ -138,7 +145,8 @@ contract PolicyManager is ReentrancyGuard {
     ///      contract and the resolved commitment must equal the binding's). An install can therefore only ever
     ///      materialize a binding the account already committed to, so anyone may submit it (e.g. a subscription
     ///      provider self-serving install after the account signs the actor change off-chain). The committed
-    ///      `policyConfig` is then handed to the policy's install hook, which stores it keyed by commitment.
+    ///      `policyConfig` is handed to the policy's install hook for validation / optional mutable state setup;
+    ///      the preimage itself is re-supplied at execute and checked against the signed commitment here.
     ///
     ///      Install is one-shot per commitment: a second install of the same `(policy, commitment)` reverts
     ///      {PolicyAlreadyInstalled}, so it can never reset an installed binding's accounting (e.g. spend counters).
@@ -173,6 +181,7 @@ contract PolicyManager is ReentrancyGuard {
         record.account = binding.account;
         record.validAfter = binding.validAfter;
         record.validUntil = binding.validUntil;
+        record.salt = binding.salt;
 
         Policy(binding.policy).onInstall(commitment, binding.account, binding.policyConfig);
         emit PolicyInstalled(binding.account, binding.policy, commitment);
@@ -189,11 +198,14 @@ contract PolicyManager is ReentrancyGuard {
     ///      `msg.sender == sender == account` at a dispatched `call.to`, and using `msg.sender` confines execution
     ///      to that direct dispatch path). It then needs only the live signed `commitment` (a single SLOAD) to
     ///      locate the installed binding — a revoked actor has a zero commitment and is rejected. Actor expiry is
-    ///      checked separately: expiry does not clear the commitment slot, so a stale key would otherwise still drive.
+    ///      not re-checked here: protocol authentication already rejects expired actors before dispatch, so an
+    ///      expired key cannot reach this entrypoint. The external paths below must still enforce expiry themselves.
     ///
     /// @param policy        Policy contract for the binding.
+    /// @param policyConfig  Config preimage from the binding. Recomputed into the commitment and checked against
+    ///                      the actor's signed `policy_commitment` (same check as {install}).
     /// @param executionData Per-use action parameters interpreted by the policy.
-    function execute(address policy, bytes calldata executionData) external nonReentrant {
+    function execute(address policy, bytes calldata policyConfig, bytes calldata executionData) external nonReentrant {
         address account = msg.sender;
         bytes32 actorId = _actingActorId();
 
@@ -203,11 +215,11 @@ contract PolicyManager is ReentrancyGuard {
         // commitment value) but is treated as ungated here — a real binding commits to keccak256 params, never zero.
         bytes32 commitment = ACCOUNT_CONFIGURATION.getPolicyCommitment(account, actorId);
         if (commitment == bytes32(0)) revert NoActivePolicy(actorId);
-        _requireNotExpired(account, actorId);
 
-        // No manager-match check here: on the protocol-dispatched path the 8130 gate already guarantees this manager
-        // is the acting key's configured target (see the dev note above). The external entrypoints below re-add it.
-        _enforce(account, policy, commitment, executionData, account);
+        // No manager-match / expiry checks here: on the protocol-dispatched path the 8130 gate already guarantees
+        // this manager is the acting key's configured target and that the actor is unexpired (see the dev note
+        // above). The external entrypoints below re-add both.
+        _enforce(account, policy, commitment, policyConfig, executionData, account);
     }
 
     /// @notice External-caller variant of {execute}: an external party drives a policy that an `account` authorized
@@ -223,9 +235,13 @@ contract PolicyManager is ReentrancyGuard {
     ///
     /// @param account       Account the call plan will execute against (it authorized the caller).
     /// @param policy        Policy contract for the binding.
+    /// @param policyConfig  Policy-defined config bytes (often the config preimage; may be empty).
     /// @param executionData Per-use action parameters interpreted by the policy.
-    function executeFor(address account, address policy, bytes calldata executionData) external nonReentrant {
-        _enforceExternal(account, bytes32(bytes20(msg.sender)), policy, executionData, msg.sender);
+    function executeFor(address account, address policy, bytes calldata policyConfig, bytes calldata executionData)
+        external
+        nonReentrant
+    {
+        _enforceExternal(account, bytes32(bytes20(msg.sender)), policy, policyConfig, executionData, msg.sender);
     }
 
     /// @notice Best-effort cross-account batch of {executeFor}: one external caller, many accounts, one transaction.
@@ -237,14 +253,16 @@ contract PolicyManager is ReentrancyGuard {
     ///
     /// @param accounts      Accounts to pull from (each must have authorized the caller for `policy`).
     /// @param policy        Policy contract shared across the batch.
+    /// @param policyConfig  Policy-defined config bytes shared across the batch (often the config preimage).
     /// @param executionData Per-account action parameters, parallel to `accounts`.
     ///
     /// @return results Per-account success flags, parallel to `accounts`.
-    function executeForMany(address[] calldata accounts, address policy, bytes[] calldata executionData)
-        external
-        nonReentrant
-        returns (bool[] memory results)
-    {
+    function executeForMany(
+        address[] calldata accounts,
+        address policy,
+        bytes calldata policyConfig,
+        bytes[] calldata executionData
+    ) external nonReentrant returns (bool[] memory results) {
         if (accounts.length != executionData.length) revert LengthMismatch();
         bytes32 actorId = bytes32(bytes20(msg.sender));
         address caller = msg.sender;
@@ -252,7 +270,7 @@ contract PolicyManager is ReentrancyGuard {
         for (uint256 i; i < accounts.length; i++) {
             // Self-call gives each account its own revert boundary: a failure rolls back only this entry's effects
             // (its spend accounting + account call) and is caught, so the rest of the batch still settles.
-            try this.enforceExternalSelf(accounts[i], actorId, policy, executionData[i], caller) {
+            try this.enforceExternalSelf(accounts[i], actorId, policy, policyConfig, executionData[i], caller) {
                 results[i] = true;
             } catch {
                 emit ExecutionSkipped(accounts[i], policy, actorId);
@@ -268,11 +286,12 @@ contract PolicyManager is ReentrancyGuard {
         address account,
         bytes32 actorId,
         address policy,
+        bytes calldata policyConfig,
         bytes calldata executionData,
         address caller
     ) external {
         if (msg.sender != address(this)) revert OnlySelf();
-        _enforceExternal(account, actorId, policy, executionData, caller);
+        _enforceExternal(account, actorId, policy, policyConfig, executionData, caller);
     }
 
     /// @dev External-path validation shared by {executeFor} and {enforceExternalSelf}: re-add the manager-match check
@@ -282,6 +301,7 @@ contract PolicyManager is ReentrancyGuard {
         address account,
         bytes32 actorId,
         address policy,
+        bytes calldata policyConfig,
         bytes calldata executionData,
         address caller
     ) internal {
@@ -292,21 +312,28 @@ contract PolicyManager is ReentrancyGuard {
         bytes32 commitment = ACCOUNT_CONFIGURATION.getPolicyCommitment(account, actorId);
         if (commitment == bytes32(0)) revert NoActivePolicy(actorId);
         _requireNotExpired(account, actorId);
-        _enforce(account, policy, commitment, executionData, caller);
+        _enforce(account, policy, commitment, policyConfig, executionData, caller);
     }
 
     /// @dev Reject when the acting actor's stored expiry has passed. Commitment is only cleared on revoke, not on
-    ///      expiry, so this check is required on every execution path (protocol-dispatched and external).
+    ///      expiry. Required on the external path (no protocol auth); omitted on {execute}, where authentication
+    ///      already enforced expiry before dispatch.
     function _requireNotExpired(address account, bytes32 actorId) internal view {
         AccountConfiguration.ActorConfig memory config = ACCOUNT_CONFIGURATION.getActorConfig(account, actorId);
         if (config.expiry != 0 && block.timestamp > config.expiry) revert ActorExpired(actorId);
     }
 
-    /// @dev Common enforcement for both acting models: validate the installed binding's lifecycle window, run the
+    /// @dev Common enforcement for both acting models: validate the installed binding's lifecycle window, require
+    ///      the supplied `policyConfig` to recompute to the signed commitment (same check as {install}), run the
     ///      policy hook, and forward the returned call plan to the account.
-    function _enforce(address account, address policy, bytes32 commitment, bytes calldata executionData, address caller)
-        internal
-    {
+    function _enforce(
+        address account,
+        address policy,
+        bytes32 commitment,
+        bytes calldata policyConfig,
+        bytes calldata executionData,
+        address caller
+    ) internal {
         PolicyRecord storage record = _policies[policy][commitment];
         if (!record.installed) revert PolicyNotInstalled(commitment);
 
@@ -316,6 +343,12 @@ contract PolicyManager is ReentrancyGuard {
         // fixed at install to the account named in the commitment preimage, so this always holds for legitimate use.
         if (record.account != account) revert CommitmentAccountMismatch(record.account, account);
 
+        // Same commitment check as install: the supplied preimage must be the one the account signed.
+        bytes32 actual = _commitment(
+            record.account, policy, keccak256(policyConfig), record.validAfter, record.validUntil, record.salt
+        );
+        if (actual != commitment) revert PolicyConfigMismatch(commitment, actual);
+
         if (
             (record.validAfter != 0 && block.timestamp < record.validAfter)
                 || (record.validUntil != 0 && block.timestamp >= record.validUntil)
@@ -323,7 +356,8 @@ contract PolicyManager is ReentrancyGuard {
             revert OutsideValidityWindow(record.validAfter, record.validUntil, block.timestamp);
         }
 
-        bytes memory accountCallData = Policy(policy).onExecute(commitment, account, executionData, caller);
+        bytes memory accountCallData =
+            Policy(policy).onExecute(commitment, account, policyConfig, executionData, caller);
         if (accountCallData.length == 0) return;
 
         account.functionCall(accountCallData);
@@ -342,15 +376,24 @@ contract PolicyManager is ReentrancyGuard {
     }
 
     function _commitment(PolicyBinding calldata binding) internal pure returns (bytes32) {
-        return keccak256(
-            abi.encode(
-                binding.account,
-                binding.policy,
-                keccak256(binding.policyConfig),
-                binding.validAfter,
-                binding.validUntil,
-                binding.salt
-            )
+        return _commitment(
+            binding.account,
+            binding.policy,
+            keccak256(binding.policyConfig),
+            binding.validAfter,
+            binding.validUntil,
+            binding.salt
         );
+    }
+
+    function _commitment(
+        address account,
+        address policy,
+        bytes32 policyConfigHash,
+        uint40 validAfter,
+        uint40 validUntil,
+        uint256 salt
+    ) internal pure returns (bytes32) {
+        return keccak256(abi.encode(account, policy, policyConfigHash, validAfter, validUntil, salt));
     }
 }

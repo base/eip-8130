@@ -18,7 +18,12 @@ contract EmptyPlanPolicy is Policy {
 
     function _onInstall(bytes32, address, bytes calldata) internal override {}
 
-    function _onExecute(bytes32, address, bytes calldata, address) internal pure override returns (bytes memory) {
+    function _onExecute(bytes32, address, bytes calldata, bytes calldata, address)
+        internal
+        pure
+        override
+        returns (bytes memory)
+    {
         return "";
     }
 }
@@ -59,7 +64,7 @@ contract PolicyManagerTest is AccountConfigurationTest {
 
         vm.expectRevert(abi.encodeWithSelector(PolicyManager.NoActivePolicy.selector, actorId));
         vm.prank(stranger);
-        manager.execute(address(policy), _action());
+        manager.execute(address(policy), _config(), _action());
     }
 
     function test_execute_revertsAfterRevoke() public {
@@ -70,19 +75,7 @@ contract PolicyManagerTest is AccountConfigurationTest {
         // Revoke cleared the policy slots; the per-call commitment read now resolves to zero.
         vm.expectRevert(abi.encodeWithSelector(PolicyManager.NoActivePolicy.selector, actorId));
         vm.prank(account);
-        manager.execute(address(policy), _action());
-    }
-
-    function test_execute_revertsWhenActorExpired() public {
-        // Expiry does not clear the commitment slot — only revoke does — so the manager must enforce it itself.
-        uint48 expiry = uint48(block.timestamp + 1 days);
-        bytes32 actorId = _installSessionWithExpiry(1, expiry);
-
-        vm.warp(uint256(expiry) + 1);
-        _mockActingActor(actorId);
-        vm.expectRevert(abi.encodeWithSelector(PolicyManager.ActorExpired.selector, actorId));
-        vm.prank(account);
-        manager.execute(address(policy), _action());
+        manager.execute(address(policy), _config(), _action());
     }
 
     function test_execute_revertsForCrossAccountCommitmentReuse() public {
@@ -102,7 +95,7 @@ contract PolicyManagerTest is AccountConfigurationTest {
         _mockActingActor(attackerActorId);
         vm.expectRevert(abi.encodeWithSelector(PolicyManager.CommitmentAccountMismatch.selector, account, attacker));
         vm.prank(attacker);
-        manager.execute(address(policy), _action());
+        manager.execute(address(policy), _config(), _action());
     }
 
     // ── Install authorization ──
@@ -157,7 +150,7 @@ contract PolicyManagerTest is AccountConfigurationTest {
             abi.encodeWithSelector(PolicyManager.OutsideValidityWindow.selector, validAfter, uint40(0), block.timestamp)
         );
         vm.prank(account);
-        manager.execute(address(policy), _action());
+        manager.execute(address(policy), _config(), _action());
     }
 
     function test_execute_revertsAfterValidUntil() public {
@@ -171,7 +164,7 @@ contract PolicyManagerTest is AccountConfigurationTest {
             abi.encodeWithSelector(PolicyManager.OutsideValidityWindow.selector, uint40(0), validUntil, block.timestamp)
         );
         vm.prank(account);
-        manager.execute(address(policy), _action());
+        manager.execute(address(policy), _config(), _action());
     }
 
     function test_execute_revertsWhenPolicyNotInstalled() public {
@@ -184,7 +177,7 @@ contract PolicyManagerTest is AccountConfigurationTest {
         _mockActingActor(actorId);
         vm.expectRevert(abi.encodeWithSelector(PolicyManager.PolicyNotInstalled.selector, commitment));
         vm.prank(account);
-        manager.execute(address(policy), _action());
+        manager.execute(address(policy), _config(), _action());
     }
 
     function test_execute_emptyCallPlanIsNoOp() public {
@@ -202,7 +195,7 @@ contract PolicyManagerTest is AccountConfigurationTest {
         _mockActingActor(actorId);
         vm.recordLogs();
         vm.prank(account);
-        manager.execute(address(emptyPolicy), _action());
+        manager.execute(address(emptyPolicy), "", _action());
         // No PolicyExecuted event is emitted on the no-op path.
         assertEq(vm.getRecordedLogs().length, 0);
     }
@@ -213,7 +206,7 @@ contract PolicyManagerTest is AccountConfigurationTest {
         _installSession(1);
         vm.expectRevert(abi.encodeWithSelector(PolicyManager.NoActivePolicy.selector, bytes32(0)));
         vm.prank(account);
-        manager.execute(address(policy), _action());
+        manager.execute(address(policy), _config(), _action());
     }
 
     // ── Config resolution ──

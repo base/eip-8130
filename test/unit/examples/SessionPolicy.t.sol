@@ -64,6 +64,7 @@ contract SessionPolicyTest is AccountConfigurationTest {
     uint40 internal constant WEEK = 7 days;
 
     uint256 internal saltNonce;
+    bytes internal lastPolicyConfig;
 
     function setUp() public override {
         super.setUp();
@@ -99,7 +100,9 @@ contract SessionPolicyTest is AccountConfigurationTest {
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.TargetNotAllowed.selector, address(token)));
         vm.prank(account);
         manager.execute(
-            address(policy), _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1)))
+            address(policy),
+            lastPolicyConfig,
+            _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1)))
         );
     }
 
@@ -132,7 +135,9 @@ contract SessionPolicyTest is AccountConfigurationTest {
             )
         );
         vm.prank(account);
-        manager.execute(address(policy), _action(address(target), 0, abi.encodeCall(SessionMockTarget.other, (1))));
+        manager.execute(
+            address(policy), lastPolicyConfig, _action(address(target), 0, abi.encodeCall(SessionMockTarget.other, (1)))
+        );
     }
 
     // ── Recipient gating ──
@@ -157,7 +162,9 @@ contract SessionPolicyTest is AccountConfigurationTest {
         );
         vm.prank(account);
         manager.execute(
-            address(policy), _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (mallory, 1)))
+            address(policy),
+            lastPolicyConfig,
+            _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (mallory, 1)))
         );
     }
 
@@ -178,13 +185,17 @@ contract SessionPolicyTest is AccountConfigurationTest {
 
         vm.prank(account);
         manager.execute(
-            address(policy), _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 300e18)))
+            address(policy),
+            lastPolicyConfig,
+            _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 300e18)))
         );
 
         vm.expectRevert(abi.encodeWithSelector(RecurringAllowance.ExceededAllowance.selector, 600e18, 500e18));
         vm.prank(account);
         manager.execute(
-            address(policy), _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 300e18)))
+            address(policy),
+            lastPolicyConfig,
+            _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 300e18)))
         );
     }
 
@@ -195,14 +206,18 @@ contract SessionPolicyTest is AccountConfigurationTest {
 
         vm.prank(account);
         manager.execute(
-            address(policy), _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 500e18)))
+            address(policy),
+            lastPolicyConfig,
+            _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 500e18)))
         );
 
         // Crossing exactly one aligned period refreshes the budget (window is epoch-0 aligned).
         vm.warp(block.timestamp + WEEK);
         vm.prank(account);
         manager.execute(
-            address(policy), _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 400e18)))
+            address(policy),
+            lastPolicyConfig,
+            _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 400e18)))
         );
 
         assertEq(token.balanceOf(bob), 900e18);
@@ -217,7 +232,9 @@ contract SessionPolicyTest is AccountConfigurationTest {
 
         vm.prank(account);
         manager.execute(
-            address(policy), _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 300e18)))
+            address(policy),
+            lastPolicyConfig,
+            _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 300e18)))
         );
 
         // Even a year later the one-time cap does not refresh.
@@ -225,7 +242,9 @@ contract SessionPolicyTest is AccountConfigurationTest {
         vm.expectRevert(abi.encodeWithSelector(RecurringAllowance.ExceededAllowance.selector, 600e18, 500e18));
         vm.prank(account);
         manager.execute(
-            address(policy), _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 300e18)))
+            address(policy),
+            lastPolicyConfig,
+            _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 300e18)))
         );
     }
 
@@ -238,12 +257,12 @@ contract SessionPolicyTest is AccountConfigurationTest {
         _mockActingActor(actorId);
 
         vm.prank(account);
-        manager.execute(address(policy), _action(bob, 0.6 ether, ""));
+        manager.execute(address(policy), lastPolicyConfig, _action(bob, 0.6 ether, ""));
         assertEq(bob.balance, 0.6 ether);
 
         vm.expectRevert(abi.encodeWithSelector(RecurringAllowance.ExceededAllowance.selector, 1.2 ether, 1 ether));
         vm.prank(account);
-        manager.execute(address(policy), _action(bob, 0.6 ether, ""));
+        manager.execute(address(policy), lastPolicyConfig, _action(bob, 0.6 ether, ""));
     }
 
     // ── Atomic multi-dimension enforcement on a single call ──
@@ -272,7 +291,9 @@ contract SessionPolicyTest is AccountConfigurationTest {
         );
         vm.prank(account);
         manager.execute(
-            address(policy), _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (mallory, 1)))
+            address(policy),
+            lastPolicyConfig,
+            _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (mallory, 1)))
         );
     }
 
@@ -329,7 +350,9 @@ contract SessionPolicyTest is AccountConfigurationTest {
         vm.expectRevert(abi.encodeWithSelector(RecurringAllowance.ExceededAllowance.selector, 6e6, fiveUsdc));
         vm.prank(account);
         manager.execute(
-            address(policy), _action(address(usdc), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 3e6)))
+            address(policy),
+            lastPolicyConfig,
+            _action(address(usdc), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 3e6)))
         );
 
         // A selector outside the two chosen ones on MyApp → rejected.
@@ -340,7 +363,11 @@ contract SessionPolicyTest is AccountConfigurationTest {
             )
         );
         vm.prank(account);
-        manager.execute(address(policy), _action(address(target), 0, abi.encodeCall(SessionMockTarget.adminOnly, (9))));
+        manager.execute(
+            address(policy),
+            lastPolicyConfig,
+            _action(address(target), 0, abi.encodeCall(SessionMockTarget.adminOnly, (9)))
+        );
 
         // Next month: the USDC budget refreshes back to $5.
         vm.warp(block.timestamp + monthPeriod);
@@ -398,6 +425,34 @@ contract SessionPolicyTest is AccountConfigurationTest {
         manager.install(actorId, binding);
     }
 
+    // ── Calldata config preimage ──
+
+    function test_execute_revertsOnPolicyConfigMismatch() public {
+        // Execute must re-supply the exact committed preimage; the manager recomputes the commitment (same as install).
+        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
+        scopes[0] = _anySelectorScope(address(target));
+        bytes32 actorId = _install(_config(_noLimits(), scopes));
+        bytes32 commitment = accountConfiguration.getPolicyCommitment(account, actorId);
+        uint256 salt = manager.getPolicyRecord(address(policy), commitment).salt;
+
+        bytes memory wrongConfig = _config(_noLimits(), _anySelectorScopes(address(token)));
+        bytes32 actual = manager.commitmentOf(
+            PolicyManager.PolicyBinding({
+                account: account,
+                policy: address(policy),
+                policyConfig: wrongConfig,
+                validAfter: 0,
+                validUntil: 0,
+                salt: salt
+            })
+        );
+
+        _mockActingActor(actorId);
+        vm.expectRevert(abi.encodeWithSelector(PolicyManager.PolicyConfigMismatch.selector, commitment, actual));
+        vm.prank(account);
+        manager.execute(address(policy), wrongConfig, _action(address(target), 0, ""));
+    }
+
     // ── Selector-length gating ──
 
     function test_execute_revertsMissingSelectorForShortData() public {
@@ -409,7 +464,7 @@ contract SessionPolicyTest is AccountConfigurationTest {
         _mockActingActor(actorId);
         vm.expectRevert(SessionPolicy.MissingSelector.selector);
         vm.prank(account);
-        manager.execute(address(policy), _action(address(target), 0, hex"010203"));
+        manager.execute(address(policy), lastPolicyConfig, _action(address(target), 0, hex"010203"));
     }
 
     function test_execute_allowsEmptyCalldata() public {
@@ -431,7 +486,7 @@ contract SessionPolicyTest is AccountConfigurationTest {
 
         _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 0)));
 
-        assertEq(policy.getCurrentSpend(commitment, address(token)).spend, 0);
+        assertEq(policy.getCurrentSpend(commitment, lastPolicyConfig, address(token)).spend, 0);
     }
 
     function test_execute_revertsMalformedTransfer() public {
@@ -443,7 +498,7 @@ contract SessionPolicyTest is AccountConfigurationTest {
         bytes memory malformed = abi.encodePacked(TRANSFER, bytes32(uint256(uint160(bob)))); // selector + 32 = 36 bytes
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.MalformedTokenCall.selector, TRANSFER));
         vm.prank(account);
-        manager.execute(address(policy), _action(address(token), 0, malformed));
+        manager.execute(address(policy), lastPolicyConfig, _action(address(token), 0, malformed));
     }
 
     function test_execute_revertsMalformedTransferFrom() public {
@@ -458,51 +513,53 @@ contract SessionPolicyTest is AccountConfigurationTest {
         bytes memory malformed = abi.encodePacked(TRANSFER_FROM, bytes32(0), bytes32(0)); // selector + 64 = 68 < 100
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.MalformedTokenCall.selector, TRANSFER_FROM));
         vm.prank(account);
-        manager.execute(address(policy), _action(address(token), 0, malformed));
+        manager.execute(address(policy), lastPolicyConfig, _action(address(token), 0, malformed));
     }
 
     // ── Views ──
 
-    function test_views_reflectInstalledErc20Scope() public {
+    function test_views_reflectCommittedErc20Scope() public {
         address[] memory recipients = new address[](1);
         recipients[0] = bob;
         (, bytes32 commitment) = _installWithCommitment(
             _config(_limit(address(token), 500e18, WEEK), _erc20Scope(address(token), recipients))
         );
 
-        (bool allowed, bool anySelector) = policy.isTargetAllowed(commitment, address(token));
+        (bool allowed, bool anySelector) = policy.isTargetAllowed(lastPolicyConfig, address(token));
         assertTrue(allowed);
         assertFalse(anySelector);
 
-        (bool selAllowed, bool recipientBound) = policy.getSelectorRule(commitment, address(token), TRANSFER);
+        (bool selAllowed, bool recipientBound) = policy.getSelectorRule(lastPolicyConfig, address(token), TRANSFER);
         assertTrue(selAllowed);
         assertTrue(recipientBound);
 
-        assertTrue(policy.isRecipientAllowed(commitment, address(token), TRANSFER, bob));
-        assertFalse(policy.isRecipientAllowed(commitment, address(token), TRANSFER, mallory));
+        assertTrue(policy.isRecipientAllowed(lastPolicyConfig, address(token), TRANSFER, bob));
+        assertFalse(policy.isRecipientAllowed(lastPolicyConfig, address(token), TRANSFER, mallory));
 
-        (bool set, uint160 allowance, uint40 period) = policy.getTokenLimit(commitment, address(token));
+        (bool set, uint160 allowance, uint40 period) = policy.getTokenLimit(lastPolicyConfig, address(token));
         assertTrue(set);
         assertEq(allowance, 500e18);
         assertEq(period, WEEK);
 
-        assertEq(policy.getCurrentSpend(commitment, address(token)).spend, 0);
+        assertEq(policy.getCurrentSpend(commitment, lastPolicyConfig, address(token)).spend, 0);
     }
 
     function test_views_reflectAnySelectorScopeAndOneTimeLimit() public {
         (, bytes32 commitment) =
             _installWithCommitment(_config(_limit(address(0), 1 ether, 0), _anySelectorScopes(address(target))));
 
-        (bool allowed, bool anySelector) = policy.isTargetAllowed(commitment, address(target));
+        assertEq(manager.getPolicyRecord(address(policy), commitment).installed, true);
+
+        (bool allowed, bool anySelector) = policy.isTargetAllowed(lastPolicyConfig, address(target));
         assertTrue(allowed);
         assertTrue(anySelector);
 
         // Unlisted target resolves to the zero scope.
-        (bool otherAllowed,) = policy.isTargetAllowed(commitment, address(token));
+        (bool otherAllowed,) = policy.isTargetAllowed(lastPolicyConfig, address(token));
         assertFalse(otherAllowed);
 
         // A one-time (period == 0) native cap is normalized to the never-resetting ONE_TIME period.
-        (bool set,, uint40 period) = policy.getTokenLimit(commitment, address(0));
+        (bool set,, uint40 period) = policy.getTokenLimit(lastPolicyConfig, address(0));
         assertTrue(set);
         assertEq(period, type(uint40).max);
     }
@@ -518,6 +575,7 @@ contract SessionPolicyTest is AccountConfigurationTest {
 
     /// @dev Like {_install} but also returns the binding's commitment, for asserting on the commitment-keyed views.
     function _installWithCommitment(bytes memory policyConfig) internal returns (bytes32 actorId, bytes32 commitment) {
+        lastPolicyConfig = policyConfig;
         PolicyManager.PolicyBinding memory binding;
         (actorId, binding) = _prepareBinding(policyConfig);
         commitment = manager.commitmentOf(binding);
@@ -537,7 +595,7 @@ contract SessionPolicyTest is AccountConfigurationTest {
     function _execute(bytes32 actorId, address t, uint256 value, bytes memory data) internal {
         _mockActingActor(actorId);
         vm.prank(account);
-        manager.execute(address(policy), _action(t, value, data));
+        manager.execute(address(policy), lastPolicyConfig, _action(t, value, data));
     }
 
     function _action(address t, uint256 value, bytes memory data) internal pure returns (bytes memory) {
@@ -604,8 +662,9 @@ contract SessionPolicyTest is AccountConfigurationTest {
     }
 
     /// @dev Authorize a fresh session-key actor gated to the manager committing to `policyConfig`, then install
-    ///      the binding at the manager. Returns the actorId.
+    ///      the binding at the manager. Returns the actorId. Stashes `policyConfig` for subsequent {_execute} calls.
     function _install(bytes memory policyConfig) internal returns (bytes32 actorId) {
+        lastPolicyConfig = policyConfig;
         PolicyManager.PolicyBinding memory binding;
         (actorId, binding) = _prepareBinding(policyConfig);
         vm.prank(account);
