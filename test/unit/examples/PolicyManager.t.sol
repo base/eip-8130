@@ -3,7 +3,7 @@ pragma solidity ^0.8.30;
 
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../../src/interfaces/ITransactionContext.sol";
-import {TRUSTED_EXECUTOR} from "../../../src/accounts/DefaultAccount.sol";
+import {Call, DefaultAccount, TRUSTED_EXECUTOR} from "../../../src/accounts/DefaultAccount.sol";
 
 import {PolicyManager} from "../../../src/policies/PolicyManager.sol";
 import {Policy} from "../../../src/policies/Policy.sol";
@@ -16,8 +16,6 @@ import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 contract EmptyPlanPolicy is Policy {
     constructor(address policyManager) Policy(policyManager) {}
 
-    function _onInstall(bytes32, address, bytes calldata) internal override {}
-
     function _onExecute(bytes32, address, bytes calldata, bytes calldata, address)
         internal
         pure
@@ -28,9 +26,39 @@ contract EmptyPlanPolicy is Policy {
     }
 }
 
-/// @notice Manager-level coverage for {PolicyManager}: the install authorization checks and the per-call execute
-///         authorization boundary, independent of any specific policy's enforcement logic. {SessionPolicy} is used as
-///         a concrete, minimally-configured policy; policy-specific behavior is covered in SessionPolicy.t.sol.
+/// @notice Policy that returns a successful empty `executeBatch` plus non-empty `postCallData`, so the manager's
+///         {onPostExecute} forwarding can be asserted end-to-end.
+contract PostCallPolicy is Policy {
+    bytes32 public lastPostCommitment;
+    address public lastPostAccount;
+    bytes public lastPostCallData;
+    uint256 public postCallCount;
+
+    bytes public constant POST_PAYLOAD = hex"c0ffee";
+
+    constructor(address policyManager) Policy(policyManager) {}
+
+    function _onExecute(bytes32, address, bytes calldata, bytes calldata, address)
+        internal
+        pure
+        override
+        returns (bytes memory accountCallData, bytes memory postCallData)
+    {
+        Call[] memory calls = new Call[](0);
+        return (abi.encodeCall(DefaultAccount.executeBatch, (calls)), POST_PAYLOAD);
+    }
+
+    function _onPostExecute(bytes32 commitment, address account, bytes calldata postCallData) internal override {
+        lastPostCommitment = commitment;
+        lastPostAccount = account;
+        lastPostCallData = postCallData;
+        postCallCount++;
+    }
+}
+
+/// @notice Manager-level coverage for {PolicyManager}: the per-call execute authorization boundary, independent of
+///         any specific policy's enforcement logic. {SessionPolicy} is used as a concrete, minimally-configured
+///         policy; policy-specific behavior is covered in SessionPolicy.t.sol.
 contract PolicyManagerTest is AccountConfigurationTest {
     PolicyManager internal manager;
     SessionPolicy internal policy;
@@ -108,44 +136,6 @@ contract PolicyManagerTest is AccountConfigurationTest {
         manager.execute(attackerBinding, _action());
     }
 
-    // ── Install authorization ──
-
-    function test_install_isPermissionless_anyCallerForAuthorizedBinding() public {
-        PolicyManager.PolicyBinding memory binding = _binding(1);
-        bytes32 actorId = _sessionActorId(1);
-        bytes32 commitment = manager.commitmentOf(binding);
-        _authorizePolicyActor(actorId, commitment);
-
-        vm.prank(stranger);
-        manager.install(actorId, binding);
-
-        assertTrue(manager.isInstalled(address(policy), commitment));
-    }
-
-    function test_install_revertsWhenAlreadyInstalled() public {
-        PolicyManager.PolicyBinding memory binding = _binding(1);
-        bytes32 actorId = _sessionActorId(1);
-        bytes32 commitment = manager.commitmentOf(binding);
-        _authorizePolicyActor(actorId, commitment);
-        vm.prank(account);
-        manager.install(actorId, binding);
-
-        vm.expectRevert(abi.encodeWithSelector(PolicyManager.PolicyAlreadyInstalled.selector, commitment));
-        vm.prank(account);
-        manager.install(actorId, binding);
-    }
-
-    function test_install_revertsWhenCommitmentNotAuthorized() public {
-        PolicyManager.PolicyBinding memory binding = _binding(7);
-        bytes32 actorId = _sessionActorId(7);
-
-        vm.expectRevert(
-            abi.encodeWithSelector(PolicyManager.CommitmentNotAuthorized.selector, actorId, address(0), bytes32(0))
-        );
-        vm.prank(account);
-        manager.install(actorId, binding);
-    }
-
     function test_execute_revertsBeforeValidAfter() public {
         uint40 validAfter = uint40(block.timestamp + 1 days);
         (bytes32 actorId, PolicyManager.PolicyBinding memory binding) = _installSessionWithWindow(1, validAfter, 0);
@@ -171,18 +161,6 @@ contract PolicyManagerTest is AccountConfigurationTest {
         manager.execute(binding, _action());
     }
 
-    function test_execute_revertsWhenPolicyNotInstalled() public {
-        PolicyManager.PolicyBinding memory binding = _binding(11);
-        bytes32 actorId = _sessionActorId(11);
-        bytes32 commitment = manager.commitmentOf(binding);
-        _authorizePolicyActor(actorId, commitment);
-
-        _mockActingActor(actorId);
-        vm.expectRevert(abi.encodeWithSelector(PolicyManager.PolicyNotInstalled.selector, commitment));
-        vm.prank(account);
-        manager.execute(binding, _action());
-    }
-
     function test_execute_emptyCallPlanIsNoOp() public {
         EmptyPlanPolicy emptyPolicy = new EmptyPlanPolicy(address(manager));
         PolicyManager.PolicyBinding memory binding = PolicyManager.PolicyBinding({
@@ -191,14 +169,31 @@ contract PolicyManagerTest is AccountConfigurationTest {
         bytes32 actorId = _sessionActorId(42);
         bytes32 commitment = manager.commitmentOf(binding);
         _authorizePolicyActor(actorId, commitment);
-        vm.prank(account);
-        manager.install(actorId, binding);
 
         _mockActingActor(actorId);
         vm.recordLogs();
         vm.prank(account);
         manager.execute(binding, _action());
         assertEq(vm.getRecordedLogs().length, 0);
+    }
+
+    function test_execute_forwardsPostCallDataAfterAccountCall() public {
+        PostCallPolicy postPolicy = new PostCallPolicy(address(manager));
+        PolicyManager.PolicyBinding memory binding = PolicyManager.PolicyBinding({
+            account: account, policy: address(postPolicy), policyConfig: "", validAfter: 0, validUntil: 0, salt: 43
+        });
+        bytes32 actorId = _sessionActorId(43);
+        bytes32 commitment = manager.commitmentOf(binding);
+        _authorizePolicyActor(actorId, commitment);
+
+        _mockActingActor(actorId);
+        vm.prank(account);
+        manager.execute(binding, _action());
+
+        assertEq(postPolicy.postCallCount(), 1);
+        assertEq(postPolicy.lastPostCommitment(), commitment);
+        assertEq(postPolicy.lastPostAccount(), account);
+        assertEq(postPolicy.lastPostCallData(), postPolicy.POST_PAYLOAD());
     }
 
     function test_execute_revertsWhenNotDispatched() public {
@@ -263,8 +258,6 @@ contract PolicyManagerTest is AccountConfigurationTest {
         PolicyManager.PolicyBinding memory binding = _binding(salt);
         actorId = _sessionActorId(salt);
         _authorizePolicyActor(actorId, manager.commitmentOf(binding), expiry);
-        vm.prank(account);
-        manager.install(actorId, binding);
     }
 
     function _installSessionWithWindow(uint256 salt, uint40 validAfter, uint40 validUntil)
@@ -281,8 +274,6 @@ contract PolicyManagerTest is AccountConfigurationTest {
         });
         actorId = _sessionActorId(salt);
         _authorizePolicyActor(actorId, manager.commitmentOf(binding));
-        vm.prank(account);
-        manager.install(actorId, binding);
     }
 
     function _createAccountWithRootAndManager() internal returns (address) {

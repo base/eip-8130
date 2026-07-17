@@ -13,6 +13,7 @@ import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 contract SessionMockERC20 {
     mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
 
     function mint(address to, uint256 amount) external {
         balanceOf[to] += amount;
@@ -21,6 +22,18 @@ contract SessionMockERC20 {
     function transfer(address to, uint256 amount) external returns (bool) {
         balanceOf[msg.sender] -= amount;
         balanceOf[to] += amount;
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        allowance[from][msg.sender] -= amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
         return true;
     }
 }
@@ -345,63 +358,110 @@ contract SessionPolicyTest is AccountConfigurationTest {
         assertEq(usdc.balanceOf(bob), 3e6 + 4e6);
     }
 
-    // ── Install guards ──
+    // ── Config validation (at execute) ──
 
-    function test_install_revertsRecipientRuleOnUnsupportedSelector() public {
+    function test_execute_revertsRecipientRuleOnUnsupportedSelector() public {
         address[] memory recipients = new address[](1);
         recipients[0] = bob;
-        // A recipient allowlist attached to a non-ERC20 selector cannot be enforced → reject at install.
+        // A recipient allowlist attached to a non-ERC20 selector cannot be enforced → reject at execute.
         SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](1);
         rules[0] = SessionPolicy.SelectorRule({selector: SessionMockTarget.setValue.selector, recipients: recipients});
         SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
         scopes[0] = SessionPolicy.CallScope({target: address(target), selectorRules: rules});
 
-        (bytes32 actorId, PolicyManager.PolicyBinding memory binding) = _prepareBinding(_config(_noLimits(), scopes));
+        bytes32 actorId = _authorize(_config(_noLimits(), scopes));
+        _mockActingActor(actorId);
         vm.expectRevert(
             abi.encodeWithSelector(
                 SessionPolicy.RecipientRuleUnsupportedSelector.selector, SessionMockTarget.setValue.selector
             )
         );
         vm.prank(account);
-        manager.install(actorId, binding);
+        manager.execute(lastBinding, _action(address(target), 0, abi.encodeCall(SessionMockTarget.setValue, (1))));
     }
 
-    function test_install_revertsZeroLimit() public {
-        (bytes32 actorId, PolicyManager.PolicyBinding memory binding) =
-            _prepareBinding(_config(_limit(address(token), 0, WEEK), _erc20Scope(address(token), _noRecipients())));
+    function test_execute_revertsZeroLimit() public {
+        bytes32 actorId =
+            _authorize(_config(_limit(address(token), 0, WEEK), _erc20Scope(address(token), _noRecipients())));
+        _mockActingActor(actorId);
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.ZeroLimit.selector, address(token)));
         vm.prank(account);
-        manager.install(actorId, binding);
+        manager.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1))));
     }
 
-    function test_install_revertsLimitTooLarge() public {
+    function test_execute_revertsLimitTooLarge() public {
         uint256 tooLarge = uint256(type(uint160).max) + 1;
-        (bytes32 actorId, PolicyManager.PolicyBinding memory binding) = _prepareBinding(
-            _config(_limit(address(token), tooLarge, WEEK), _erc20Scope(address(token), _noRecipients()))
-        );
+        bytes32 actorId =
+            _authorize(_config(_limit(address(token), tooLarge, WEEK), _erc20Scope(address(token), _noRecipients())));
+        _mockActingActor(actorId);
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.LimitTooLarge.selector, address(token), tooLarge));
         vm.prank(account);
-        manager.install(actorId, binding);
+        manager.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1))));
     }
 
-    function test_install_revertsAnySelectorOnLimitedToken() public {
+    function test_execute_revertsAnySelectorOnLimitedToken() public {
         // A TokenLimit only tracks transfer/transferFrom/approve; anySelector would leave other methods untracked.
         SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
         scopes[0] = _anySelectorScope(address(token));
-        (bytes32 actorId, PolicyManager.PolicyBinding memory binding) =
-            _prepareBinding(_config(_limit(address(token), 500e18, WEEK), scopes));
+        bytes32 actorId = _authorize(_config(_limit(address(token), 500e18, WEEK), scopes));
+        _mockActingActor(actorId);
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.AnySelectorOnLimitedToken.selector, address(token)));
         vm.prank(account);
-        manager.install(actorId, binding);
+        manager.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1))));
+    }
+
+    function test_execute_revertsSelfTarget() public {
+        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
+        scopes[0] = _anySelectorScope(account);
+        bytes32 actorId = _authorize(_config(_noLimits(), scopes));
+        _mockActingActor(actorId);
+        vm.expectRevert(SessionPolicy.SelfTargetNotAllowed.selector);
+        vm.prank(account);
+        manager.execute(lastBinding, _action(account, 0, ""));
+    }
+
+    function test_execute_revertsDuplicateTokenLimit() public {
+        SessionPolicy.TokenLimit[] memory limits = new SessionPolicy.TokenLimit[](2);
+        limits[0] = SessionPolicy.TokenLimit({token: address(token), limit: 100e18, period: WEEK});
+        limits[1] = SessionPolicy.TokenLimit({token: address(token), limit: 200e18, period: WEEK});
+        bytes32 actorId = _authorize(_config(limits, _erc20Scope(address(token), _noRecipients())));
+        _mockActingActor(actorId);
+        vm.expectRevert(abi.encodeWithSelector(SessionPolicy.DuplicateTokenLimit.selector, address(token)));
+        vm.prank(account);
+        manager.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1))));
+    }
+
+    function test_execute_revertsDuplicateCallScope() public {
+        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](2);
+        scopes[0] = _anySelectorScope(address(target));
+        scopes[1] = _anySelectorScope(address(target));
+        bytes32 actorId = _authorize(_config(_noLimits(), scopes));
+        _mockActingActor(actorId);
+        vm.expectRevert(abi.encodeWithSelector(SessionPolicy.DuplicateCallScope.selector, address(target)));
+        vm.prank(account);
+        manager.execute(lastBinding, _action(address(target), 0, ""));
+    }
+
+    function test_execute_revertsDuplicateSelectorRule() public {
+        SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](2);
+        rules[0] = SessionPolicy.SelectorRule({selector: TRANSFER, recipients: _noRecipients()});
+        rules[1] = SessionPolicy.SelectorRule({selector: TRANSFER, recipients: _noRecipients()});
+        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
+        scopes[0] = SessionPolicy.CallScope({target: address(token), selectorRules: rules});
+        bytes32 actorId = _authorize(_config(_noLimits(), scopes));
+        _mockActingActor(actorId);
+        vm.expectRevert(abi.encodeWithSelector(SessionPolicy.DuplicateSelectorRule.selector, address(token), TRANSFER));
+        vm.prank(account);
+        manager.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1))));
     }
 
     // ── Calldata config preimage ──
 
     function test_execute_revertsOnPolicyConfigMismatch() public {
-        // Execute must re-supply the exact committed binding; the manager recomputes the commitment (same as install).
+        // Execute must re-supply the exact committed binding; the manager recomputes the commitment.
         SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
         scopes[0] = _anySelectorScope(address(target));
-        bytes32 actorId = _install(_config(_noLimits(), scopes));
+        bytes32 actorId = _authorize(_config(_noLimits(), scopes));
         bytes32 commitment = accountConfiguration.getPolicyCommitment(account, actorId);
 
         PolicyManager.PolicyBinding memory wrong = lastBinding;
@@ -428,6 +488,35 @@ contract SessionPolicyTest is AccountConfigurationTest {
         manager.execute(lastBinding, _action(address(target), 0, hex"010203"));
     }
 
+    function test_execute_acceptsTransferDespiteDirtySelectorWord() public {
+        // ABI-encoded `transfer` packs the selector into the high 4 bytes of the first word and the address into
+        // the remainder — so a raw mload into bytes4 leaves dirty low bytes. The mask must still match TRANSFER.
+        bytes32 actorId =
+            _install(_config(_limit(address(token), 500e18, WEEK), _erc20Scope(address(token), _noRecipients())));
+        _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1e18)));
+        assertEq(token.balanceOf(bob), 1e18);
+    }
+
+    function test_execute_revertsTransferFromNotSelf() public {
+        SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](1);
+        rules[0] = SessionPolicy.SelectorRule({selector: TRANSFER_FROM, recipients: _noRecipients()});
+        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
+        scopes[0] = SessionPolicy.CallScope({target: address(token), selectorRules: rules});
+        bytes32 actorId = _install(_config(_limit(address(token), 500e18, WEEK), scopes));
+
+        // Approve the account to pull from mallory so the ERC-20 call would succeed absent the policy check.
+        token.mint(mallory, 100e18);
+        vm.prank(mallory);
+        token.approve(account, 100e18);
+
+        _mockActingActor(actorId);
+        vm.expectRevert(abi.encodeWithSelector(SessionPolicy.TransferFromNotSelf.selector, mallory));
+        vm.prank(account);
+        manager.execute(
+            lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transferFrom, (mallory, bob, 1e18)))
+        );
+    }
+
     function test_execute_allowsEmptyCalldata() public {
         // 0 bytes of calldata is a plain value call: it skips selector gating entirely.
         SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
@@ -441,7 +530,7 @@ contract SessionPolicyTest is AccountConfigurationTest {
 
     function test_execute_zeroAmountTransferSkipsSpend() public {
         // A zero-value transfer on a limited token must not touch spend accounting (the library rejects zero spends).
-        (bytes32 actorId, bytes32 commitment) = _installWithCommitment(
+        (bytes32 actorId, bytes32 commitment) = _authorizeWithCommitment(
             _config(_limit(address(token), 500e18, WEEK), _erc20Scope(address(token), _noRecipients()))
         );
 
@@ -488,7 +577,7 @@ contract SessionPolicyTest is AccountConfigurationTest {
     function test_views_reflectCommittedErc20Scope() public {
         address[] memory recipients = new address[](1);
         recipients[0] = bob;
-        (, bytes32 commitment) = _installWithCommitment(
+        (, bytes32 commitment) = _authorizeWithCommitment(
             _config(_limit(address(token), 500e18, WEEK), _erc20Scope(address(token), recipients))
         );
         SessionPolicy.Config memory cfg = abi.decode(lastBinding.policyConfig, (SessionPolicy.Config));
@@ -513,11 +602,8 @@ contract SessionPolicyTest is AccountConfigurationTest {
     }
 
     function test_views_reflectAnySelectorScopeAndOneTimeLimit() public {
-        (, bytes32 commitment) =
-            _installWithCommitment(_config(_limit(address(0), 1 ether, 0), _anySelectorScopes(address(target))));
+        _authorize(_config(_limit(address(0), 1 ether, 0), _anySelectorScopes(address(target))));
         SessionPolicy.Config memory cfg = abi.decode(lastBinding.policyConfig, (SessionPolicy.Config));
-
-        assertTrue(manager.isInstalled(address(policy), commitment));
 
         (bool allowed, bool anySelector) = policy.isTargetAllowed(cfg, address(target));
         assertTrue(allowed);
@@ -542,14 +628,15 @@ contract SessionPolicyTest is AccountConfigurationTest {
         scopes[0] = _anySelectorScope(t);
     }
 
-    /// @dev Like {_install} but also returns the binding's commitment, for asserting on the commitment-keyed views.
-    function _installWithCommitment(bytes memory policyConfig) internal returns (bytes32 actorId, bytes32 commitment) {
+    /// @dev Like {_authorize} but also returns the binding's commitment, for asserting on the commitment-keyed views.
+    function _authorizeWithCommitment(bytes memory policyConfig)
+        internal
+        returns (bytes32 actorId, bytes32 commitment)
+    {
         PolicyManager.PolicyBinding memory binding;
         (actorId, binding) = _prepareBinding(policyConfig);
         lastBinding = binding;
         commitment = manager.commitmentOf(binding);
-        vm.prank(account);
-        manager.install(actorId, binding);
     }
 
     function _mockActingActor(bytes32 actorId) internal {
@@ -630,19 +717,20 @@ contract SessionPolicyTest is AccountConfigurationTest {
         return accountConfiguration.createAccount(bytes32(0), bytecode, actors);
     }
 
-    /// @dev Authorize a fresh session-key actor gated to the manager committing to `policyConfig`, then install
-    ///      the binding at the manager. Returns the actorId. Stashes the binding for subsequent {_execute} calls.
-    function _install(bytes memory policyConfig) internal returns (bytes32 actorId) {
+    /// @dev Authorize a fresh session-key actor gated to the manager committing to `policyConfig`. Returns the
+    ///      actorId. Stashes the binding for subsequent {_execute} calls.
+    function _authorize(bytes memory policyConfig) internal returns (bytes32 actorId) {
         PolicyManager.PolicyBinding memory binding;
         (actorId, binding) = _prepareBinding(policyConfig);
         lastBinding = binding;
-        vm.prank(account);
-        manager.install(actorId, binding);
     }
 
-    /// @dev Authorize a fresh session-key actor committing to `policyConfig` and return the (actorId, binding) for an
-    ///      install call. Stops short of {PolicyManager.install} so a test can `vm.expectRevert` immediately before it
-    ///      (e.g. for the onInstall config-validation guards).
+    /// @dev Alias kept for readability at call sites that previously "installed" a session.
+    function _install(bytes memory policyConfig) internal returns (bytes32 actorId) {
+        return _authorize(policyConfig);
+    }
+
+    /// @dev Authorize a fresh session-key actor committing to `policyConfig` and return the (actorId, binding).
     function _prepareBinding(bytes memory policyConfig)
         internal
         returns (bytes32 actorId, PolicyManager.PolicyBinding memory binding)

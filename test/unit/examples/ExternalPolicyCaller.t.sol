@@ -152,12 +152,11 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
     // ── Cross-account best-effort batch ──
 
     function test_executeForMany_bestEffort_isolatesFailures() public {
-        // Three subscribers; the middle one authorized the provider but never installed the binding, so its pull
-        // reverts (PolicyNotInstalled) and must be skipped without blocking the other two.
+        // Three subscribers; the middle one opts in then revokes, so its pull reverts (NoActivePolicy) and must be
+        // skipped without blocking the other two.
         address a1 = _optIn(bytes32(uint256(1)), 100e6, MONTH);
-        address a2 = _createAccount(bytes32(uint256(2)));
-        (, bytes32 c2) = _binding(a2, 2, 100e6, MONTH);
-        _authorizeProvider(a2, address(manager), c2); // authorized but NOT installed
+        address a2 = _optIn(bytes32(uint256(2)), 100e6, MONTH);
+        _revokeProvider(a2);
         address a3 = _optIn(bytes32(uint256(3)), 100e6, MONTH);
 
         (PolicyManager.PolicyBinding memory b1,) = _binding(a1, 1, 100e6, MONTH);
@@ -187,7 +186,7 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
     }
 
     function test_executeFor_revertsWhenCommitmentBelongsToAnotherAccount() public {
-        // Victim opts the provider in; commitment is installed with record.account == victim.
+        // Victim opts the provider in; commitment is authorized with binding.account == victim.
         address victim = _optIn(bytes32(uint256(1)), 100e6, MONTH);
         (, bytes32 victimCommitment) = _binding(victim, 1, 100e6, MONTH);
 
@@ -267,8 +266,8 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
         commitment = manager.commitmentOf(binding);
     }
 
-    /// @dev Full opt-in for one subscriber: create the account, mint it tokens, authorize the provider as an
-    ///      external-policy actor gated to this manager, and install the binding.
+    /// @dev Full opt-in for one subscriber: create the account, mint it tokens, and authorize the provider as an
+    ///      external-policy actor gated to this manager with the binding commitment.
     function _optIn(bytes32 accountSalt, uint256 limit, uint40 period) internal returns (address account) {
         return _optInWithExpiry(accountSalt, limit, period, 0);
     }
@@ -282,8 +281,6 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
             _binding(account, uint256(accountSalt), limit, period);
         lastBinding = binding;
         _authorizeProvider(account, address(manager), commitment, expiry);
-        vm.prank(account);
-        manager.install(bytes32(bytes20(provider)), binding);
     }
 
     function _createAccount(bytes32 salt) internal returns (address account) {

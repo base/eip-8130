@@ -7,17 +7,18 @@ import {PolicyManager} from "./PolicyManager.sol";
 ///
 /// @notice Minimal base hook interface for policies coordinated by {PolicyManager}.
 ///
-/// @dev A policy turns an account-authorized *commitment* (bound to `policyConfig` at install) plus a per-use
-///      *action* (`executionData`) into an account call plan. The plan is ABI-encoded calldata that the manager
-///      forwards to the account (e.g. `executeBatch`).
+/// @dev A policy turns an account-authorized *commitment* (bound to `policyConfig` via the signed actor change)
+///      plus a per-use *action* (`executionData`) into an account call plan. The plan is ABI-encoded calldata that
+///      the manager forwards to the account (e.g. `executeBatch`).
 ///
 ///      Config delivery: the manager always forwards `policyConfig` to {onExecute} (it MAY be empty). Callers
 ///      supply the full {PolicyManager.PolicyBinding} at execute; the manager recomputes the commitment and
 ///      compares it to the live signed commitment in AccountConfiguration. That single check authenticates
-///      config, validity window, and owning account — so policies MUST NOT store a config hash. Install is
-///      validate-only: because installs are one-shot per commitment and the commitment immutably binds
-///      `keccak256(policyConfig)`, install-time validation covers every future execution. Mutable execution
-///      state (e.g. spend counters) is the exception that belongs in storage.
+///      config, validity window, and owning account — so policies MUST NOT store a config hash. There is no
+///      separate install step; config validation belongs in {onExecute} (or a helper it calls).
+///
+///      Mutable execution state (e.g. spend counters) is the exception that belongs in storage, keyed by
+///      commitment.
 ///
 ///      This is the example/reference shape for an EIP-8130 actor policy (`scope & SCOPE_POLICY != 0`): the
 ///      manager is the single call target a restricted actor may reach, and policies express *what* that actor
@@ -39,26 +40,13 @@ abstract contract Policy {
         POLICY_MANAGER = PolicyManager(policyManager);
     }
 
-    /// @notice Hook invoked when the account installs a binding for this policy.
-    ///
-    /// @dev MUST revert to refuse installation. Implementations validate `policyConfig` and MAY initialize
-    ///      mutable state keyed by `commitment`. Do not persist the config — the manager re-authenticates the
-    ///      binding preimage against the signed commitment at every execute.
-    ///
-    /// @param commitment   Deterministic identifier of the account-authorized binding (the policy commitment).
-    /// @param account      Account that authorized the binding.
-    /// @param policyConfig Committed, policy-defined configuration bytes.
-    function onInstall(bytes32 commitment, address account, bytes calldata policyConfig) external onlyPolicyManager {
-        _onInstall(commitment, account, policyConfig);
-    }
-
     /// @notice Authorize the execution and build the account call and optional post-call.
     ///
     /// @dev MUST revert to refuse execution. `policyConfig` is the binding preimage; the manager has already
     ///      verified it recomputes to the actor's signed commitment. If `accountCallData` is empty, the manager
     ///      treats the call as a no-op (no account call, no {onPostExecute}, no event).
     ///
-    /// @param commitment    Identifier of the installed binding.
+    /// @param commitment    Identifier of the authorized binding.
     /// @param account       Account the plan will execute against.
     /// @param policyConfig  Policy-defined config bytes (may be empty).
     /// @param executionData Per-use action parameters.
@@ -81,7 +69,7 @@ abstract contract Policy {
     /// @dev Called whenever {onExecute} returns non-empty `accountCallData`. `postCallData` may be empty;
     ///      implementations must handle that case. Default is a no-op.
     ///
-    /// @param commitment  Identifier of the installed binding.
+    /// @param commitment  Identifier of the authorized binding.
     /// @param account     Account associated with the binding.
     /// @param postCallData Policy-defined post-call payload returned by {onExecute}.
     function onPostExecute(bytes32 commitment, address account, bytes calldata postCallData)
@@ -91,10 +79,7 @@ abstract contract Policy {
         _onPostExecute(commitment, account, postCallData);
     }
 
-    /// @dev Policy-specific install logic. Revert to refuse. Validate; do not store config.
-    function _onInstall(bytes32 commitment, address account, bytes calldata policyConfig) internal virtual;
-
-    /// @dev Policy-specific execute logic. Revert to refuse.
+    /// @dev Policy-specific execute logic. Revert to refuse. Validate config here as needed.
     function _onExecute(
         bytes32 commitment,
         address account,

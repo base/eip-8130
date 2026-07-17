@@ -40,13 +40,20 @@ address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak2
 ///
 ///      Commitment binding: the account authorizes a {PolicyBinding}; its `keccak256` is the `commitment`. When the
 ///      account authorizes the session-key actor it stores `scope & SCOPE_POLICY != 0`, `policy_manager =
-///      address(this)`, and `policy_commitment = commitment` in Account Configuration. At {install} and every
-///      execute path the manager recomputes the commitment from the supplied binding and requires it to equal the
-///      live signed commitment — authenticating config, validity window, and owning account with zero config
-///      storage on the manager or the policy (strictly better than storing a per-binding config hash).
+///      address(this)`, and `policy_commitment = commitment` in Account Configuration. That signed actor change *is*
+///      the authorization — there is no separate install step and no manager-side install bit. At every execute path
+///      the manager recomputes the commitment from the supplied binding and requires it to equal the live signed
+///      commitment — authenticating config, validity window, and owning account with zero config storage on the
+///      manager or the policy.
 ///
-///      Scope: permissionless {install} (gated by the account's signed commitment, not the caller), account-acting
-///      {execute}, and external-caller {executeFor} / {executeForMany}.
+///      Shared {ReentrancyGuard}: beyond ordinary re-entrancy hygiene, a single status across {execute} /
+///      {executeFor} / {executeForMany} is load-bearing for cross-account identity. The tx-context `actorId` is
+///      global to the transaction; if the same session key is registered on two accounts (same derived actorId,
+///      both gated here), a policy-approved call from account A's plan could land on a target that reenters
+///      {execute} with that target's binding and would otherwise resolve identity. Do not "optimize" the
+///      entrypoints onto separate reentrancy guards.
+///
+///      Scope: account-acting {execute}, and external-caller {executeFor} / {executeForMany}.
 contract PolicyManager is ReentrancyGuard {
     using Address for address;
 
@@ -59,7 +66,7 @@ contract PolicyManager is ReentrancyGuard {
 
     /// @notice Policy binding authorized by the account. Its hash is the policy commitment.
     struct PolicyBinding {
-        /// @dev Account that authorizes installation and is the execution target.
+        /// @dev Account that authorizes the binding and is the execution target.
         address account;
         /// @dev Policy contract implementing the hook interface.
         address policy;
@@ -73,25 +80,13 @@ contract PolicyManager is ReentrancyGuard {
         uint256 salt;
     }
 
-    /// @dev Installed flag only. Account, validity window, and config are re-supplied via {PolicyBinding} and
-    ///      authenticated by recomputing the commitment against AccountConfiguration.
-    mapping(address policy => mapping(bytes32 commitment => bool installed)) internal _installed;
-
-    event PolicyInstalled(address indexed account, address indexed policy, bytes32 indexed commitment);
     event PolicyExecuted(address indexed account, address indexed policy, bytes32 indexed commitment, address caller);
     /// @dev Emitted by {executeForMany} when one account in a best-effort batch is skipped because its per-account
     ///      enforcement reverted (e.g. revoked/expired binding, over budget, or a failing account call).
     event ExecutionSkipped(address indexed account, address indexed policy, bytes32 indexed actorId);
 
-    /// @notice No installed binding exists for the given `(policy, commitment)`.
-    error PolicyNotInstalled(bytes32 commitment);
-    /// @notice A binding for this `(policy, commitment)` is already installed; installs are one-shot per commitment.
-    error PolicyAlreadyInstalled(bytes32 commitment);
     /// @notice The current time is outside the binding's `[validAfter, validUntil)` execution window.
     error OutsideValidityWindow(uint40 validAfter, uint40 validUntil, uint256 timestamp);
-    /// @notice The account has not signed this exact commitment for this manager on the given actor (the resolved
-    ///         policy manager or commitment does not match the binding).
-    error CommitmentNotAuthorized(bytes32 actorId, address target, bytes32 commitment);
     /// @notice The supplied binding does not recompute to the actor's live signed commitment.
     error BindingCommitmentMismatch(bytes32 expected, bytes32 actual);
     /// @notice {execute} requires `binding.account == msg.sender` (the protocol-dispatched account).
@@ -116,54 +111,22 @@ contract PolicyManager is ReentrancyGuard {
         return _commitment(binding);
     }
 
-    /// @notice True if `(policy, commitment)` has been installed.
-    function isInstalled(address policy, bytes32 commitment) external view returns (bool) {
-        return _installed[policy][commitment];
-    }
-
-    /// @notice Installs a policy binding the account has authorized for a specific actor.
-    ///
-    /// @dev Permissionless: callable by anyone, not just `binding.account`. The account's *authorization* is the
-    ///      gate, not the caller — the manager re-derives the binding's `commitment` and requires the account to have
-    ///      signed exactly it for this manager when configuring `actorId`. The committed `policyConfig` is handed to
-    ///      the policy's install hook for validation only; the preimage is re-supplied at execute via the full
-    ///      binding and authenticated by recomputing the commitment.
-    ///
-    ///      Install is one-shot per commitment: a second install of the same `(policy, commitment)` reverts
-    ///      {PolicyAlreadyInstalled}, so it can never reset an installed binding's accounting (e.g. spend counters).
-    ///
-    /// @param actorId The actor the account configured with this policy (scope & SCOPE_POLICY != 0).
-    /// @param binding The account-authorized binding.
-    ///
-    /// @return commitment The binding's commitment.
-    function install(bytes32 actorId, PolicyBinding calldata binding)
-        external
-        nonReentrant
-        returns (bytes32 commitment)
-    {
-        commitment = _commitment(binding);
-
-        address target = ACCOUNT_CONFIGURATION.getPolicyManager(binding.account, actorId);
-        bytes32 signedCommitment = ACCOUNT_CONFIGURATION.getPolicyCommitment(binding.account, actorId);
-        if (target != address(this) || signedCommitment != commitment) {
-            revert CommitmentNotAuthorized(actorId, target, signedCommitment);
-        }
-
-        if (_installed[binding.policy][commitment]) revert PolicyAlreadyInstalled(commitment);
-        _installed[binding.policy][commitment] = true;
-
-        Policy(binding.policy).onInstall(commitment, binding.account, binding.policyConfig);
-        emit PolicyInstalled(binding.account, binding.policy, commitment);
-    }
-
-    /// @notice Exercises an installed policy and forwards the resulting call plan to the account.
+    /// @notice Exercises a policy authorized by the account's signed commitment and forwards the resulting call plan
+    ///         to the account.
     ///
     /// @dev Identity comes from the protocol, not the caller. Reaching this function as a dispatched call proves
     ///      this manager is the acting key's configured gate. The manager reads the acting `actorId` from the
     ///      transaction-context precompile and takes the account from `msg.sender`. The caller supplies the full
     ///      {PolicyBinding}; recomputing its commitment and comparing to the live signed commitment authenticates
-    ///      config, validity window, and owning account in one check. Actor expiry is not re-checked here: protocol
-    ///      authentication already rejects expired actors before dispatch.
+    ///      config, validity window, and owning account in one check.
+    ///
+    ///      Actor expiry is not re-checked here: protocol authentication already rejects expired actors before
+    ///      dispatch. `AccountConfiguration._authenticate` reverts `ActorExpired`, so a protocol-dispatched call's
+    ///      sender actor was expiry-checked at authentication in the same transaction (same `block.timestamp`, so
+    ///      no gap), and any non-dispatched or off-8130 call yields `actorId == 0` → {NoActivePolicy}. This trades
+    ///      defense-in-depth for one SLOAD; soundness rests on the spec-level invariant that every conforming
+    ///      implementation enforces expiry at authentication. {executeFor} retains a local expiry check because it
+    ///      has no protocol auth.
     ///
     /// @param binding       Full account-authorized binding (config + window + salt).
     /// @param executionData Per-use action parameters interpreted by the policy.
@@ -177,8 +140,7 @@ contract PolicyManager is ReentrancyGuard {
         if (signed == bytes32(0)) revert NoActivePolicy(actorId);
         if (signed != commitment) revert BindingCommitmentMismatch(signed, commitment);
 
-        // No manager-match / expiry checks here: the 8130 gate already guarantees this manager is the acting key's
-        // target and that the actor is unexpired. The external entrypoints below re-add both.
+        // No manager-match / expiry checks here — see @dev above. The external entrypoints below re-add both.
         _enforce(binding, commitment, executionData, account);
     }
 
@@ -262,13 +224,11 @@ contract PolicyManager is ReentrancyGuard {
         if (config.expiry != 0 && block.timestamp > config.expiry) revert ActorExpired(actorId);
     }
 
-    /// @dev Common enforcement: require installed, enforce the binding's validity window (authenticated by the
-    ///      commitment check at the callsite), run the policy hooks, forward the account call, then post-execute.
+    /// @dev Common enforcement: enforce the binding's validity window (authenticated by the commitment check at the
+    ///      callsite), run the policy hooks, forward the account call, then post-execute.
     function _enforce(PolicyBinding calldata binding, bytes32 commitment, bytes calldata executionData, address caller)
         internal
     {
-        if (!_installed[binding.policy][commitment]) revert PolicyNotInstalled(commitment);
-
         if (
             (binding.validAfter != 0 && block.timestamp < binding.validAfter)
                 || (binding.validUntil != 0 && block.timestamp >= binding.validUntil)

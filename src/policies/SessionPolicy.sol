@@ -16,18 +16,20 @@ import {RecurringAllowance} from "./RecurringAllowance.sol";
 /// @dev A single policy (rather than several composed) because {PolicyManager} validates one (policy, commitment)
 ///      per call; bundling every dimension here lets them all gate the same call atomically.
 ///
-///      Config model: install is validate-only (no config storage). Every {onExecute} receives the config
-///      preimage via calldata; {PolicyManager} authenticates it by recomputing the binding commitment against
-///      the actor's signed commitment. This policy then enforces by linear scan. The only storage is {_usage}
-///      (mutable spend accounting). Config must not live onchain when it can be passed as calldata.
+///      Config model: no config storage. Every {onExecute} receives the config preimage via calldata;
+///      {PolicyManager} authenticates it by recomputing the binding commitment against AccountConfiguration.
+///      Config shape checks (ZeroLimit, LimitTooLarge, SelfTargetNotAllowed, AnySelectorOnLimitedToken,
+///      duplicates, RecipientRuleUnsupportedSelector) run at execute via {_validateConfig}.
+///      {_findTokenLimit} still defensively re-checks LimitTooLarge before the uint160 cast. The only storage is
+///      {_usage} (mutable spend accounting).
 ///
 ///      Selector awareness (the one inherent limitation): recipient allowlists and spend-limit accounting require
 ///      decoding the call's arguments, which is only possible for selectors whose ABI layout is known. This policy
 ///      hardcodes the standard ERC-20 set — `transfer`, `transferFrom`, `approve`. Consequences:
-///        - A recipient allowlist may only be attached to one of those selectors (enforced at install).
+///        - A recipient allowlist may only be attached to one of those selectors (enforced at execute).
 ///        - Spend limits are consumed only for those selectors when called on a limited token (`approve` included,
 ///          so an allowance grant cannot exceed the remaining budget). `anySelector` on a limited token is rejected
-///          at install; pin an explicit selector allowlist instead.
+///          at execute; pin an explicit selector allowlist instead.
 ///        - WARNING: any *other* selector on a limited token is gated by the allowlist but NOT debited from the
 ///          cap. Value-moving methods this policy cannot decode — e.g. ERC-20 `increaseAllowance`/`decreaseAllowance`,
 ///          ERC-721 `safeTransferFrom`, any ERC-1155 transfer — therefore bypass the spend cap entirely if listed.
@@ -115,7 +117,7 @@ contract SessionPolicy is Policy {
     error MissingSelector();
     /// @notice A configured spend `limit` exceeds uint160 and cannot be stored in the normalized allowance field.
     error LimitTooLarge(address token, uint256 limit);
-    /// @notice A configured spend limit was zero, which would be a no-op cap; reject at install to fail closed.
+    /// @notice A configured spend limit was zero, which would be a no-op cap; reject to fail closed.
     error ZeroLimit(address token);
     /// @notice A recipient allowlist was attached to a selector whose recipient argument this policy cannot decode
     ///         (only the standard ERC-20 selectors are supported).
@@ -128,7 +130,7 @@ contract SessionPolicy is Policy {
     error AnySelectorOnLimitedToken(address token);
     /// @notice A call scope targeted the account itself. The account is always an authorized caller of its own
     ///         `executeBatch`, so allowing a session key to call it would let the key re-enter with an arbitrary
-    ///         batch that bypasses every policy check. Reject at install to fail closed.
+    ///         batch that bypasses every policy check. Reject to fail closed.
     error SelfTargetNotAllowed();
     /// @notice A `transferFrom` moved funds from an address other than the account. A session key may only spend the
     ///         account's own resources, not third-party allowances the account happens to hold.
@@ -218,8 +220,9 @@ contract SessionPolicy is Policy {
 
     /// @notice Returns the current-period spend usage for an explicit token limit under a binding.
     ///
-    /// @dev `limit.period == 0` is normalized to {ONE_TIME_PERIOD} (same as install) so the accounting library
-    ///      never sees a zero period.
+    /// @dev `limit` is unauthenticated calldata — results are only meaningful when `limit` is the committed
+    ///      {TokenLimit} from the binding's config (same token/limit/period the account signed).
+    ///      `limit.period == 0` is normalized to {ONE_TIME_PERIOD} so the accounting library never sees a zero period.
     function getCurrentSpend(bytes32 commitment, TokenLimit calldata limit)
         external
         view
@@ -228,6 +231,7 @@ contract SessionPolicy is Policy {
         if (limit.limit == 0) {
             return RecurringAllowance.PeriodUsage({start: 0, end: 0, spend: 0});
         }
+        if (limit.limit > type(uint160).max) revert LimitTooLarge(limit.token, limit.limit);
         uint40 period = limit.period == 0 ? ONE_TIME_PERIOD : limit.period;
         return _usage.getCurrentPeriod(
             _spendKey(commitment, limit.token),
@@ -237,53 +241,9 @@ contract SessionPolicy is Policy {
 
     // ── Hooks ──
 
-    /// @dev Validates the committed {Config}. Rejects zero/oversized limits, self-targets, anySelector on limited
-    ///      tokens, unsupported recipient rules, and duplicates (token / target / selector). No config storage.
-    function _onInstall(bytes32, address account, bytes calldata policyConfig) internal override {
-        Config memory config = abi.decode(policyConfig, (Config));
-
-        for (uint256 i; i < config.tokenLimits.length; i++) {
-            TokenLimit memory tl = config.tokenLimits[i];
-            if (tl.limit == 0) revert ZeroLimit(tl.token);
-            if (tl.limit > type(uint160).max) revert LimitTooLarge(tl.token, tl.limit);
-            for (uint256 d; d < i; d++) {
-                if (config.tokenLimits[d].token == tl.token) revert DuplicateTokenLimit(tl.token);
-            }
-        }
-
-        for (uint256 i; i < config.callScopes.length; i++) {
-            CallScope memory scope = config.callScopes[i];
-            for (uint256 d; d < i; d++) {
-                if (config.callScopes[d].target == scope.target) revert DuplicateCallScope(scope.target);
-            }
-            // Fail closed: the account is always authorized to call its own executeBatch, so a session key allowed to
-            // target the account could re-enter with an arbitrary, unchecked batch and escape every policy dimension.
-            if (scope.target == account) revert SelfTargetNotAllowed();
-            bool anySelector = scope.selectorRules.length == 0;
-            // Fail closed: a TokenLimit on this target only tracks transfer/transferFrom/approve, so anySelector
-            // would let other methods move value untracked. Require an explicit selector allowlist instead.
-            if (anySelector && _hasTokenLimit(config, scope.target)) {
-                revert AnySelectorOnLimitedToken(scope.target);
-            }
-
-            for (uint256 j; j < scope.selectorRules.length; j++) {
-                SelectorRule memory rule = scope.selectorRules[j];
-                for (uint256 d; d < j; d++) {
-                    if (scope.selectorRules[d].selector == rule.selector) {
-                        revert DuplicateSelectorRule(scope.target, rule.selector);
-                    }
-                }
-                // A recipient allowlist is only enforceable for selectors whose recipient argument we can decode.
-                if (rule.recipients.length > 0 && !_isErc20Selector(rule.selector)) {
-                    revert RecipientRuleUnsupportedSelector(rule.selector);
-                }
-            }
-        }
-    }
-
-    /// @dev Enforces every configured dimension against a single decoded {Action} by linear scan, then returns the
-    ///      account call plan (and empty postCallData). The manager has already authenticated `policyConfig` via
-    ///      the binding commitment.
+    /// @dev Validates config, enforces every configured dimension against a single decoded {Action} by linear scan,
+    ///      then returns the account call plan (and empty postCallData). The manager has already authenticated
+    ///      `policyConfig` via the binding commitment.
     function _onExecute(
         bytes32 commitment,
         address account,
@@ -292,6 +252,7 @@ contract SessionPolicy is Policy {
         address
     ) internal override returns (bytes memory accountCallData, bytes memory postCallData) {
         Config memory config = abi.decode(policyConfig, (Config));
+        _validateConfig(account, config);
         Action memory action = abi.decode(executionData, (Action));
 
         // 1. Target allowlist + resolve scope.
@@ -347,6 +308,48 @@ contract SessionPolicy is Policy {
 
     // ── Internal helpers ──
 
+    /// @dev Validates the committed {Config}. Rejects zero/oversized limits, self-targets, anySelector on limited
+    ///      tokens, unsupported recipient rules, and duplicates (token / target / selector).
+    function _validateConfig(address account, Config memory config) internal pure {
+        for (uint256 i; i < config.tokenLimits.length; i++) {
+            TokenLimit memory tl = config.tokenLimits[i];
+            if (tl.limit == 0) revert ZeroLimit(tl.token);
+            if (tl.limit > type(uint160).max) revert LimitTooLarge(tl.token, tl.limit);
+            for (uint256 d; d < i; d++) {
+                if (config.tokenLimits[d].token == tl.token) revert DuplicateTokenLimit(tl.token);
+            }
+        }
+
+        for (uint256 i; i < config.callScopes.length; i++) {
+            CallScope memory scope = config.callScopes[i];
+            for (uint256 d; d < i; d++) {
+                if (config.callScopes[d].target == scope.target) revert DuplicateCallScope(scope.target);
+            }
+            // Fail closed: the account is always authorized to call its own executeBatch, so a session key allowed to
+            // target the account could re-enter with an arbitrary, unchecked batch and escape every policy dimension.
+            if (scope.target == account) revert SelfTargetNotAllowed();
+            bool anySelector = scope.selectorRules.length == 0;
+            // Fail closed: a TokenLimit on this target only tracks transfer/transferFrom/approve, so anySelector
+            // would let other methods move value untracked. Require an explicit selector allowlist instead.
+            if (anySelector && _hasTokenLimit(config, scope.target)) {
+                revert AnySelectorOnLimitedToken(scope.target);
+            }
+
+            for (uint256 j; j < scope.selectorRules.length; j++) {
+                SelectorRule memory rule = scope.selectorRules[j];
+                for (uint256 d; d < j; d++) {
+                    if (scope.selectorRules[d].selector == rule.selector) {
+                        revert DuplicateSelectorRule(scope.target, rule.selector);
+                    }
+                }
+                // A recipient allowlist is only enforceable for selectors whose recipient argument we can decode.
+                if (rule.recipients.length > 0 && !_isErc20Selector(rule.selector)) {
+                    revert RecipientRuleUnsupportedSelector(rule.selector);
+                }
+            }
+        }
+    }
+
     /// @dev Consume `amount` against a token's cap. Skips zero amounts (the library rejects zero-value spends).
     function _consume(bytes32 commitment, address token, uint160 allowance, uint40 period, uint256 amount) internal {
         if (amount == 0) return;
@@ -377,6 +380,9 @@ contract SessionPolicy is Policy {
         for (uint256 i; i < config.tokenLimits.length; i++) {
             TokenLimit memory tl = config.tokenLimits[i];
             if (tl.token == token) {
+                // Defensive: {_validateConfig} already rejects LimitTooLarge, but never truncate a >uint160 limit
+                // into a smaller/arbitrary allowance if that invariant is ever bypassed.
+                if (tl.limit > type(uint160).max) revert LimitTooLarge(tl.token, tl.limit);
                 return (true, uint160(tl.limit), tl.period == 0 ? ONE_TIME_PERIOD : tl.period);
             }
         }

@@ -17,16 +17,17 @@ import {SessionMockERC20, SessionMockTarget} from "./SessionPolicy.t.sol";
 ///
 /// @dev Numbers are logged, not asserted, so this file never fails on chain-parameter drift; run with
 ///      `forge test --mt test_gas -vv` to print the report. Each measurement wraps only the `manager.execute`
-///      call, so it captures the full production per-call path: manager dispatch (commitment + expiry + record
-///      reads), the policy hook, and the forwarded account `executeBatch` (including the ERC-20/native transfer).
+///      call, so it captures the full production per-call path: manager dispatch (commitment reads), the policy
+///      hook (including config validation), and the forwarded account `executeBatch` (including the ERC-20/native
+///      transfer).
 ///
 ///      Caveats when reading these:
 ///        - The EIP-8130 transaction-context precompile is `vm.mockCall`-ed, so `_actingActorId`'s STATICCALL is
 ///          approximated by Foundry's mock, not the real precompile cost.
 ///        - "cold" cools (via `vm.cool`) every address the execute path touches before measuring, mirroring
-///          production where install ran in an earlier transaction so all contracts/slots are cold at execute
-///          time. "warm" is an immediate repeat call, isolating the marginal recompute cost. Production calls are
-///          effectively always cold, so the cold number is the representative one.
+///          production where authorization ran in an earlier transaction so all contracts/slots are cold at
+///          execute time. "warm" is an immediate repeat call, isolating the marginal recompute cost. Production
+///          calls are effectively always cold, so the cold number is the representative one.
 ///        - The per-flow `test_gas_execute_*` tests are authoritative: each runs in its own transaction. The
 ///          `test_gas_summary` table is an at-a-glance overview and reads a few k low, because `vm.cool` resets
 ///          access-list warmth but not EIP-2200 original-value (dirty-slot) pricing, which is fixed per tx.
@@ -61,18 +62,6 @@ contract SessionPolicyGasTest is AccountConfigurationTest {
         account = _createAccountWithRootAndManager();
         token.mint(account, 1_000_000e18);
         vm.deal(account, 100 ether);
-    }
-
-    // ── Install ──
-
-    function test_gas_install_limitAndSelectorScope() public {
-        (bytes32 actorId, PolicyManager.PolicyBinding memory binding) =
-            _prepareBinding(_config(_limit(address(token), 500e18, WEEK), _erc20Scope(address(token), _noRecipients())));
-
-        vm.prank(account);
-        uint256 g = gasleft();
-        manager.install(actorId, binding);
-        emit log_named_uint("install: 1 spend limit + 1 selector scope", g - gasleft());
     }
 
     // ── Execute: gating dimensions in isolation (no spend accounting) ──
@@ -221,7 +210,7 @@ contract SessionPolicyGasTest is AccountConfigurationTest {
 
         console.log("  ----------------------------------------------------------------");
         console.log("");
-        console.log("  Cold = execute with all touched addresses cooled (~production: install in a prior tx)");
+        console.log("  Cold = execute with all touched addresses cooled (~production: authorize in a prior tx)");
         console.log("  Warm = immediate repeat call in the same tx (marginal recompute cost)");
         console.log("  Path = manager dispatch + policy hook + account executeBatch + transfer");
         console.log("  Note: overview only. The per-flow test_gas_execute_* tests each run in their own tx and are");
@@ -237,7 +226,7 @@ contract SessionPolicyGasTest is AccountConfigurationTest {
     }
 
     /// @dev Print one summary row: `label`, cold (all touched addresses cooled first, mirroring a production
-    ///      execute in a separate tx from install) and warm (immediate repeat) `execute` cost.
+    ///      execute in a separate tx from authorization) and warm (immediate repeat) `execute` cost.
     function _row(string memory label, bytes32 actorId, bytes memory ed) internal {
         uint256 cold = _measureCold(actorId, ed);
         uint256 warm = _measure(actorId, ed);
@@ -271,7 +260,7 @@ contract SessionPolicyGasTest is AccountConfigurationTest {
     }
 
     /// @dev Production-representative cold measurement: cool every address the execute path touches so their first
-    ///      access pays the EIP-2929 cold cost, as it would when execute runs in a separate tx from install.
+    ///      access pays the EIP-2929 cold cost, as it would when execute runs in a separate tx from authorization.
     function _measureCold(bytes32 actorId, bytes memory executionData) internal returns (uint256) {
         _coolAll(executionData);
         return _measure(actorId, executionData);
@@ -363,8 +352,6 @@ contract SessionPolicyGasTest is AccountConfigurationTest {
         PolicyManager.PolicyBinding memory binding;
         (actorId, binding) = _prepareBinding(policyConfig);
         lastBinding = binding;
-        vm.prank(account);
-        manager.install(actorId, binding);
     }
 
     function _prepareBinding(bytes memory policyConfig)
