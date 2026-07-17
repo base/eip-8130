@@ -286,7 +286,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         assertEq(cfg.authenticator, address(k1Authenticator));
         assertEq(cfg.scope, scope);
 
-        (uint8 outScope,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (, uint8 outScope,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(outScope, scope);
     }
 
@@ -378,7 +378,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         _authorizeActor(eoa, newPk, selfActorId, accountConfiguration.K1_AUTHENTICATOR());
         assertTrue(accountConfiguration.isActor(eoa, selfActorId));
 
-        (uint8 scope,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (, uint8 scope,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(scope, 0);
     }
 
@@ -395,7 +395,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         // Phase 0: the default EOA is live and authenticates with its own k1 signature.
         assertTrue(accountConfiguration.isActor(eoa, selfActorId));
-        (uint8 scope0,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (, uint8 scope0,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(scope0, 0);
 
         // Phase 1: in one batch signed by the EOA, add the device key as a full owner and revoke the default EOA.
@@ -408,7 +408,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         assertTrue(accountConfiguration.isActor(eoa, deviceActorId));
         vm.expectRevert();
         accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
-        (uint8 scope1,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(devicePk, hash));
+        (, uint8 scope1,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(devicePk, hash));
         assertEq(scope1, 0);
 
         // Phase 2: the device key re-enables the K1 key by authorizing the self-actorId as a native k1 owner.
@@ -417,7 +417,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         _signApply(eoa, devicePk, reEnable);
 
         assertTrue(accountConfiguration.isActor(eoa, selfActorId));
-        (uint8 scope2,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (, uint8 scope2,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(scope2, 0);
     }
 
@@ -723,7 +723,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         assertEq(
             accountConfiguration.getActorConfig(eoa, selfId).authenticator, accountConfiguration.K1_AUTHENTICATOR()
         );
-        (uint8 scope,) = accountConfiguration.authenticateActor(eoa, h, _buildK1Auth(eoaPk, h));
+        (, uint8 scope,) = accountConfiguration.authenticateActor(eoa, h, _buildK1Auth(eoaPk, h));
         assertEq(scope, 0);
     }
 

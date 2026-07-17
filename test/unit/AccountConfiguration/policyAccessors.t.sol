@@ -8,7 +8,7 @@ import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 ///           - `getPolicy(account, actorId)`           — off-chain aggregate: (manager, commitment)
 ///           - `getPolicyCommitment(account, actorId)` — single-SLOAD hot-path read
 ///           - `getPolicyManager(account, actorId)`    — single-SLOAD hot-path read
-///           - policyTarget                            — surfaced as the second return of `authenticateActor`
+///           - policyTarget                            — surfaced as the third return of `authenticateActor`
 ///
 ///         All are `view`; there are no events to assert. Every test fuzzes its inputs (managers, commitments,
 ///         actorIds, keys, scopes). Gating is determined by the SCOPE_POLICY bit, never by "slot non-zero": a
@@ -487,10 +487,10 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    // policyTarget — surfaced as the second return of authenticateActor
+    // policyTarget — surfaced as the third return of authenticateActor
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     //
-    // authenticateActor returns the stored policy manager as its second value (address(0) when unwritten).
+    // authenticateActor returns the stored policy manager as its third value (address(0) when unwritten).
 
     /// @notice A gated non-self actor authenticates; policyTarget resolves to the stored manager, equal to the
     ///         granular getPolicyManager read.
@@ -515,7 +515,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
             account, rootPk, sessionActorId, _boundGatedScope(scopeSeed), manager, _boundNonZeroWord(commitmentSeed)
         );
 
-        (uint8 outScope, address policyTarget) =
+        (, uint8 outScope, address policyTarget) =
             accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
         assertTrue(outScope & accountConfiguration.SCOPE_POLICY() != 0);
         assertEq(policyTarget, manager);
@@ -536,7 +536,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
 
         _authorizeUngatedActor(account, rootPk, sessionActorId, address(k1Authenticator));
 
-        (, address policyTarget) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
+        (,, address policyTarget) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
         assertEq(policyTarget, address(0));
     }
 
@@ -557,7 +557,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
             eoa, eoaPk, _boundGatedScope(scopeSeed), manager, _boundNonZeroWord(commitmentSeed)
         );
 
-        (, address policyTarget) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (,, address policyTarget) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(policyTarget, manager);
         assertEq(policyTarget, accountConfiguration.getPolicyManager(eoa, selfActorId));
     }
@@ -568,7 +568,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
 
-        (uint8 outScope, address policyTarget) =
+        (, uint8 outScope, address policyTarget) =
             accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(outScope, uint8(0x00));
         assertEq(policyTarget, address(0));
