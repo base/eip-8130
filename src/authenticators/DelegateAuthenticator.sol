@@ -59,7 +59,9 @@ contract DelegateAuthenticator is IAuthenticator {
         // vouch requires admin to preserve non-escalation): an operational SENDER key can sign for its own account,
         // yet it must NOT be able to vouch as a delegate here. authenticateActor reverts on any auth failure and
         // otherwise returns the resolved scope, so we require scope == 0x00 explicitly.
-        try ACCOUNT_CONFIGURATION.authenticateActor(delegate, hash, nestedAuth) returns (uint8 nestedScope, address) {
+        try ACCOUNT_CONFIGURATION.authenticateActor(delegate, hash, nestedAuth) returns (
+            bytes32, uint8 nestedScope, address
+        ) {
             if (nestedScope != 0) revert InvalidNestedSignature();
         } catch {
             revert InvalidNestedSignature();

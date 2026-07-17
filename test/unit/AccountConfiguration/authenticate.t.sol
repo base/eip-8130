@@ -354,7 +354,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
 
-        (uint8 scope, address policyTarget) =
+        (, uint8 scope, address policyTarget) =
             accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
 
         assertEq(scope, uint8(0x00));
@@ -374,7 +374,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         vm.assume(vm.addr(actorPk) != account);
         _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(vm.addr(actorPk))), address(k1Authenticator), 0x00);
 
-        (uint8 scope,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        (, uint8 scope,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
         assertEq(scope, uint8(0x00));
     }
 
@@ -392,7 +392,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         _authorizeActorWithScope(account, ownerPk, _p256ActorId(pk), address(p256Authenticator), scope);
 
         bytes memory auth = abi.encodePacked(address(p256Authenticator), _p256SignData(pk, hash));
-        (uint8 outScope,) = accountConfiguration.authenticateActor(account, hash, auth);
+        (, uint8 outScope,) = accountConfiguration.authenticateActor(account, hash, auth);
         assertEq(outScope, scope);
     }
 
@@ -412,7 +412,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         _authorizeActorWithScope(account, ownerPk, _p256ActorId(pk), address(webAuthnAuthenticator), scope);
 
         bytes memory auth = abi.encodePacked(address(webAuthnAuthenticator), _webauthnSignData(pk, hash));
-        (uint8 outScope,) = accountConfiguration.authenticateActor(account, hash, auth);
+        (, uint8 outScope,) = accountConfiguration.authenticateActor(account, hash, auth);
         assertEq(outScope, scope);
     }
 
@@ -434,7 +434,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         vm.assume(vm.addr(actorPk) != account);
         _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(vm.addr(actorPk))), address(k1Authenticator), scope);
 
-        (uint8 outScope,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        (, uint8 outScope,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
         assertEq(outScope, scope);
     }
 
@@ -451,7 +451,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         vm.assume(vm.addr(actorPk) != account);
         _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(vm.addr(actorPk))), address(k1Authenticator), 0x00);
 
-        (uint8 scope,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        (, uint8 scope,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
         assertEq(scope, uint8(0x00));
     }
 
@@ -472,7 +472,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         _authorizeActorWithExpiry(account, ownerPk, bytes32(bytes20(vm.addr(sessionPk))), address(k1Authenticator), 0);
 
         vm.warp(block.timestamp + bound(warpSeed, 1, 3650 days));
-        (uint8 scope,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
+        (, uint8 scope,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
         assertEq(scope, uint8(0x00));
     }
 
@@ -496,7 +496,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         );
 
         vm.warp(expiry);
-        (uint8 scope,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
+        (, uint8 scope,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
         assertEq(scope, uint8(0x00));
     }
 
@@ -523,7 +523,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
         _authorizeGatedActor(account, ownerPk, sessionActorId, scope, manager, commitment);
 
-        (uint8 outScope, address outTarget) =
+        (, uint8 outScope, address outTarget) =
             accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
 
         assertEq(outScope, scope);
@@ -536,7 +536,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
 
-        (uint8 scope, address policyTarget) =
+        (, uint8 scope, address policyTarget) =
             accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
 
         assertEq(scope, uint8(0x00));
@@ -554,7 +554,7 @@ contract AuthenticateTest is AccountConfigurationTest {
 
         _authorizeActorWithScope(eoa, eoaPk, selfActorId, address(k1Authenticator), scope);
 
-        (uint8 outScope,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (, uint8 outScope,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(outScope, scope);
     }
 
@@ -570,7 +570,7 @@ contract AuthenticateTest is AccountConfigurationTest {
 
         _implicitAuthorizeActor(eoa, eoaPk, bytes32(bytes20(vm.addr(bobPk))), address(k1Authenticator));
 
-        (uint8 scope,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(bobPk, hash));
+        (, uint8 scope,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(bobPk, hash));
         assertEq(scope, uint8(0x00));
     }
 
@@ -587,10 +587,117 @@ contract AuthenticateTest is AccountConfigurationTest {
         vm.assume(accountA != accountB);
 
         bytes memory auth = _buildK1Auth(ownerPk, hash);
-        (uint8 scopeA,) = accountConfiguration.authenticateActor(accountA, hash, auth);
-        (uint8 scopeB,) = accountConfiguration.authenticateActor(accountB, hash, auth);
+        (, uint8 scopeA,) = accountConfiguration.authenticateActor(accountA, hash, auth);
+        (, uint8 scopeB,) = accountConfiguration.authenticateActor(accountB, hash, auth);
         assertEq(scopeA, uint8(0x00));
         assertEq(scopeB, uint8(0x00));
+    }
+
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+    // actorId — surfaced as the first return of authenticateActor
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+    //
+    // Off-8130 consumers (e.g. an ERC-4337 account) need the resolved actorId to drive getPolicyCommitment without
+    // re-invoking the authenticator — parity with the tx-context precompile on an 8130 chain.
+
+    /// @notice The inline-self k1 path returns actorId == bytes32(bytes20(account)).
+    function test_authenticateActor_success_returnsActorId_inlineSelf(uint256 eoaSeed, bytes32 hash) public view {
+        uint256 eoaPk = _boundK1Pk(eoaSeed);
+        address eoa = vm.addr(eoaPk);
+
+        (bytes32 actorId,,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        assertEq(actorId, bytes32(bytes20(eoa)));
+    }
+
+    /// @notice A non-self k1 actor returns actorId == bytes32(bytes20(signer)).
+    function test_authenticateActor_success_returnsActorId_nonSelfK1(uint256 ownerSeed, uint256 actorSeed, bytes32 hash)
+        public
+    {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 actorPk = _boundK1Pk(actorSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(actorPk));
+
+        (address account,) = _createK1Account(ownerPk);
+        vm.assume(vm.addr(actorPk) != account);
+        bytes32 expectedActorId = bytes32(bytes20(vm.addr(actorPk)));
+        _authorizeActorWithScope(account, ownerPk, expectedActorId, address(k1Authenticator), 0x00);
+
+        (bytes32 actorId,,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        assertEq(actorId, expectedActorId);
+    }
+
+    /// @notice A non-k1 (P-256) actor returns the actorId resolved by its authenticator.
+    function test_authenticateActor_success_returnsActorId_nonK1(uint256 ownerSeed, uint256 pkSeed, bytes32 hash)
+        public
+    {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 pk = _boundP256Pk(pkSeed);
+
+        (address account,) = _createK1Account(ownerPk);
+        bytes32 expectedActorId = _p256ActorId(pk);
+        _authorizeActorWithScope(account, ownerPk, expectedActorId, address(p256Authenticator), 0x00);
+
+        bytes memory auth = abi.encodePacked(address(p256Authenticator), _p256SignData(pk, hash));
+        (bytes32 actorId,,) = accountConfiguration.authenticateActor(account, hash, auth);
+        assertEq(actorId, expectedActorId);
+    }
+
+    /// @notice A non-k1 WebAuthn actor returns the actorId resolved by its authenticator (second non-k1 path).
+    function test_authenticateActor_success_returnsActorId_webAuthn(uint256 ownerSeed, uint256 pkSeed, bytes32 hash)
+        public
+    {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 pk = _boundP256Pk(pkSeed);
+
+        (address account,) = _createK1Account(ownerPk);
+        bytes32 expectedActorId = _p256ActorId(pk);
+        _authorizeActorWithScope(account, ownerPk, expectedActorId, address(webAuthnAuthenticator), 0x00);
+
+        bytes memory auth = abi.encodePacked(address(webAuthnAuthenticator), _webauthnSignData(pk, hash));
+        (bytes32 actorId,,) = accountConfiguration.authenticateActor(account, hash, auth);
+        assertEq(actorId, expectedActorId);
+    }
+
+    /// @notice actorId is returned unchanged alongside a non-zero (fuzzed) scope — identity is independent of scope.
+    function test_authenticateActor_success_returnsActorId_scopedActor(
+        uint256 ownerSeed,
+        uint256 actorSeed,
+        uint8 scopeSeed,
+        bytes32 hash
+    ) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 actorPk = _boundK1Pk(actorSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(actorPk));
+        uint8 scope = uint8(bound(uint256(scopeSeed), 1, 255)) & ~SCOPE_POLICY;
+
+        (address account,) = _createK1Account(ownerPk);
+        vm.assume(vm.addr(actorPk) != account);
+        bytes32 expectedActorId = bytes32(bytes20(vm.addr(actorPk)));
+        _authorizeActorWithScope(account, ownerPk, expectedActorId, address(k1Authenticator), scope);
+
+        (bytes32 actorId, uint8 outScope,) =
+            accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        assertEq(actorId, expectedActorId);
+        assertEq(outScope, scope);
+    }
+
+    /// @notice A scoped (downgraded) inline self still returns actorId == bytes32(bytes20(account)).
+    function test_authenticateActor_success_returnsActorId_scopedInlineSelf(
+        uint256 eoaSeed,
+        uint8 scopeSeed,
+        bytes32 hash
+    ) public {
+        uint256 eoaPk = _boundK1Pk(eoaSeed);
+        address eoa = vm.addr(eoaPk);
+        bytes32 selfActorId = bytes32(bytes20(eoa));
+        uint8 scope = uint8(bound(uint256(scopeSeed), 1, 255)) & ~SCOPE_POLICY;
+
+        _authorizeActorWithScope(eoa, eoaPk, selfActorId, address(k1Authenticator), scope);
+
+        (bytes32 actorId, uint8 outScope,) =
+            accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        assertEq(actorId, selfActorId);
+        assertEq(outScope, scope);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
