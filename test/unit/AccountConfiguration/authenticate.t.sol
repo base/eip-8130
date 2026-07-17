@@ -642,6 +642,64 @@ contract AuthenticateTest is AccountConfigurationTest {
         assertEq(actorId, expectedActorId);
     }
 
+    /// @notice A non-k1 WebAuthn actor returns the actorId resolved by its authenticator (second non-k1 path).
+    function test_authenticateActor_success_returnsActorId_webAuthn(uint256 ownerSeed, uint256 pkSeed, bytes32 hash)
+        public
+    {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 pk = _boundP256Pk(pkSeed);
+
+        (address account,) = _createK1Account(ownerPk);
+        bytes32 expectedActorId = _p256ActorId(pk);
+        _authorizeActorWithScope(account, ownerPk, expectedActorId, address(webAuthnAuthenticator), 0x00);
+
+        bytes memory auth = abi.encodePacked(address(webAuthnAuthenticator), _webauthnSignData(pk, hash));
+        (bytes32 actorId,,) = accountConfiguration.authenticateActor(account, hash, auth);
+        assertEq(actorId, expectedActorId);
+    }
+
+    /// @notice actorId is returned unchanged alongside a non-zero (fuzzed) scope — identity is independent of scope.
+    function test_authenticateActor_success_returnsActorId_scopedActor(
+        uint256 ownerSeed,
+        uint256 actorSeed,
+        uint8 scopeSeed,
+        bytes32 hash
+    ) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 actorPk = _boundK1Pk(actorSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(actorPk));
+        uint8 scope = uint8(bound(uint256(scopeSeed), 1, 255)) & ~SCOPE_POLICY;
+
+        (address account,) = _createK1Account(ownerPk);
+        vm.assume(vm.addr(actorPk) != account);
+        bytes32 expectedActorId = bytes32(bytes20(vm.addr(actorPk)));
+        _authorizeActorWithScope(account, ownerPk, expectedActorId, address(k1Authenticator), scope);
+
+        (bytes32 actorId, uint8 outScope,) =
+            accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        assertEq(actorId, expectedActorId);
+        assertEq(outScope, scope);
+    }
+
+    /// @notice A scoped (downgraded) inline self still returns actorId == bytes32(bytes20(account)).
+    function test_authenticateActor_success_returnsActorId_scopedInlineSelf(
+        uint256 eoaSeed,
+        uint8 scopeSeed,
+        bytes32 hash
+    ) public {
+        uint256 eoaPk = _boundK1Pk(eoaSeed);
+        address eoa = vm.addr(eoaPk);
+        bytes32 selfActorId = bytes32(bytes20(eoa));
+        uint8 scope = uint8(bound(uint256(scopeSeed), 1, 255)) & ~SCOPE_POLICY;
+
+        _authorizeActorWithScope(eoa, eoaPk, selfActorId, address(k1Authenticator), scope);
+
+        (bytes32 actorId, uint8 outScope,) =
+            accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        assertEq(actorId, selfActorId);
+        assertEq(outScope, scope);
+    }
+
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // verifySignature (operational authority)
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
