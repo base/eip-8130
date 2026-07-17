@@ -46,7 +46,7 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
     bytes4 internal constant TRANSFER = bytes4(keccak256("transfer(address,uint256)"));
     uint40 internal constant MONTH = 30 days;
 
-    bytes internal lastPolicyConfig;
+    PolicyManager.PolicyBinding internal lastBinding;
 
     function setUp() public override {
         super.setUp();
@@ -63,7 +63,7 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
         address account = _optIn(bytes32(uint256(1)), 100e6, MONTH);
 
         vm.prank(provider);
-        manager.executeFor(account, address(policy), lastPolicyConfig, _pull(30e6));
+        manager.executeFor(lastBinding, _pull(30e6));
 
         assertEq(token.balanceOf(recipient), 30e6);
         assertEq(token.balanceOf(account), 1_000e6 - 30e6);
@@ -76,7 +76,7 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
         address stranger = address(0xBAD);
         vm.expectRevert(abi.encodeWithSelector(PolicyManager.NoActivePolicy.selector, bytes32(bytes20(stranger))));
         vm.prank(stranger);
-        manager.executeFor(account, address(policy), lastPolicyConfig, _pull(1));
+        manager.executeFor(lastBinding, _pull(1));
     }
 
     function test_executeFor_revertsWhenManagerNotGated() public {
@@ -88,19 +88,19 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
 
         vm.expectRevert(abi.encodeWithSelector(PolicyManager.NoActivePolicy.selector, bytes32(bytes20(provider))));
         vm.prank(provider);
-        manager.executeFor(account, address(policy), lastPolicyConfig, _pull(1));
-        binding; // silence unused
+        manager.executeFor(binding, _pull(1));
     }
 
     function test_executeFor_revertsWhenCommitmentZero() public {
         // The account gated the provider to *this* manager but with a zero (empty) commitment. The manager-match
         // passes, but the live commitment read resolves to zero, so there is no binding to enforce.
         address account = _createAccount(bytes32(uint256(1)));
+        (PolicyManager.PolicyBinding memory binding,) = _binding(account, 1, 100e6, MONTH);
         _authorizeProvider(account, address(manager), bytes32(0));
 
         vm.expectRevert(abi.encodeWithSelector(PolicyManager.NoActivePolicy.selector, bytes32(bytes20(provider))));
         vm.prank(provider);
-        manager.executeFor(account, address(policy), lastPolicyConfig, _pull(1));
+        manager.executeFor(binding, _pull(1));
     }
 
     function test_executeFor_revertsAfterRevoke() public {
@@ -110,7 +110,7 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
 
         vm.expectRevert(abi.encodeWithSelector(PolicyManager.NoActivePolicy.selector, bytes32(bytes20(provider))));
         vm.prank(provider);
-        manager.executeFor(account, address(policy), lastPolicyConfig, _pull(1));
+        manager.executeFor(lastBinding, _pull(1));
     }
 
     function test_executeFor_revertsWhenActorExpired() public {
@@ -121,30 +121,30 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
         vm.warp(uint256(expiry) + 1);
         vm.expectRevert(abi.encodeWithSelector(PolicyManager.ActorExpired.selector, bytes32(bytes20(provider))));
         vm.prank(provider);
-        manager.executeFor(account, address(policy), lastPolicyConfig, _pull(1));
+        manager.executeFor(lastBinding, _pull(1));
     }
 
     function test_executeFor_revertsOverBudget() public {
         address account = _optIn(bytes32(uint256(1)), 50e6, MONTH);
 
         vm.prank(provider);
-        manager.executeFor(account, address(policy), lastPolicyConfig, _pull(50e6));
+        manager.executeFor(lastBinding, _pull(50e6));
 
         // A second pull this month would exceed the $50 cap.
         vm.expectRevert(abi.encodeWithSelector(RecurringAllowance.ExceededAllowance.selector, 51e6, 50e6));
         vm.prank(provider);
-        manager.executeFor(account, address(policy), lastPolicyConfig, _pull(1e6));
+        manager.executeFor(lastBinding, _pull(1e6));
     }
 
     function test_executeFor_refreshesNextMonth() public {
         address account = _optIn(bytes32(uint256(1)), 50e6, MONTH);
 
         vm.prank(provider);
-        manager.executeFor(account, address(policy), lastPolicyConfig, _pull(50e6));
+        manager.executeFor(lastBinding, _pull(50e6));
 
         vm.warp(block.timestamp + MONTH);
         vm.prank(provider);
-        manager.executeFor(account, address(policy), lastPolicyConfig, _pull(40e6));
+        manager.executeFor(lastBinding, _pull(40e6));
 
         assertEq(token.balanceOf(recipient), 90e6);
     }
@@ -160,10 +160,13 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
         _authorizeProvider(a2, address(manager), c2); // authorized but NOT installed
         address a3 = _optIn(bytes32(uint256(3)), 100e6, MONTH);
 
-        address[] memory accounts = new address[](3);
-        accounts[0] = a1;
-        accounts[1] = a2;
-        accounts[2] = a3;
+        (PolicyManager.PolicyBinding memory b1,) = _binding(a1, 1, 100e6, MONTH);
+        (PolicyManager.PolicyBinding memory b2,) = _binding(a2, 2, 100e6, MONTH);
+        (PolicyManager.PolicyBinding memory b3,) = _binding(a3, 3, 100e6, MONTH);
+        PolicyManager.PolicyBinding[] memory bindings = new PolicyManager.PolicyBinding[](3);
+        bindings[0] = b1;
+        bindings[1] = b2;
+        bindings[2] = b3;
         bytes[] memory data = new bytes[](3);
         data[0] = _pull(10e6);
         data[1] = _pull(10e6);
@@ -173,7 +176,7 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
         emit PolicyManager.ExecutionSkipped(a2, address(policy), bytes32(bytes20(provider)));
 
         vm.prank(provider);
-        bool[] memory results = manager.executeForMany(accounts, address(policy), lastPolicyConfig, data);
+        bool[] memory results = manager.executeForMany(bindings, data);
 
         assertTrue(results[0]);
         assertFalse(results[1]);
@@ -193,30 +196,38 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
         address attacker = _createAccount(bytes32(uint256(2)));
         _authorizeProvider(attacker, address(manager), victimCommitment);
 
-        // Driving the attacker account against the victim's commitment must be rejected — otherwise the attacker
-        // could exhaust the victim's shared, commitment-keyed spend counter.
-        vm.expectRevert(abi.encodeWithSelector(PolicyManager.CommitmentAccountMismatch.selector, victim, attacker));
+        // Driving via a binding that names the attacker cannot recompute to the victim's commitment (preimage
+        // includes account), so the manager rejects.
+        (PolicyManager.PolicyBinding memory attackerBinding,) = _binding(attacker, 2, 100e6, MONTH);
+        bytes32 actual = manager.commitmentOf(attackerBinding);
+        vm.expectRevert(
+            abi.encodeWithSelector(PolicyManager.BindingCommitmentMismatch.selector, victimCommitment, actual)
+        );
         vm.prank(provider);
-        manager.executeFor(attacker, address(policy), lastPolicyConfig, _pull(10e6));
+        manager.executeFor(attackerBinding, _pull(10e6));
 
         // Nothing moved: the attack reverted, so the victim's shared spend counter and balances are untouched.
         assertEq(token.balanceOf(recipient), 0);
-        assertEq(policy.getCurrentSpend(victimCommitment, lastPolicyConfig, address(token)).spend, 0);
+        SessionPolicy.TokenLimit memory victimLimit =
+            SessionPolicy.TokenLimit({token: address(token), limit: 100e6, period: MONTH});
+        assertEq(policy.getCurrentSpend(victimCommitment, victimLimit).spend, 0);
     }
 
     function test_executeForMany_revertsOnLengthMismatch() public {
-        address[] memory accounts = new address[](2);
+        PolicyManager.PolicyBinding[] memory bindings = new PolicyManager.PolicyBinding[](2);
         bytes[] memory data = new bytes[](1);
         vm.expectRevert(PolicyManager.LengthMismatch.selector);
         vm.prank(provider);
-        manager.executeForMany(accounts, address(policy), lastPolicyConfig, data);
+        manager.executeForMany(bindings, data);
     }
 
     function test_enforceExternalSelf_revertsForExternalCaller() public {
         // The self-call boundary used by the batch must reject any caller other than the manager itself.
+        PolicyManager.PolicyBinding memory binding;
+        binding.account = address(0x1);
         vm.expectRevert(PolicyManager.OnlySelf.selector);
         vm.prank(provider);
-        manager.enforceExternalSelf(address(0x1), bytes32(bytes20(provider)), address(policy), "", _pull(1), provider);
+        manager.enforceExternalSelf(binding, bytes32(bytes20(provider)), _pull(1), provider);
     }
 
     // ── Helpers ──
@@ -269,7 +280,7 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
         account = _createAccount(accountSalt);
         (PolicyManager.PolicyBinding memory binding, bytes32 commitment) =
             _binding(account, uint256(accountSalt), limit, period);
-        lastPolicyConfig = binding.policyConfig;
+        lastBinding = binding;
         _authorizeProvider(account, address(manager), commitment, expiry);
         vm.prank(account);
         manager.install(bytes32(bytes20(provider)), binding);

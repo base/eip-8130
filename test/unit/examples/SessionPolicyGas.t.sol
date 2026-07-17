@@ -47,7 +47,7 @@ contract SessionPolicyGasTest is AccountConfigurationTest {
     uint40 internal constant WEEK = 7 days;
 
     uint256 internal saltNonce;
-    bytes internal lastPolicyConfig;
+    PolicyManager.PolicyBinding internal lastBinding;
 
     function setUp() public override {
         super.setUp();
@@ -266,7 +266,7 @@ contract SessionPolicyGasTest is AccountConfigurationTest {
         _mockActingActor(actorId);
         vm.prank(account);
         uint256 g = gasleft();
-        manager.execute(address(policy), lastPolicyConfig, executionData);
+        manager.execute(lastBinding, executionData);
         used = g - gasleft();
     }
 
@@ -360,9 +360,9 @@ contract SessionPolicyGasTest is AccountConfigurationTest {
     }
 
     function _install(bytes memory policyConfig) internal returns (bytes32 actorId) {
-        lastPolicyConfig = policyConfig;
         PolicyManager.PolicyBinding memory binding;
         (actorId, binding) = _prepareBinding(policyConfig);
+        lastBinding = binding;
         vm.prank(account);
         manager.install(actorId, binding);
     }

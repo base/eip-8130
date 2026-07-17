@@ -16,11 +16,10 @@ import {RecurringAllowance} from "./RecurringAllowance.sol";
 /// @dev A single policy (rather than several composed) because {PolicyManager} validates one (policy, commitment)
 ///      per call; bundling every dimension here lets them all gate the same call atomically.
 ///
-///      Config model (Account Policies convention): install only validates the committed {Config}. Every
-///      {onExecute} re-supplies the full preimage via calldata; {PolicyManager} checks it against the actor's
-///      signed commitment (same check as install), then this policy enforces by scanning the decoded config.
-///      Mutable spend usage is the only storage. Prefer this over flattening config into mappings: config should
-///      not live onchain when it can be passed as calldata, regardless of size or reuse frequency.
+///      Config model: install is validate-only (no config storage). Every {onExecute} receives the config
+///      preimage via calldata; {PolicyManager} authenticates it by recomputing the binding commitment against
+///      the actor's signed commitment. This policy then enforces by linear scan. The only storage is {_usage}
+///      (mutable spend accounting). Config must not live onchain when it can be passed as calldata.
 ///
 ///      Selector awareness (the one inherent limitation): recipient allowlists and spend-limit accounting require
 ///      decoding the call's arguments, which is only possible for selectors whose ABI layout is known. This policy
@@ -90,7 +89,7 @@ contract SessionPolicy is Policy {
         bytes data;
     }
 
-    // ── Storage: mutable spend usage only (config is calldata + commitment-checked by the manager) ──
+    // ── Storage: mutable spend usage only ──
 
     /// @dev Recurring-allowance usage, keyed by keccak256(commitment, token).
     RecurringAllowance.State internal _usage;
@@ -101,8 +100,8 @@ contract SessionPolicy is Policy {
     bytes4 internal constant TRANSFER_FROM = IERC20.transferFrom.selector; // transferFrom(address,address,uint256)
     bytes4 internal constant APPROVE = IERC20.approve.selector; // approve(address,uint256)
 
-    /// @dev One-time limits are modeled as a never-resetting window: period is stored as type(uint40).max and the
-    ///      window spans [0, max], so the cumulative spend simply never refreshes within representable time.
+    /// @dev One-time limits are modeled as a never-resetting window: period is type(uint40).max so the cumulative
+    ///      spend never refreshes within representable time.
     uint40 internal constant ONE_TIME_PERIOD = type(uint40).max;
 
     /// @notice The action's `target` is not in the committed call-target allowlist.
@@ -134,20 +133,23 @@ contract SessionPolicy is Policy {
     /// @notice A `transferFrom` moved funds from an address other than the account. A session key may only spend the
     ///         account's own resources, not third-party allowances the account happens to hold.
     error TransferFromNotSelf(address from);
+    /// @notice Duplicate `TokenLimit.token` in the committed config (would silently widen / ambiguate grants).
+    error DuplicateTokenLimit(address token);
+    /// @notice Duplicate `CallScope.target` in the committed config.
+    error DuplicateCallScope(address target);
+    /// @notice Duplicate `SelectorRule.selector` within a call scope.
+    error DuplicateSelectorRule(address target, bytes4 selector);
 
     constructor(address policyManager) Policy(policyManager) {}
 
-    // ── Views ──
+    // ── Views (pure over supplied config / explicit limit; no config storage to read) ──
 
-    /// @notice Returns whether `target` is allowed by `policyConfig`, and whether any selector is permitted on it.
-    ///
-    /// @dev Pure over the supplied preimage — no storage read of flattened scopes.
-    function isTargetAllowed(bytes calldata policyConfig, address target)
+    /// @notice Returns whether `target` is allowed by `config`, and whether any selector is permitted on it.
+    function isTargetAllowed(Config calldata config, address target)
         external
         pure
         returns (bool allowed, bool anySelector)
     {
-        Config memory config = abi.decode(policyConfig, (Config));
         for (uint256 i; i < config.callScopes.length; i++) {
             if (config.callScopes[i].target == target) {
                 return (true, config.callScopes[i].selectorRules.length == 0);
@@ -156,16 +158,15 @@ contract SessionPolicy is Policy {
         return (false, false);
     }
 
-    /// @notice Returns whether `selector` is allowed on `target` by `policyConfig`, and whether a recipient
-    ///         allowlist applies.
-    function getSelectorRule(bytes calldata policyConfig, address target, bytes4 selector)
+    /// @notice Returns whether `selector` is allowed on `target` by `config`, and whether a recipient allowlist
+    ///         applies.
+    function getSelectorRule(Config calldata config, address target, bytes4 selector)
         external
         pure
         returns (bool allowed, bool recipientBound)
     {
-        Config memory config = abi.decode(policyConfig, (Config));
         for (uint256 i; i < config.callScopes.length; i++) {
-            CallScope memory scope = config.callScopes[i];
+            CallScope calldata scope = config.callScopes[i];
             if (scope.target != target) continue;
             if (scope.selectorRules.length == 0) return (true, false);
             for (uint256 j; j < scope.selectorRules.length; j++) {
@@ -178,18 +179,17 @@ contract SessionPolicy is Policy {
         return (false, false);
     }
 
-    /// @notice Returns whether `recipient` is in the recipient allowlist for `(target, selector)` in `policyConfig`.
-    function isRecipientAllowed(bytes calldata policyConfig, address target, bytes4 selector, address recipient)
+    /// @notice Returns whether `recipient` is in the recipient allowlist for `(target, selector)` in `config`.
+    function isRecipientAllowed(Config calldata config, address target, bytes4 selector, address recipient)
         external
         pure
         returns (bool)
     {
-        Config memory config = abi.decode(policyConfig, (Config));
         for (uint256 i; i < config.callScopes.length; i++) {
-            CallScope memory scope = config.callScopes[i];
+            CallScope calldata scope = config.callScopes[i];
             if (scope.target != target) continue;
             for (uint256 j; j < scope.selectorRules.length; j++) {
-                SelectorRule memory rule = scope.selectorRules[j];
+                SelectorRule calldata rule = scope.selectorRules[j];
                 if (rule.selector != selector) continue;
                 if (rule.recipients.length == 0) return true;
                 for (uint256 k; k < rule.recipients.length; k++) {
@@ -201,15 +201,14 @@ contract SessionPolicy is Policy {
         return false;
     }
 
-    /// @notice Returns the spend cap for `token` from `policyConfig` (normalized period for one-time limits).
-    function getTokenLimit(bytes calldata policyConfig, address token)
+    /// @notice Returns the spend cap for `token` from `config` (normalized period for one-time limits).
+    function getTokenLimit(Config calldata config, address token)
         external
         pure
         returns (bool set, uint160 allowance, uint40 period)
     {
-        Config memory config = abi.decode(policyConfig, (Config));
         for (uint256 i; i < config.tokenLimits.length; i++) {
-            TokenLimit memory tl = config.tokenLimits[i];
+            TokenLimit calldata tl = config.tokenLimits[i];
             if (tl.token == token) {
                 return (true, uint160(tl.limit), tl.period == 0 ? ONE_TIME_PERIOD : tl.period);
             }
@@ -217,30 +216,29 @@ contract SessionPolicy is Policy {
         return (false, 0, 0);
     }
 
-    /// @notice Returns the current-period spend usage for a token's cap under a binding.
+    /// @notice Returns the current-period spend usage for an explicit token limit under a binding.
     ///
-    /// @dev `policyConfig` supplies the committed limit/period; usage is the only stored state.
-    function getCurrentSpend(bytes32 commitment, bytes calldata policyConfig, address token)
+    /// @dev `limit.period == 0` is normalized to {ONE_TIME_PERIOD} (same as install) so the accounting library
+    ///      never sees a zero period.
+    function getCurrentSpend(bytes32 commitment, TokenLimit calldata limit)
         external
         view
         returns (RecurringAllowance.PeriodUsage memory)
     {
-        Config memory config = abi.decode(policyConfig, (Config));
-        (bool set, uint160 allowance, uint40 period) = _findTokenLimit(config, token);
-        if (!set) {
+        if (limit.limit == 0) {
             return RecurringAllowance.PeriodUsage({start: 0, end: 0, spend: 0});
         }
+        uint40 period = limit.period == 0 ? ONE_TIME_PERIOD : limit.period;
         return _usage.getCurrentPeriod(
-            _spendKey(commitment, token),
-            RecurringAllowance.Limit({allowance: allowance, period: period, start: 0, end: type(uint40).max})
+            _spendKey(commitment, limit.token),
+            RecurringAllowance.Limit({allowance: uint160(limit.limit), period: period, start: 0, end: type(uint40).max})
         );
     }
 
     // ── Hooks ──
 
-    /// @dev Validates the committed {Config}. Rejects {ZeroLimit}, {LimitTooLarge}, {SelfTargetNotAllowed},
-    ///      {AnySelectorOnLimitedToken}, and {RecipientRuleUnsupportedSelector}. No config storage: the manager
-    ///      re-checks the preimage against the signed commitment at every execute.
+    /// @dev Validates the committed {Config}. Rejects zero/oversized limits, self-targets, anySelector on limited
+    ///      tokens, unsupported recipient rules, and duplicates (token / target / selector). No config storage.
     function _onInstall(bytes32, address account, bytes calldata policyConfig) internal override {
         Config memory config = abi.decode(policyConfig, (Config));
 
@@ -248,10 +246,16 @@ contract SessionPolicy is Policy {
             TokenLimit memory tl = config.tokenLimits[i];
             if (tl.limit == 0) revert ZeroLimit(tl.token);
             if (tl.limit > type(uint160).max) revert LimitTooLarge(tl.token, tl.limit);
+            for (uint256 d; d < i; d++) {
+                if (config.tokenLimits[d].token == tl.token) revert DuplicateTokenLimit(tl.token);
+            }
         }
 
         for (uint256 i; i < config.callScopes.length; i++) {
             CallScope memory scope = config.callScopes[i];
+            for (uint256 d; d < i; d++) {
+                if (config.callScopes[d].target == scope.target) revert DuplicateCallScope(scope.target);
+            }
             // Fail closed: the account is always authorized to call its own executeBatch, so a session key allowed to
             // target the account could re-enter with an arbitrary, unchecked batch and escape every policy dimension.
             if (scope.target == account) revert SelfTargetNotAllowed();
@@ -264,6 +268,11 @@ contract SessionPolicy is Policy {
 
             for (uint256 j; j < scope.selectorRules.length; j++) {
                 SelectorRule memory rule = scope.selectorRules[j];
+                for (uint256 d; d < j; d++) {
+                    if (scope.selectorRules[d].selector == rule.selector) {
+                        revert DuplicateSelectorRule(scope.target, rule.selector);
+                    }
+                }
                 // A recipient allowlist is only enforceable for selectors whose recipient argument we can decode.
                 if (rule.recipients.length > 0 && !_isErc20Selector(rule.selector)) {
                     revert RecipientRuleUnsupportedSelector(rule.selector);
@@ -272,21 +281,16 @@ contract SessionPolicy is Policy {
         }
     }
 
-    /// @dev Enforces every configured dimension against a single decoded {Action} atomically, then returns the
-    ///      account call plan. The manager has already checked `policyConfig` against the signed commitment. In
-    ///      order: the target allowlist ({TargetNotAllowed}); for calls carrying a selector, the per-target
-    ///      selector allowlist ({SelectorNotAllowed}) and, when bound, the recipient allowlist
-    ///      ({RecipientNotAllowed}); the ERC-20 spend cap for decodable spend selectors on a limited token; and
-    ///      the native-ETH spend cap consumed from the call `value`. Calldata of 1–3 bytes is rejected
-    ///      ({MissingSelector}). On success returns the `executeBatch` calldata for a single {Call} mirroring the
-    ///      action.
+    /// @dev Enforces every configured dimension against a single decoded {Action} by linear scan, then returns the
+    ///      account call plan (and empty postCallData). The manager has already authenticated `policyConfig` via
+    ///      the binding commitment.
     function _onExecute(
         bytes32 commitment,
         address account,
         bytes calldata policyConfig,
         bytes calldata executionData,
         address
-    ) internal override returns (bytes memory accountCallData) {
+    ) internal override returns (bytes memory accountCallData, bytes memory postCallData) {
         Config memory config = abi.decode(policyConfig, (Config));
         Action memory action = abi.decode(executionData, (Action));
 
@@ -338,7 +342,7 @@ contract SessionPolicy is Policy {
 
         Call[] memory calls = new Call[](1);
         calls[0] = Call({target: action.target, value: action.value, data: action.data});
-        return abi.encodeCall(DefaultAccount.executeBatch, (calls));
+        return (abi.encodeCall(DefaultAccount.executeBatch, (calls)), "");
     }
 
     // ── Internal helpers ──
@@ -419,10 +423,11 @@ contract SessionPolicy is Policy {
         return selector == TRANSFER || selector == TRANSFER_FROM || selector == APPROVE;
     }
 
-    /// @dev Reads the leading 4-byte selector from `data` (caller guarantees `data.length >= 4`).
+    /// @dev Reads the leading 4-byte selector from `data` (caller guarantees `data.length >= 4`). Masks to a clean
+    ///      bytes4 so dirty low bytes cannot survive into equality comparisons.
     function _selectorOf(bytes memory data) internal pure returns (bytes4 selector) {
         assembly ("memory-safe") {
-            selector := mload(add(data, 0x20))
+            selector := and(mload(add(data, 0x20)), shl(224, 0xffffffff))
         }
     }
 
