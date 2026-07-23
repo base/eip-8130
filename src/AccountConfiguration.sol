@@ -629,7 +629,13 @@ contract AccountConfiguration {
         view
         returns (bool verified)
     {
-        try this.authenticateActor(account, hash, signature) returns (bytes32, uint8 scope, address) {
+        // EIP-7739 rehash: bind `hash` to THIS account's EIP-712 domain before authenticating, so a signature
+        // produced for one account cannot be replayed as a valid 1271 signature for another account that shares the
+        // same owner key. See {replaySafeHash}. This is the PersonalSign workflow; see the note there on the
+        // TypedDataSign (readable app typed-data) follow-on.
+        try this.authenticateActor(account, replaySafeHash(account, hash), signature) returns (
+            bytes32, uint8 scope, address
+        ) {
             // ERC-1271 signing is authorized for any operational actor: the admin (scope == 0x00), or a SENDER actor
             // that is not gated by a policy (SCOPE_SENDER set AND SCOPE_POLICY unset). Signing is an encoding of
             // authority a SENDER actor already holds via calls, not a separate grant, so it needs no dedicated scope
@@ -639,6 +645,64 @@ contract AccountConfiguration {
         } catch {
             return false;
         }
+    }
+
+    // ── EIP-7739 account-scoped ERC-1271 rehashing ──────────────────────────────────────────────────────────
+    //
+    // ERC-1271 signatures are validated against a digest bound to the specific `account` (EIP-712
+    // verifyingContract = account). Without this, a key that owns multiple accounts (e.g. a wallet and its
+    // sub-account, which share an owner) would have any 1271 signature valid on all of them: cross-account replay.
+    // Doing it HERE (rather than in each account's bytecode) means every account — including the codeless-EOA
+    // DefaultAccount and precompile/registry-direct verifiers that cannot EXTCALL account bytecode (e.g. b20
+    // permits) — gets the binding for free and against one canonical convention.
+    //
+    // 8130's own signed messages (actor changes, import, lock) bind context in-struct and use no domain separator;
+    // this EIP-712 domain is introduced solely for the ERC-1271 / 7739 surface.
+    //
+    // SCOPE OF THIS DRAFT: only the EIP-7739 *PersonalSign* workflow (arbitrary message digests) is implemented.
+    // The *TypedDataSign* workflow — which lets wallet UIs display an app's readable EIP-712 payload while still
+    // binding the account — is a port of Solady ERC1271's nested-EIP-712 reconstruction, parameterized by `account`
+    // instead of `address(this)`. It is intentionally omitted here: it adds substantial assembly surface to the
+    // audited singleton, and the account-binding security property is already demonstrated by PersonalSign.
+
+    /// @dev EIP-712 domain typehash for the per-account ERC-1271 domain.
+    bytes32 private constant _EIP712_DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+
+    /// @dev keccak256("PersonalSign(bytes prefixed)") — the EIP-7739 PersonalSign struct typehash.
+    bytes32 private constant _PERSONAL_SIGN_TYPEHASH =
+        0x983e65e5148e570cd828ead231ee759a8d7958721a768f93bc4483ba005c32de;
+
+    /// @dev Canonical name/version for every account's ERC-1271 domain. The registry imposes one convention for all
+    ///      8130 accounts, so a signature binds to the account regardless of the account's own bytecode.
+    bytes32 private constant _ACCOUNT_DOMAIN_NAME_HASH = keccak256("EIP8130Account");
+    bytes32 private constant _ACCOUNT_DOMAIN_VERSION_HASH = keccak256("1");
+
+    /// @notice The account-scoped digest a signer must sign for a plain message to be accepted by
+    ///         {verifySignature}. This is the EIP-7739 `PersonalSign` digest: `hash` wrapped in an EIP-712 domain
+    ///         whose `verifyingContract` is `account` (plus the current chainId), so the signature is bound to this
+    ///         specific account and cannot be replayed onto another account that shares the same owner key.
+    ///
+    /// @param account The account the message is being signed for.
+    /// @param hash The raw message digest.
+    ///
+    /// @return The account-scoped EIP-712 digest to sign.
+    function replaySafeHash(address account, bytes32 hash) public view returns (bytes32) {
+        bytes32 structHash = keccak256(abi.encode(_PERSONAL_SIGN_TYPEHASH, hash));
+        return keccak256(abi.encodePacked(hex"1901", _accountDomainSeparator(account), structHash));
+    }
+
+    /// @dev EIP-712 domain separator for `account`'s ERC-1271 domain (verifyingContract = account, current chainId).
+    function _accountDomainSeparator(address account) internal view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                _EIP712_DOMAIN_TYPEHASH,
+                _ACCOUNT_DOMAIN_NAME_HASH,
+                _ACCOUNT_DOMAIN_VERSION_HASH,
+                block.chainid,
+                account
+            )
+        );
     }
 
     /// @notice Authenticates that an account approved `hash` using auth in `authenticator(20) || data` format,
