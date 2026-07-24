@@ -140,9 +140,7 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
 
         bytes memory nestedAuth = abi.encodePacked(k1Authenticator, _signDigest(signerPk, hash));
 
-        // The SENDER-without-POLICY actor is operational: verifySignature returns true. verifySignature applies the
-        // account-scoped EIP-7739 wrap, so this assertion signs the replaySafeHash digest; the raw-hash `nestedAuth`
-        // is what the delegate vouch below consumes (the vouch authenticates over the raw hash, not the 1271 wrap).
+        // verifySignature wraps: sign replaySafeHash. (nestedAuth, over the raw hash, is for the vouch below.)
         bytes memory wrappedAuth = abi.encodePacked(
             k1Authenticator, _signDigest(signerPk, accountConfiguration.replaySafeHash(delegateAccount, hash))
         );
