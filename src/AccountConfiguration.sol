@@ -675,11 +675,7 @@ contract AccountConfiguration {
     function _accountDomainSeparator(address account) internal view returns (bytes32) {
         return keccak256(
             abi.encode(
-                _EIP712_DOMAIN_TYPEHASH,
-                _ACCOUNT_DOMAIN_NAME_HASH,
-                _ACCOUNT_DOMAIN_VERSION_HASH,
-                block.chainid,
-                account
+                _EIP712_DOMAIN_TYPEHASH, _ACCOUNT_DOMAIN_NAME_HASH, _ACCOUNT_DOMAIN_VERSION_HASH, block.chainid, account
             )
         );
     }
