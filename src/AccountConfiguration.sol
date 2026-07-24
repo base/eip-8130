@@ -659,11 +659,12 @@ contract AccountConfiguration {
     // 8130's own signed messages (actor changes, import, lock) bind context in-struct and use no domain separator;
     // this EIP-712 domain is introduced solely for the ERC-1271 / 7739 surface.
     //
-    // SCOPE OF THIS DRAFT: only the EIP-7739 *PersonalSign* workflow (arbitrary message digests) is implemented.
-    // The *TypedDataSign* workflow — which lets wallet UIs display an app's readable EIP-712 payload while still
-    // binding the account — is a port of Solady ERC1271's nested-EIP-712 reconstruction, parameterized by `account`
-    // instead of `address(this)`. It is intentionally omitted here: it adds substantial assembly surface to the
-    // audited singleton, and the account-binding security property is already demonstrated by PersonalSign.
+    // SCOPE: this implements the EIP-7739 *PersonalSign* workflow, which delivers the full account-binding
+    // security property for every ERC-1271 message (arbitrary digests): signers sign {replaySafeHash}. The
+    // *TypedDataSign* workflow — which additionally lets wallet UIs display an app's readable EIP-712 payload while
+    // binding the account — is an additive UX layer (a port of Solady ERC1271's nested-EIP-712 reconstruction,
+    // parameterized by `account` instead of `address(this)`) tracked as a follow-up. It changes none of the
+    // security guarantees delivered here; until it lands, wallet UIs display the opaque PersonalSign digest.
 
     /// @dev EIP-712 domain typehash for the per-account ERC-1271 domain.
     bytes32 private constant _EIP712_DOMAIN_TYPEHASH =

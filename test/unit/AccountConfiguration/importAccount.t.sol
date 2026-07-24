@@ -527,7 +527,11 @@ contract ImportAccountTest is AccountConfigurationTest {
         AccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(device);
         bytes32 digest = _computeImportDigest(eoa, actors);
         // Canonical k1 auth blob: K1_AUTHENTICATOR || signature, signed by the EOA's own key (the implicit owner).
-        accountConfiguration.importAccount(eoa, uint64(block.chainid), actors, _buildK1Auth(eoaPk, digest));
+        // importAccount validates via the account's ERC-1271, which now applies the account-scoped EIP-7739 wrap, so
+        // the self-signature is over replaySafeHash(eoa, digest).
+        accountConfiguration.importAccount(
+            eoa, uint64(block.chainid), actors, _buildK1Auth(eoaPk, accountConfiguration.replaySafeHash(eoa, digest))
+        );
 
         assertEq(accountConfiguration.getChangeSequences(eoa).local, 1);
         assertTrue(accountConfiguration.isActor(eoa, bytes32(bytes20(device))));
@@ -556,7 +560,10 @@ contract ImportAccountTest is AccountConfigurationTest {
         });
 
         bytes32 digest = _computeImportDigest(eoa, actors);
-        accountConfiguration.importAccount(eoa, uint64(block.chainid), actors, _buildK1Auth(eoaPk, digest));
+        // importAccount validates via the account's ERC-1271, which now applies the account-scoped EIP-7739 wrap.
+        accountConfiguration.importAccount(
+            eoa, uint64(block.chainid), actors, _buildK1Auth(eoaPk, accountConfiguration.replaySafeHash(eoa, digest))
+        );
 
         assertEq(accountConfiguration.getChangeSequences(eoa).local, 1);
         // The self-actorId is a live explicit owner.
