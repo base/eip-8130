@@ -79,6 +79,23 @@ contract DefaultAccount is Receiver {
         }
     }
 
+    /// @notice Executes a single call from the account.
+    ///
+    /// @dev Equivalent to a one-element {executeBatch}. Selector-compatible with the widely deployed
+    ///      CoinbaseSmartWallet V1 `execute(address,uint256,bytes)` (0xb61d27f6), so integrations that call that ABI
+    ///      directly (e.g. SpendPermissionManager) keep working against this account.
+    /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a TRUSTED_EXECUTOR actor.
+    /// @dev Reverts with CallFailed when the inner call reverts.
+    ///
+    /// @param target Address the account calls.
+    /// @param value Wei forwarded with the call.
+    /// @param data Calldata passed to `target`.
+    function execute(address target, uint256 value, bytes calldata data) external virtual {
+        if (!_isAuthorizedCaller(msg.sender)) revert UnauthorizedCaller();
+        (bool success,) = target.call{value: value}(data);
+        if (!success) revert CallFailed();
+    }
+
     // ══════════════════════════════════════════════
     //  ERC-1271
     // ══════════════════════════════════════════════

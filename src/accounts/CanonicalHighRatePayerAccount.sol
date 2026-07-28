@@ -37,4 +37,23 @@ contract CanonicalHighRatePayerAccount is DefaultAccount {
             if (!success) revert CallFailed();
         }
     }
+
+    /// @notice Executes a single call from the account, blocking an outbound value transfer while locked.
+    ///
+    /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a TRUSTED_EXECUTOR actor.
+    /// @dev Reverts with AccountLocked when the call carries non-zero value and the account is locked.
+    /// @dev Reverts with CallFailed when the inner call reverts.
+    ///
+    /// @param target Address the account calls.
+    /// @param value Wei forwarded with the call.
+    /// @param data Calldata passed to `target`.
+    function execute(address target, uint256 value, bytes calldata data) external override {
+        if (!_isAuthorizedCaller(msg.sender)) revert UnauthorizedCaller();
+        if (value > 0) {
+            (bool locked,,,) = ACCOUNT_CONFIGURATION.getLockStatus(address(this));
+            if (locked) revert AccountLocked();
+        }
+        (bool success,) = target.call{value: value}(data);
+        if (!success) revert CallFailed();
+    }
 }

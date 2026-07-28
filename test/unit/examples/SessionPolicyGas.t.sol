@@ -22,7 +22,7 @@ import {SessionMockERC20, SessionMockTarget} from "./SessionPolicy.t.sol";
 ///      transfer).
 ///
 ///      Caveats when reading these:
-///        - The EIP-8130 transaction-context precompile is `vm.mockCall`-ed, so `_actingActorId`'s STATICCALL is
+///        - The EIP-8130 transaction-context precompile is `vm.mockCall`-ed, so `_resolveActorId`'s STATICCALL is
 ///          approximated by Foundry's mock, not the real precompile cost.
 ///        - "cold" cools (via `vm.cool`) every address the execute path touches before measuring, mirroring
 ///          production where authorization ran in an earlier transaction so all contracts/slots are cold at

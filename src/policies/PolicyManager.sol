@@ -32,11 +32,10 @@ address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak2
 ///        (routed through the account) can invoke {execute}.
 ///
 ///      Acting models and entrypoints:
-///      - {execute}: the *account itself* acts (a gated session key, dispatched by the protocol as the account). The
-///        acting identity comes from the transaction-context precompile and `account == msg.sender`.
-///      - {executeAttested}: the *account itself* acts on a chain with no transaction-context precompile (e.g.
-///        ERC-4337 only). There is no protocol identity, so the account is `msg.sender` and *attests* the acting
-///        `actorId` explicitly. Guarded against self-origination and against use where a live precompile exists.
+///      - {execute}: the *account itself* acts (a gated session key dispatched by the protocol as the account, or an
+///        ERC-4337 EntryPoint driving the account). The acting identity is resolved from the transaction-context
+///        precompile on an 8130 chain, and off-8130 (e.g. ERC-4337 only) from the account's own {ITransactionContext}
+///        read surface; either way `account == msg.sender`. See {_resolveActorId}.
 ///      - {executeFor} / {executeForMany}: an *external caller* acts on behalf of one or more accounts that authorized
 ///        it (e.g. a subscription provider pulling from many accounts in one transaction). Identity is the caller
 ///        itself (`actorId == bytes20(msg.sender)`) and `account` comes from the supplied binding.
@@ -56,8 +55,8 @@ address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak2
 ///      {execute} with that target's binding and would otherwise resolve identity. Do not "optimize" the
 ///      entrypoints onto separate reentrancy guards.
 ///
-///      Scope: account-acting {execute} (precompile) and {executeAttested} (account-attested, no precompile), and
-///      external-caller {executeFor} / {executeForMany}.
+///      Scope: account-acting {execute} (transaction-context precompile on 8130, else the account-exposed context)
+///      and external-caller {executeFor} / {executeForMany}.
 contract PolicyManager is ReentrancyGuard {
     using Address for address;
 
@@ -99,17 +98,9 @@ contract PolicyManager is ReentrancyGuard {
     ///         account, was revoked, or (on the external path) the account did not gate this manager for it.
     error NoActivePolicy(bytes32 actorId);
     /// @notice The acting actor's `ActorConfig.expiry` has passed. Commitment is not cleared on expiry (only on
-    ///         revoke), so the manager must enforce this itself on {executeFor} and {executeAttested}, which have no
+    ///         revoke), so the manager must enforce this itself on {executeFor} / {executeForMany}, which have no
     ///         protocol auth path.
     error ActorExpired(bytes32 actorId);
-    /// @notice {executeAttested} was invoked by a self-originating sender (`tx.origin == msg.sender`). That is the
-    ///         signature of an EOA/7702 direct send or an 8130 self-dispatch — neither is an account-attested,
-    ///         externally-driven execution, so the attested path is refused. Use {execute} (8130) or a normal tx.
-    error SelfOrigination();
-    /// @notice {executeAttested} was called while the transaction-context precompile is asserting a protocol
-    ///         identity (`getTransactionSenderActorId() != 0`). On an 8130 chain the account-acting path is
-    ///         {execute}; the attested path is refused so a gated actor cannot claim a different actor's identity.
-    error ProtocolIdentityActive(bytes32 actorId);
     /// @notice {executeForMany} array length mismatch between `bindings` and `executionData`.
     error LengthMismatch();
     /// @notice The per-account self-call boundary used by {executeForMany} was invoked by someone other than this
@@ -127,19 +118,19 @@ contract PolicyManager is ReentrancyGuard {
     /// @notice Exercises a policy authorized by the account's signed commitment and forwards the resulting call plan
     ///         to the account.
     ///
-    /// @dev Identity comes from the protocol, not the caller. Reaching this function as a dispatched call proves
-    ///      this manager is the acting key's configured gate. The manager reads the acting `actorId` from the
-    ///      transaction-context precompile and takes the account from `msg.sender`. The caller supplies the full
-    ///      {PolicyBinding}; recomputing its commitment and comparing to the live signed commitment authenticates
-    ///      config, validity window, and owning account in one check.
+    /// @dev The acting identity comes from the transaction context, not from the caller's calldata. On an 8130 chain,
+    ///      reaching this function as a protocol-dispatched call proves this manager is the acting key's configured
+    ///      gate, and {_resolveActorId} reads the actor from the transaction-context precompile. Off-8130 (e.g. an
+    ///      ERC-4337-only chain) the precompile is absent, so {_resolveActorId} falls back to the account's own
+    ///      {ITransactionContext} surface: the account authenticates the acting key itself (e.g. in `validateUserOp`)
+    ///      and publishes its `actorId` for the confined execution window. Either way the account is `msg.sender`; the
+    ///      caller supplies the full {PolicyBinding}, and recomputing its commitment against the live signed commitment
+    ///      authenticates config, validity window, and owning account in one check.
     ///
-    ///      Actor expiry is not re-checked here: protocol authentication already rejects expired actors before
-    ///      dispatch. `AccountConfiguration._authenticate` reverts `ActorExpired`, so a protocol-dispatched call's
-    ///      sender actor was expiry-checked at authentication in the same transaction (same `block.timestamp`, so
-    ///      no gap), and any non-dispatched or off-8130 call yields `actorId == 0` → {NoActivePolicy}. This trades
-    ///      defense-in-depth for one SLOAD; soundness rests on the spec-level invariant that every conforming
-    ///      implementation enforces expiry at authentication. {executeFor} retains a local expiry check because it
-    ///      has no protocol auth.
+    ///      Actor expiry IS enforced here. The off-8130 fallback carries no protocol authentication, so the manager
+    ///      checks expiry itself rather than trusting the account to have done so. On an 8130 chain this duplicates the
+    ///      protocol's own pre-dispatch expiry check for the cost of one SLOAD — accepted to keep a single, uniformly
+    ///      safe execution path across both chain kinds.
     ///
     /// @param binding       Full account-authorized binding (config + window + salt).
     /// @param executionData Per-use action parameters interpreted by the policy.
@@ -147,61 +138,7 @@ contract PolicyManager is ReentrancyGuard {
         address account = msg.sender;
         if (binding.account != account) revert InvalidBindingAccount(account, binding.account);
 
-        bytes32 actorId = _actingActorId();
-        bytes32 commitment = _commitment(binding);
-        bytes32 signed = ACCOUNT_CONFIGURATION.getPolicyCommitment(account, actorId);
-        if (signed == bytes32(0)) revert NoActivePolicy(actorId);
-        if (signed != commitment) revert BindingCommitmentMismatch(signed, commitment);
-
-        // No manager-match / expiry checks here — see @dev above. The external entrypoints below re-add both.
-        _enforce(binding, commitment, executionData, account);
-    }
-
-    /// @notice Account-attested variant of {execute} for chains without the EIP-8130 transaction-context precompile
-    ///         (e.g. an ERC-4337-only chain). The account itself drives the manager and *attests* which of its own
-    ///         actors is acting by passing `actorId` explicitly, standing in for the protocol identity that
-    ///         {execute} reads from the precompile.
-    ///
-    /// @dev Trust model — read carefully. {execute} gets two guarantees from the protocol: the `actorId` is
-    ///      authentic (from the precompile) and a `SCOPE_POLICY` actor could *only* have reached this manager (the
-    ///      8130 gate). Neither exists here, so BOTH move to the account, which is `msg.sender`:
-    ///      - **Authenticity** — the account must have authenticated the acting key (e.g. in `validateUserOp`)
-    ///        before calling, and pass that key's `actorId`.
-    ///      - **Confinement** — the account MUST fill in `actorId` itself and MUST NOT let a restricted actor choose
-    ///        it via user-supplied calldata. Otherwise a restricted key crafts a call to
-    ///        `executeAttested(privilegedActorId, ...)` and self-escalates. Reproducing the 8130 gate in account code
-    ///        (forcing a policy-scoped actor onto its own `actorId`) is the account's responsibility; the manager
-    ///        cannot verify it and trusts `msg.sender`.
-    ///
-    ///      Two guards keep this path from being abused as a bypass of the protocol path on chains that *do* have
-    ///      8130 semantics:
-    ///      - `tx.origin != msg.sender` — forbids self-origination. An EOA/7702 direct send and an 8130 self-dispatch
-    ///        both have `tx.origin == account == msg.sender`; only an externally-driven account (ERC-4337 EntryPoint
-    ///        or other trusted executor) has a distinct origin. This is an anti-authentication (restriction) use of
-    ///        `tx.origin`, not an identity check.
-    ///      - `getTransactionSenderActorId() == 0` — if the precompile is asserting a protocol identity, the chain
-    ///        supports 8130 and the correct account-acting path is {execute}. Refusing here stops a gated actor X
-    ///        (dispatched as the account) from calling `executeAttested(Y, ...)` to drive another actor's binding.
-    ///
-    ///      Like {executeFor}, this path has no protocol auth, so it re-checks actor expiry locally.
-    ///
-    /// @param actorId       The account-attested acting actor (an actor configured on `msg.sender`).
-    /// @param binding       Full account-authorized binding (config + window + salt); `binding.account` must be `msg.sender`.
-    /// @param executionData Per-use action parameters interpreted by the policy.
-    function executeAttested(bytes32 actorId, PolicyBinding calldata binding, bytes calldata executionData)
-        external
-        nonReentrant
-    {
-        // Forbid self-origination: only an externally-driven account (4337 EntryPoint / trusted executor) qualifies.
-        if (tx.origin == msg.sender) revert SelfOrigination();
-
-        // On a chain with a live precompile, the protocol asserts identity — use {execute}, not this path.
-        bytes32 protocolActor = _actingActorId();
-        if (protocolActor != bytes32(0)) revert ProtocolIdentityActive(protocolActor);
-
-        address account = msg.sender;
-        if (binding.account != account) revert InvalidBindingAccount(account, binding.account);
-
+        bytes32 actorId = _resolveActorId(account);
         bytes32 commitment = _commitment(binding);
         bytes32 signed = ACCOUNT_CONFIGURATION.getPolicyCommitment(account, actorId);
         if (signed == bytes32(0)) revert NoActivePolicy(actorId);
@@ -313,13 +250,29 @@ contract PolicyManager is ReentrancyGuard {
         emit PolicyExecuted(account, binding.policy, commitment, caller);
     }
 
-    /// @dev Reads the authenticated actor of the in-flight EIP-8130 transaction from the transaction-context
-    ///      precompile. Outside a protocol-dispatched call the call yields no data and this returns bytes32(0).
-    function _actingActorId() internal view returns (bytes32 actorId) {
+    /// @dev Resolves the acting actorId for an account-acting {execute}. First reads the EIP-8130 transaction-context
+    ///      precompile, which the protocol populates while dispatching a transaction's calls on an 8130 chain. Off-8130
+    ///      the precompile is absent and the STATICCALL yields no data, so it falls back to the account's own
+    ///      {ITransactionContext} read surface: the account publishes the acting actorId under the SAME selector the
+    ///      precompile uses, so the manager imposes no ABI on the account and the account never learns this manager's
+    ///      ABI. Both reads are graceful low-level STATICCALLs: an inactive precompile or an account that does not
+    ///      expose the tx-context surface simply yields bytes32(0) (no acting actor) rather than reverting, so a call
+    ///      outside any confined policy window is surfaced uniformly by callers as {NoActivePolicy}. A non-zero actor
+    ///      is not trusted on its own — callers still bind it to a live signed commitment and enforce expiry.
+    ///
+    /// @param account The account to consult for the account-exposed context when the precompile is inactive.
+    ///
+    /// @return actorId The resolved acting actorId, or bytes32(0) if none is available.
+    function _resolveActorId(address account) internal view returns (bytes32 actorId) {
         (bool ok, bytes memory ret) = TX_CONTEXT_ADDRESS.staticcall(
             abi.encodeWithSelector(ITransactionContext.getTransactionSenderActorId.selector)
         );
-        if (ok && ret.length == 32) actorId = abi.decode(ret, (bytes32));
+        if (ok && ret.length >= 32) actorId = abi.decode(ret, (bytes32));
+        if (actorId == bytes32(0)) {
+            (ok, ret) =
+                account.staticcall(abi.encodeWithSelector(ITransactionContext.getTransactionSenderActorId.selector));
+            if (ok && ret.length >= 32) actorId = abi.decode(ret, (bytes32));
+        }
     }
 
     function _commitment(PolicyBinding calldata binding) internal pure returns (bytes32) {
