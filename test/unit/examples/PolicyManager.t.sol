@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
+import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
+
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../../src/interfaces/ITransactionContext.sol";
 import {Call, DefaultAccount, TRUSTED_EXECUTOR} from "../../../src/accounts/DefaultAccount.sol";
@@ -53,6 +55,24 @@ contract PostCallPolicy is Policy {
         lastPostAccount = account;
         lastPostCallData = postCallData;
         postCallCount++;
+    }
+}
+
+/// @notice Policy that re-enters {PolicyManager.execute} from within its own {onExecute} hook. The manager's shared
+///         {ReentrancyGuard} must revert the nested call while the outer execution is still in flight.
+contract ReentrantExecutePolicy is Policy {
+    constructor(address policyManager) Policy(policyManager) {}
+
+    function _onExecute(bytes32, address account, bytes calldata, bytes calldata, address)
+        internal
+        override
+        returns (bytes memory, bytes memory)
+    {
+        PolicyManager.PolicyBinding memory dummy;
+        dummy.account = account;
+        // Guard is locked by the outer call -> this reverts ReentrancyGuardReentrantCall before any body check.
+        PolicyManager(address(POLICY_MANAGER)).execute(dummy, "");
+        return ("", "");
     }
 }
 
@@ -258,6 +278,36 @@ contract PolicyManagerTest is AccountConfigurationTest {
         manager.execute(_binding(1), _action());
     }
 
+    function test_execute_revertsForActorGatedToDifferentManager() public {
+        // The resolved actor is gated (policy_manager) to a DIFFERENT manager. Even if its commitment matched the
+        // presented binding, execute() must refuse: it is not this manager's actor to drive.
+        PolicyManager otherManager = new PolicyManager(address(accountConfiguration));
+        bytes32 actorId = _sessionActorId(42);
+        PolicyManager.PolicyBinding memory binding = _binding(42);
+        // Authorize the actor with its policy gated to `otherManager`, not `manager`.
+        _authorizePolicyActorForManager(actorId, address(otherManager), manager.commitmentOf(binding));
+        _mockActingActor(actorId);
+
+        vm.expectRevert(abi.encodeWithSelector(PolicyManager.NoActivePolicy.selector, actorId));
+        vm.prank(account);
+        manager.execute(binding, _action());
+    }
+
+    function test_execute_reentrancy_directReenterReverts() public {
+        // A malicious policy re-enters execute() from its own hook; the shared reentrancy guard blocks it.
+        ReentrantExecutePolicy evil = new ReentrantExecutePolicy(address(manager));
+        PolicyManager.PolicyBinding memory binding = PolicyManager.PolicyBinding({
+            account: account, policy: address(evil), policyConfig: "", validAfter: 0, validUntil: 0, salt: 7
+        });
+        bytes32 actorId = _sessionActorId(7);
+        _authorizePolicyActor(actorId, manager.commitmentOf(binding));
+        _mockActingActor(actorId);
+
+        vm.expectRevert(ReentrancyGuard.ReentrancyGuardReentrantCall.selector);
+        vm.prank(account);
+        manager.execute(binding, _action());
+    }
+
     // ── Config resolution ──
 
     function test_getPolicy_resolvesManagerAndCommitment() public {
@@ -358,6 +408,24 @@ contract PolicyManagerTest is AccountConfigurationTest {
             authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: expiry
         });
         bytes memory policyData = abi.encodePacked(address(manager), commitment);
+
+        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+        changes[0] = AccountConfiguration.ActorChange({
+            actorId: actorId, changeType: AUTHORIZE_ACTOR, data: abi.encode(cfg, policyData)
+        });
+
+        uint64 chainId = uint64(block.chainid);
+        uint64 sequence = accountConfiguration.getChangeSequences(account).local;
+        bytes32 digest = _computeActorChangeBatchDigest(account, chainId, sequence, changes);
+        accountConfiguration.applySignedActorChanges(account, chainId, changes, _buildK1Auth(ROOT_PK, digest));
+    }
+
+    /// @dev Authorizes a policy-gated actor on `account` whose policy is gated to an arbitrary `policyManager`
+    ///      (not necessarily the manager under test), used to exercise the manager-match confinement check.
+    function _authorizePolicyActorForManager(bytes32 actorId, address policyManager, bytes32 commitment) internal {
+        AccountConfiguration.ActorConfig memory cfg =
+            AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: 0});
+        bytes memory policyData = abi.encodePacked(policyManager, commitment);
 
         AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
         changes[0] = AccountConfiguration.ActorChange({

@@ -125,7 +125,9 @@ contract PolicyManager is ReentrancyGuard {
     ///      {ITransactionContext} surface: the account authenticates the acting key itself (e.g. in `validateUserOp`)
     ///      and publishes its `actorId` for the confined execution window. Either way the account is `msg.sender`; the
     ///      caller supplies the full {PolicyBinding}, and recomputing its commitment against the live signed commitment
-    ///      authenticates config, validity window, and owning account in one check.
+    ///      authenticates config, validity window, and owning account in one check. The resolved actor is also
+    ///      required to be non-zero and gated to THIS manager (`policy_manager == address(this)`) — redundant on a
+    ///      protocol-dispatched 8130 call but load-bearing on the account-resolved (off-8130) path.
     ///
     ///      Actor expiry IS enforced here. The off-8130 fallback carries no protocol authentication, so the manager
     ///      checks expiry itself rather than trusting the account to have done so. On an 8130 chain this duplicates the
@@ -139,6 +141,14 @@ contract PolicyManager is ReentrancyGuard {
         if (binding.account != account) revert InvalidBindingAccount(account, binding.account);
 
         bytes32 actorId = _resolveActorId(account);
+        // bytes32(0) is the "no acting actor" sentinel from {_resolveActorId}; never treat it as a real actor.
+        if (actorId == bytes32(0)) revert NoActivePolicy(actorId);
+        // Registry-consistency / confinement: the resolved actor must be gated to THIS manager. On a protocol-
+        // dispatched 8130 call the 8130 gate already guarantees this; off-8130 (account-resolved identity) it is the
+        // load-bearing check — the external paths enforce the same. Without it, an actor gated to a *different*
+        // manager whose commitment happens to match the presented binding could be driven through this manager.
+        if (ACCOUNT_CONFIGURATION.getPolicyManager(account, actorId) != address(this)) revert NoActivePolicy(actorId);
+
         bytes32 commitment = _commitment(binding);
         bytes32 signed = ACCOUNT_CONFIGURATION.getPolicyCommitment(account, actorId);
         if (signed == bytes32(0)) revert NoActivePolicy(actorId);
@@ -258,7 +268,14 @@ contract PolicyManager is ReentrancyGuard {
     ///      ABI. Both reads are graceful low-level STATICCALLs: an inactive precompile or an account that does not
     ///      expose the tx-context surface simply yields bytes32(0) (no acting actor) rather than reverting, so a call
     ///      outside any confined policy window is surfaced uniformly by callers as {NoActivePolicy}. A non-zero actor
-    ///      is not trusted on its own — callers still bind it to a live signed commitment and enforce expiry.
+    ///      is not trusted on its own — {execute} additionally rejects bytes32(0), requires the actor be gated to this
+    ///      manager, binds it to a live signed commitment, and enforces expiry. The return is accepted only when it is
+    ///      exactly 32 bytes, so a malformed (e.g. 33-byte) return degrades to "no actor" instead of reverting decode.
+    ///
+    ///      SECURITY (off-8130): trusting the account-resolved actorId assumes the account (msg.sender) publishes a
+    ///      nonzero actorId ONLY inside a confined, already-authenticated execution window and that untrusted callers
+    ///      cannot forge or leave it set. That account-side surface is a separate, not-yet-merged prototype; a human
+    ///      auditor must verify those invariants before this path is relied on in production.
     ///
     /// @param account The account to consult for the account-exposed context when the precompile is inactive.
     ///
@@ -267,11 +284,11 @@ contract PolicyManager is ReentrancyGuard {
         (bool ok, bytes memory ret) = TX_CONTEXT_ADDRESS.staticcall(
             abi.encodeWithSelector(ITransactionContext.getTransactionSenderActorId.selector)
         );
-        if (ok && ret.length >= 32) actorId = abi.decode(ret, (bytes32));
+        if (ok && ret.length == 32) actorId = abi.decode(ret, (bytes32));
         if (actorId == bytes32(0)) {
             (ok, ret) =
                 account.staticcall(abi.encodeWithSelector(ITransactionContext.getTransactionSenderActorId.selector));
-            if (ok && ret.length >= 32) actorId = abi.decode(ret, (bytes32));
+            if (ok && ret.length == 32) actorId = abi.decode(ret, (bytes32));
         }
     }
 
