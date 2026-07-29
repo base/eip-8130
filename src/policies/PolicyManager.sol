@@ -20,7 +20,8 @@ address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak2
 
 /// @title PolicyManager
 ///
-/// @notice Minimal, self-contained reference policy manager for EIP-8130 actor policies.
+/// @notice Minimal, self-contained reference policy manager for EIP-8130 actor policies. It resolves the acting
+///         identity from the transaction-context precompile, so it is only meant for use on EIP-8130 chains.
 ///
 /// @dev Role in the EIP-8130 flow:
 ///      - The manager is registered as an execution-enabled actor on the account (an actor whose authenticator is
@@ -34,10 +35,6 @@ address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak2
 ///      Acting models and entrypoints:
 ///      - {execute}: the *account itself* acts — a policy-gated session key that the EIP-8130 protocol dispatches as
 ///        the account. The acting identity is read from the transaction-context precompile and `account == msg.sender`.
-///        Policies are 8130-native ONLY: there is deliberately no ERC-4337 / off-8130 policy path. A policy-gated key
-///        carrying a PAYER scope cannot be safely confined under 4337 (nothing forces it onto its own actorId), so the
-///        manager will not accept an account-attested identity; where the precompile is absent the acting actorId is
-///        unavailable and {execute} simply fails.
 ///      - {executeFor} / {executeForMany}: an *external caller* acts on behalf of one or more accounts that authorized
 ///        it (e.g. a subscription provider pulling from many accounts in one transaction). Identity is the caller
 ///        itself (`actorId == bytes20(msg.sender)`) and `account` comes from the supplied binding.
@@ -57,8 +54,8 @@ address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak2
 ///      {execute} with that target's binding and would otherwise resolve identity. Do not "optimize" the
 ///      entrypoints onto separate reentrancy guards.
 ///
-///      Scope: account-acting {execute} (transaction-context precompile; 8130-native only) and external-caller
-///      {executeFor} / {executeForMany}.
+///      Scope: account-acting {execute} (transaction-context precompile) and external-caller {executeFor} /
+///      {executeForMany}.
 contract PolicyManager is ReentrancyGuard {
     using Address for address;
 
@@ -125,10 +122,6 @@ contract PolicyManager is ReentrancyGuard {
     ///      transaction-context precompile and takes the account from `msg.sender`. The caller supplies the full
     ///      {PolicyBinding}; recomputing its commitment and comparing to the live signed commitment authenticates
     ///      config, validity window, and owning account in one check.
-    ///
-    ///      8130-native only: there is deliberately no ERC-4337 / off-8130 policy path. The manager does not accept an
-    ///      account-attested identity (a PAYER-scoped session key cannot be confined under 4337), so where the
-    ///      transaction-context precompile is absent the acting `actorId` is `0` and this call reverts {NoActivePolicy}.
     ///
     ///      Actor expiry is not re-checked here: protocol authentication already rejects expired actors before
     ///      dispatch. `AccountConfiguration._authenticate` reverts `ActorExpired`, so a protocol-dispatched call's
