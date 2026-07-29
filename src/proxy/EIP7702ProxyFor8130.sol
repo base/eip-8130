@@ -10,14 +10,9 @@ import {AccountConfiguration} from "../AccountConfiguration.sol";
 ///         an EIP-8130 account implementation ({DefaultAccount} by default). It is deployed as a singleton; many EOAs
 ///         delegate their code to it.
 ///
-///         This is deliberately NOT Base's `EIP7702Proxy`. The problems that proxy solves are moot here (an EIP-8130
-///         account keeps no local owner state, so there is nothing to initialize and nothing to front-run; the default
-///         implementation is a Receiver, so tokens/ETH arrive from the first block), and its EOA-key-centric
-///         authorization (an `ecrecover` `isValidSignature` fallback and a k1-only `setImplementation`) is a signature
-///         path OUTSIDE the registry, reintroducing the two-sources-of-truth problem EIP-8130 exists to eliminate. This
-///         proxy adds NO authorization semantics of its own beyond a single registry-gated recovery function, and never
-///         falls back to raw-EOA behavior: it falls back only to whatever the implementation points to (and thereby to
-///         {AccountConfiguration}).
+///         This proxy adds no authorization of its own beyond a single registry-gated recovery function
+///         ({setImplementation}); it never falls back to raw-EOA behavior (no `ecrecover` / EOA-key path), only to
+///         whatever the implementation points at, and thereby to {AccountConfiguration}.
 ///
 ///         The proxy owns exactly one behavior, {setImplementation}, and forwards everything else (execution and
 ///         ERC-1271) to the implementation. In particular it does NOT define `isValidSignature`: that forwards to the
