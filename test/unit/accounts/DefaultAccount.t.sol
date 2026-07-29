@@ -254,6 +254,102 @@ contract DefaultAccountTest is AccountConfigurationTest {
     }
 
     // ══════════════════════════════════════════════
+    //  executeBatch — lock gating (high-rate payer by default)
+    // ══════════════════════════════════════════════
+
+    /// @notice A value-bearing call reverts while the account is locked; the only balance decrease is gas.
+    function test_executeBatch_revert_blocksETHWhenLocked() public {
+        (address account,) = _createK1Account(ACTOR_PK);
+        vm.deal(account, 1 ether);
+        _signedLock(ACTOR_PK, account, 1 hours);
+
+        vm.prank(account);
+        vm.expectRevert(DefaultAccount.AccountLocked.selector);
+        DefaultAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0.1 ether, abi.encodeCall(MockTarget.setValue, (1))));
+    }
+
+    /// @notice Zero-value calls are unaffected by the lock.
+    function test_executeBatch_success_allowsZeroValueWhenLocked() public {
+        (address account,) = _createK1Account(ACTOR_PK);
+        _signedLock(ACTOR_PK, account, 1 hours);
+
+        vm.prank(account);
+        DefaultAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (99))));
+
+        assertEq(target.value(), 99);
+    }
+
+    // ══════════════════════════════════════════════
+    //  execute (single call)
+    // ══════════════════════════════════════════════
+
+    /// @notice The account calling itself executes a single call.
+    function test_execute_success_selfCaller(uint256 v) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+
+        vm.prank(account);
+        DefaultAccount(payable(account)).execute(address(target), 0, abi.encodeCall(MockTarget.setValue, (v)));
+
+        assertEq(target.value(), v);
+    }
+
+    /// @notice execute forwards ETH value to the target.
+    function test_execute_success_withETHValue(uint256 amount) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+        amount = bound(amount, 0, 1e30);
+        vm.deal(account, amount);
+
+        vm.prank(account);
+        DefaultAccount(payable(account)).execute(address(target), amount, abi.encodeCall(MockTarget.setValue, (7)));
+
+        assertEq(address(target).balance, amount);
+        assertEq(target.value(), 7);
+    }
+
+    /// @notice An unauthorized caller cannot drive execute.
+    function test_execute_revert_unauthorizedCaller(address caller) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+        vm.assume(caller != account);
+
+        vm.prank(caller);
+        vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
+        DefaultAccount(payable(account)).execute(address(target), 0, abi.encodeCall(MockTarget.setValue, (1)));
+    }
+
+    /// @notice A failing inner call reverts execute.
+    function test_execute_revert_failedInnerCall() public {
+        (address account,) = _createK1Account(ACTOR_PK);
+
+        vm.prank(account);
+        vm.expectRevert(DefaultAccount.CallFailed.selector);
+        DefaultAccount(payable(account)).execute(address(target), 0, abi.encodeCall(MockTarget.reverting, ()));
+    }
+
+    /// @notice A value-bearing execute reverts while the account is locked.
+    function test_execute_revert_blocksETHWhenLocked() public {
+        (address account,) = _createK1Account(ACTOR_PK);
+        vm.deal(account, 1 ether);
+        _signedLock(ACTOR_PK, account, 1 hours);
+
+        vm.prank(account);
+        vm.expectRevert(DefaultAccount.AccountLocked.selector);
+        DefaultAccount(payable(account)).execute(address(target), 0.1 ether, abi.encodeCall(MockTarget.setValue, (1)));
+    }
+
+    /// @notice A zero-value execute is unaffected by the lock.
+    function test_execute_success_allowsZeroValueWhenLocked() public {
+        (address account,) = _createK1Account(ACTOR_PK);
+        _signedLock(ACTOR_PK, account, 1 hours);
+
+        vm.prank(account);
+        DefaultAccount(payable(account)).execute(address(target), 0, abi.encodeCall(MockTarget.setValue, (99)));
+
+        assertEq(target.value(), 99);
+    }
+
+    // ══════════════════════════════════════════════
     //  isValidSignature — failure returns (0xFFFFFFFF)
     // ══════════════════════════════════════════════
 

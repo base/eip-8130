@@ -5,7 +5,6 @@ import {Script, console} from "forge-std/Script.sol";
 
 import {AccountConfiguration} from "../src/AccountConfiguration.sol";
 import {DefaultAccount} from "../src/accounts/DefaultAccount.sol";
-import {CanonicalHighRatePayerAccount} from "../src/accounts/CanonicalHighRatePayerAccount.sol";
 import {P256Authenticator} from "../src/authenticators/P256Authenticator.sol";
 import {WebAuthnAuthenticator} from "../src/authenticators/WebAuthnAuthenticator.sol";
 import {DelegateAuthenticator} from "../src/authenticators/DelegateAuthenticator.sol";
@@ -23,15 +22,13 @@ bytes32 constant SALT = bytes32(0);
 /// @notice Deploys the full EIP-8130 system: AccountConfiguration, account implementations, canonical
 ///         authenticators, and the unaudited example policy contracts (PolicyManager, SessionPolicy).
 ///
-///         Two account implementations are deployed:
-///           - DefaultAccount                  — the bare building block, deployed standalone as the direct
-///                                                EIP-7702 delegation target for EOAs (no proxy needed; a 7702 EOA
-///                                                can just re-delegate to a new address later, so it needs no UUPS
-///                                                wrapper);
-///           - CanonicalHighRatePayerAccount   — high-rate payer account implementation. Per-account instances are
-///                                                ERC-1167 clones of this address (the same bytecode nodes match for
-///                                                high-rate payer admission). This script logs that 45-byte runtime
-///                                                bytecode (and its keccak256) so nodes can pin it.
+///         One account implementation is deployed:
+///           - DefaultAccount — the canonical EIP-8130 account, deployed standalone as the direct EIP-7702 delegation
+///                              target for EOAs (a 7702 EOA can re-delegate later, so it needs no UUPS wrapper). It is
+///                              also the high-rate payer implementation: it respects the AccountConfiguration lock
+///                              (blocking outbound value while locked), so an ERC-1167 clone of this address is the
+///                              high-rate payer admission path. This script logs that 45-byte runtime bytecode (and
+///                              its keccak256) so nodes can pin it.
 ///
 ///         Example/unaudited account variants (UpgradeableAccount, BackwardsCompatible4337Account) live in a
 ///         separate repository and are not deployed here. PolicyManager / SessionPolicy are UNAUDITED reference
@@ -85,10 +82,6 @@ contract Deploy is Script {
         return abi.encodePacked(type(DefaultAccount).creationCode, abi.encode(accountConfig));
     }
 
-    function _canonicalHighRatePayerInit(address accountConfig) internal pure returns (bytes memory) {
-        return abi.encodePacked(type(CanonicalHighRatePayerAccount).creationCode, abi.encode(accountConfig));
-    }
-
     function _delegateAuthInit(address accountConfig) internal pure returns (bytes memory) {
         return abi.encodePacked(type(DelegateAuthenticator).creationCode, abi.encode(accountConfig));
     }
@@ -105,7 +98,7 @@ contract Deploy is Script {
     function _logHighRatePayerMatchBytecode(address implementation) internal pure {
         bytes memory runtime = _erc1167Runtime(implementation);
         console.log("");
-        console.log("=== CanonicalHighRatePayerAccount ERC-1167 match bytecode (node) ===");
+        console.log("=== DefaultAccount ERC-1167 match bytecode (high-rate payer, node) ===");
         console.log("Implementation:          ", implementation);
         console.log("Runtime bytecode length: ", runtime.length);
         console.log("Runtime bytecode:");
@@ -119,19 +112,18 @@ contract Deploy is Script {
     // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Logs the canonical address of every contract in the system, plus the ERC-1167 runtime
-    ///         bytecode nodes must match for CanonicalHighRatePayerAccount clones.
+    ///         bytecode nodes must match for high-rate payer (DefaultAccount) clones.
     ///         Addresses depend only on the compiler output and SALT — they are
     ///         the same on every chain and are known before deployment.
     function addresses() public pure {
         address accountConfig = _addr(_accountConfigInit());
-        address canonicalHighRatePayer = _addr(_canonicalHighRatePayerInit(accountConfig));
+        address defaultAccount = _addr(_defaultAccountInit(accountConfig));
         address policyManager = _addr(_policyManagerInit(accountConfig));
 
         console.log("AccountConfiguration:    ", accountConfig);
         console.log("");
-        console.log("=== Account implementations ===");
-        console.log("DefaultAccount:          ", _addr(_defaultAccountInit(accountConfig)));
-        console.log("CanonicalHighRatePayerAccount:", canonicalHighRatePayer);
+        console.log("=== Account implementation ===");
+        console.log("DefaultAccount:          ", defaultAccount);
         console.log("");
         console.log("=== Authenticators ===");
         console.log("(secp256k1 is built in: AccountConfiguration.K1_AUTHENTICATOR() == address(1))");
@@ -144,7 +136,7 @@ contract Deploy is Script {
         console.log("PolicyManager:           ", policyManager);
         console.log("SessionPolicy:           ", _addr(_sessionPolicyInit(policyManager)));
 
-        _logHighRatePayerMatchBytecode(canonicalHighRatePayer);
+        _logHighRatePayerMatchBytecode(defaultAccount);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -158,12 +150,11 @@ contract Deploy is Script {
 
         address accountConfig = _create2(_accountConfigInit());
 
-        // ── Account implementations (singletons; every account proxy — and every 7702 EOA — delegates to one) ──
-        //    DefaultAccount is deployed standalone as the direct EIP-7702 delegation target for EOAs.
-        //    CanonicalHighRatePayerAccount is the ERC-1167 high-rate payer implementation singleton.
+        // ── Account implementation (singleton; every account proxy — and every 7702 EOA — delegates to it) ──
+        //    DefaultAccount is deployed standalone as the direct EIP-7702 delegation target for EOAs, and its
+        //    ERC-1167 clone is the high-rate payer admission path.
 
         address defaultAccount = _create2(_defaultAccountInit(accountConfig));
-        address canonicalHighRatePayer = _create2(_canonicalHighRatePayerInit(accountConfig));
 
         // ── Authenticators (secp256k1 is built into AccountConfiguration; no contract to deploy) ──
 
@@ -181,9 +172,8 @@ contract Deploy is Script {
 
         console.log("AccountConfiguration:    ", accountConfig);
         console.log("");
-        console.log("=== Account implementations ===");
+        console.log("=== Account implementation ===");
         console.log("DefaultAccount:          ", defaultAccount);
-        console.log("CanonicalHighRatePayerAccount:", canonicalHighRatePayer);
         console.log("");
         console.log("=== Authenticators ===");
         console.log("(secp256k1 is built in: AccountConfiguration.K1_AUTHENTICATOR() == address(1))");
@@ -197,6 +187,6 @@ contract Deploy is Script {
         console.log("SessionPolicy:           ", sessionPolicy);
 
         // Emit the exact 45-byte ERC-1167 runtime bytecode (and hash) nodes must match for high-rate payers.
-        _logHighRatePayerMatchBytecode(canonicalHighRatePayer);
+        _logHighRatePayerMatchBytecode(defaultAccount);
     }
 }

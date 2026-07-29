@@ -25,6 +25,14 @@ address constant TRUSTED_EXECUTOR = address(uint160(uint256(keccak256("trustedEx
 ///         EIP-8130 chain, expressed in Solidity. It handles batched execution and ERC-1271 signature validation,
 ///         and defers all authorization to the AccountConfiguration system contract.
 ///
+///         High-rate payer by default: while the account is locked in AccountConfiguration, outbound ETH value
+///         transfers are blocked (on both {execute} and {executeBatch}) — the account cannot move its own ETH, so its
+///         only balance decrease is gas. That predictability is what lets mempools admit it as a high-rate payer.
+///         Zero-value calls are unaffected by the lock. High-rate *admission* additionally requires the deployment to
+///         be trusted (e.g. an immutable ERC-1167 clone of this implementation, or an allowlisted implementation),
+///         since a re-delegatable EIP-7702 EOA could otherwise swap this behavior out; that trust is established off
+///         this contract (node allowlist), not enforced here.
+///
 ///         Caller authorization:
 ///           - address(this) is always authorized (hardcoded), covering 8130 self-call batches
 ///           - Trusted executors (PolicyManagers, relayers, EntryPoints) are registered as actors with
@@ -55,6 +63,9 @@ contract DefaultAccount is Receiver {
     /// @notice An inner call in the executed batch reverted.
     error CallFailed();
 
+    /// @notice A call carrying non-zero value was attempted while the account is locked.
+    error AccountLocked();
+
     /// @notice Deploys the account implementation bound to an AccountConfiguration instance.
     /// @param accountConfiguration Address of the AccountConfiguration system contract.
     constructor(address accountConfiguration) {
@@ -65,26 +76,31 @@ contract DefaultAccount is Receiver {
     //  EXECUTION
     // ══════════════════════════════════════════════
 
-    /// @notice Executes a batch of calls from the account; reverts the entire batch if any call fails.
+    /// @notice Executes a batch of calls from the account; reverts the entire batch if any call fails. Outbound value
+    ///         transfers are blocked while the account is locked.
     ///
     /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a TRUSTED_EXECUTOR actor.
+    /// @dev Reverts with AccountLocked when a call carries non-zero value and the account is locked.
     /// @dev Reverts with CallFailed when any inner call reverts.
     ///
     /// @param calls Ordered calls to execute, each as (target, value, data).
     function executeBatch(Call[] calldata calls) external virtual {
         if (!_isAuthorizedCaller(msg.sender)) revert UnauthorizedCaller();
         for (uint256 i; i < calls.length; i++) {
+            if (calls[i].value > 0 && _isLocked()) revert AccountLocked();
             (bool success,) = calls[i].target.call{value: calls[i].value}(calls[i].data);
             if (!success) revert CallFailed();
         }
     }
 
-    /// @notice Executes a single call from the account.
+    /// @notice Executes a single call from the account. An outbound value transfer is blocked while the account is
+    ///         locked.
     ///
     /// @dev Equivalent to a one-element {executeBatch}. Selector-compatible with the widely deployed
     ///      CoinbaseSmartWallet V1 `execute(address,uint256,bytes)` (0xb61d27f6), so integrations that call that ABI
     ///      directly (e.g. SpendPermissionManager) keep working against this account.
     /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a TRUSTED_EXECUTOR actor.
+    /// @dev Reverts with AccountLocked when the call carries non-zero value and the account is locked.
     /// @dev Reverts with CallFailed when the inner call reverts.
     ///
     /// @param target Address the account calls.
@@ -92,6 +108,7 @@ contract DefaultAccount is Receiver {
     /// @param data Calldata passed to `target`.
     function execute(address target, uint256 value, bytes calldata data) external virtual {
         if (!_isAuthorizedCaller(msg.sender)) revert UnauthorizedCaller();
+        if (value > 0 && _isLocked()) revert AccountLocked();
         (bool success,) = target.call{value: value}(data);
         if (!success) revert CallFailed();
     }
@@ -146,5 +163,12 @@ contract DefaultAccount is Receiver {
         if (config.expiry != 0 && block.timestamp > config.expiry) return false;
         uint8 scope = config.scope;
         return scope == 0 || ((scope & SCOPE_SENDER != 0) && (scope & SCOPE_POLICY == 0));
+    }
+
+    /// @dev True if the account is currently locked in AccountConfiguration. While locked, outbound value transfers
+    ///      are blocked so the only balance decrease is gas — the predictability that lets mempools admit the account
+    ///      as a high-rate payer.
+    function _isLocked() internal view returns (bool locked) {
+        (locked,,,) = ACCOUNT_CONFIGURATION.getLockStatus(address(this));
     }
 }
