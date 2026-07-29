@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.36;
 
-import {Proxy} from "openzeppelin/proxy/Proxy.sol";
 import {ERC1967Utils} from "openzeppelin/proxy/ERC1967/ERC1967Utils.sol";
+import {Proxy} from "openzeppelin/proxy/Proxy.sol";
 
 import {AccountConfiguration} from "../AccountConfiguration.sol";
 
@@ -76,6 +76,13 @@ contract EIP7702ProxyFor8130 is Proxy {
     /// @notice The `setImplementation` signature did not authenticate an unrestricted admin (scope 0) of this account.
     error SetImplementationNotAdmin();
 
+    /// @notice Deploys the proxy singleton bound to a registry and a default implementation, optionally pinning the
+    ///         registry codehash.
+    ///
+    /// @dev Reverts with DefaultImplementationNotDeployed when `defaultImplementation` has no deployed code.
+    /// @dev Reverts with RegistryCodehashMismatch when `expectedConfigCodehash` is non-zero and does not match the
+    ///      code at `accountConfiguration`.
+    ///
     /// @param accountConfiguration The AccountConfiguration system contract address.
     /// @param defaultImplementation The implementation used when the ERC-1967 slot is unset (the EIP-8130 account).
     /// @param expectedConfigCodehash Non-zero to pin the registry codehash (non-8130 chains); zero to disable.
@@ -90,6 +97,14 @@ contract EIP7702ProxyFor8130 is Proxy {
     }
 
     /// @notice Force-set the ERC-1967 implementation pointer, authorized by a registry admin (scope-0) signature.
+    ///
+    /// @dev Reverts with SetImplementationFromMismatch when the current ERC-1967 slot does not equal
+    ///      `fromImplementation` (compare-and-swap).
+    /// @dev Reverts with the bubbled AccountConfiguration reason when `auth` does not authenticate a live actor of
+    ///      this account.
+    /// @dev Reverts with SetImplementationNotAdmin when the authenticated actor is not an unrestricted admin
+    ///      (scope != 0).
+    /// @dev Reverts with ERC1967InvalidImplementation when `toImplementation` has no deployed code.
     ///
     /// @dev The one behavior this proxy owns. It covers the two states a normal UUPS upgrade cannot reach: pointing a
     ///      fresh delegation at a specific (non-default) implementation, and recovering the pointer after another

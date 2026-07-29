@@ -258,34 +258,74 @@ contract DefaultAccountTest is AccountConfigurationTest {
     // ══════════════════════════════════════════════
 
     /// @notice A value-bearing call reverts while the account is locked; the only balance decrease is gas.
-    function test_executeBatch_revert_blocksETHWhenLocked() public {
+    /// @dev Covers the `value > 0 && _isLocked()` branch inside the loop; fuzzes the outbound value above zero.
+    function test_executeBatch_revert_blocksETHWhenLocked(uint256 value) public {
         (address account,) = _createK1Account(ACTOR_PK);
-        vm.deal(account, 1 ether);
+        value = bound(value, 1, 1e24);
+        vm.deal(account, value);
         _signedLock(ACTOR_PK, account, 1 hours);
 
         vm.prank(account);
         vm.expectRevert(DefaultAccount.AccountLocked.selector);
         DefaultAccount(payable(account))
-            .executeBatch(_singleCall(address(target), 0.1 ether, abi.encodeCall(MockTarget.setValue, (1))));
+            .executeBatch(_singleCall(address(target), value, abi.encodeCall(MockTarget.setValue, (1))));
     }
 
     /// @notice Zero-value calls are unaffected by the lock.
-    function test_executeBatch_success_allowsZeroValueWhenLocked() public {
+    /// @dev Covers the `value == 0` path skipping the AccountLocked check while locked; fuzzes the stored value.
+    function test_executeBatch_success_allowsZeroValueWhenLocked(uint256 v) public {
         (address account,) = _createK1Account(ACTOR_PK);
         _signedLock(ACTOR_PK, account, 1 hours);
 
         vm.prank(account);
         DefaultAccount(payable(account))
-            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (99))));
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (v))));
 
-        assertEq(target.value(), 99);
+        assertEq(target.value(), v);
     }
 
     // ══════════════════════════════════════════════
     //  execute (single call)
     // ══════════════════════════════════════════════
 
+    /// @notice An unauthorized caller cannot drive execute.
+    /// @dev Exercises the false leg of `_isAuthorizedCaller(msg.sender)`; fuzzes the caller.
+    function test_execute_revert_unauthorizedCaller(address caller) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+        vm.assume(caller != account);
+
+        vm.prank(caller);
+        vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
+        DefaultAccount(payable(account)).execute(address(target), 0, abi.encodeCall(MockTarget.setValue, (1)));
+    }
+
+    /// @notice A value-bearing execute reverts while the account is locked.
+    /// @dev Covers the `value > 0 && _isLocked()` branch; fuzzes the outbound value above zero.
+    function test_execute_revert_blocksETHWhenLocked(uint256 value) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+        value = bound(value, 1, 1e24);
+        vm.deal(account, value);
+        _signedLock(ACTOR_PK, account, 1 hours);
+
+        vm.prank(account);
+        vm.expectRevert(DefaultAccount.AccountLocked.selector);
+        DefaultAccount(payable(account)).execute(address(target), value, abi.encodeCall(MockTarget.setValue, (1)));
+    }
+
+    /// @notice A failing inner call reverts execute.
+    /// @dev Exercises the false leg of the low-level call success check; fuzzes the value carried by the failing call.
+    function test_execute_revert_failedInnerCall(uint256 value) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+        value = bound(value, 0, 1e24);
+        vm.deal(account, value);
+
+        vm.prank(account);
+        vm.expectRevert(DefaultAccount.CallFailed.selector);
+        DefaultAccount(payable(account)).execute(address(target), value, abi.encodeCall(MockTarget.reverting, ()));
+    }
+
     /// @notice The account calling itself executes a single call.
+    /// @dev Covers the `caller == address(this)` branch and one successful call; fuzzes the stored value.
     function test_execute_success_selfCaller(uint256 v) public {
         (address account,) = _createK1Account(ACTOR_PK);
 
@@ -296,6 +336,7 @@ contract DefaultAccountTest is AccountConfigurationTest {
     }
 
     /// @notice execute forwards ETH value to the target.
+    /// @dev Fuzzes the forwarded amount bounded to the account balance; confirms `call{value:}` wiring.
     function test_execute_success_withETHValue(uint256 amount) public {
         (address account,) = _createK1Account(ACTOR_PK);
         amount = bound(amount, 0, 1e30);
@@ -308,45 +349,16 @@ contract DefaultAccountTest is AccountConfigurationTest {
         assertEq(target.value(), 7);
     }
 
-    /// @notice An unauthorized caller cannot drive execute.
-    function test_execute_revert_unauthorizedCaller(address caller) public {
-        (address account,) = _createK1Account(ACTOR_PK);
-        vm.assume(caller != account);
-
-        vm.prank(caller);
-        vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
-        DefaultAccount(payable(account)).execute(address(target), 0, abi.encodeCall(MockTarget.setValue, (1)));
-    }
-
-    /// @notice A failing inner call reverts execute.
-    function test_execute_revert_failedInnerCall() public {
-        (address account,) = _createK1Account(ACTOR_PK);
-
-        vm.prank(account);
-        vm.expectRevert(DefaultAccount.CallFailed.selector);
-        DefaultAccount(payable(account)).execute(address(target), 0, abi.encodeCall(MockTarget.reverting, ()));
-    }
-
-    /// @notice A value-bearing execute reverts while the account is locked.
-    function test_execute_revert_blocksETHWhenLocked() public {
-        (address account,) = _createK1Account(ACTOR_PK);
-        vm.deal(account, 1 ether);
-        _signedLock(ACTOR_PK, account, 1 hours);
-
-        vm.prank(account);
-        vm.expectRevert(DefaultAccount.AccountLocked.selector);
-        DefaultAccount(payable(account)).execute(address(target), 0.1 ether, abi.encodeCall(MockTarget.setValue, (1)));
-    }
-
     /// @notice A zero-value execute is unaffected by the lock.
-    function test_execute_success_allowsZeroValueWhenLocked() public {
+    /// @dev Covers the `value == 0` path skipping the AccountLocked check while locked; fuzzes the stored value.
+    function test_execute_success_allowsZeroValueWhenLocked(uint256 v) public {
         (address account,) = _createK1Account(ACTOR_PK);
         _signedLock(ACTOR_PK, account, 1 hours);
 
         vm.prank(account);
-        DefaultAccount(payable(account)).execute(address(target), 0, abi.encodeCall(MockTarget.setValue, (99)));
+        DefaultAccount(payable(account)).execute(address(target), 0, abi.encodeCall(MockTarget.setValue, (v)));
 
-        assertEq(target.value(), 99);
+        assertEq(target.value(), v);
     }
 
     // ══════════════════════════════════════════════

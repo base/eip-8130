@@ -45,16 +45,16 @@ contract EIP7702ProxyFor8130Test is AccountConfigurationTest {
     }
 
     // ─────────────────────────────────────────────────────────────
-    //  Fresh delegation is immediately functional via the hardcoded default (no bootstrap call)
+    //  Fallback delegation: fresh 7702 delegation runs the hardcoded default (no bootstrap call)
     // ─────────────────────────────────────────────────────────────
 
-    function test_freshDelegation_slotEmpty_runsDefaultImplementation() public view {
+    /// @notice Verifies a fresh delegation (empty ERC-1967 slot) resolves and runs {DEFAULT_IMPLEMENTATION}.
+    /// @dev With the slot unset, _implementation falls back to the default; ERC-1271 forwards there and the EOA's own
+    ///      key validates as its implicit scope-0 admin. Signs the account-scoped replaySafeHash; fuzzes the digest.
+    function test_fallback_success_freshDelegationUsesDefaultImplementation(bytes32 hash) public view {
         assertEq(_slot(), address(0), "fresh delegation: ERC-1967 slot is unset");
         assertEq(EIP7702ProxyFor8130(account).DEFAULT_IMPLEMENTATION(), impl, "default is the EIP-8130 account impl");
 
-        // ERC-1271 forwards to the default impl -> AccountConfiguration; the EOA's own key is its implicit admin.
-        // verifySignature applies the account-scoped EIP-7739 wrap, so sign the replaySafeHash digest.
-        bytes32 hash = keccak256("hello from a fresh 7702 account");
         assertEq(
             DefaultAccount(account)
                 .isValidSignature(hash, _buildK1Auth(ADMIN_PK, accountConfiguration.replaySafeHash(account, hash))),
@@ -67,24 +67,22 @@ contract EIP7702ProxyFor8130Test is AccountConfigurationTest {
     //  setImplementation: registry-gated, compare-and-swap
     // ─────────────────────────────────────────────────────────────
 
-    function test_setImplementation_bootstrapFromZero() public {
+    /// @notice Verifies setImplementation reverts when the signed `fromImplementation` does not match the live slot.
+    /// @dev Compare-and-swap guard: checks SetImplementationFromMismatch for any wrong-from pointer. Fuzzes the
+    ///      mismatched from-pointer (excluding the real fresh-slot value address(0)).
+    function test_setImplementation_revert_casMismatch(address wrongFrom) public {
+        vm.assume(wrongFrom != address(0));
         address impl2 = address(new DefaultAccount(address(accountConfiguration)));
-
-        EIP7702ProxyFor8130(account).setImplementation(address(0), impl2, _setImplAuth(ADMIN_PK, address(0), impl2));
-
-        assertEq(_slot(), impl2, "explicit bootstrap sets the ERC-1967 slot to the chosen implementation");
-    }
-
-    function test_setImplementation_casMismatchReverts() public {
-        address impl2 = address(new DefaultAccount(address(accountConfiguration)));
-        address wrongFrom = makeAddr("wrongFrom");
 
         vm.expectRevert(EIP7702ProxyFor8130.SetImplementationFromMismatch.selector);
         EIP7702ProxyFor8130(account).setImplementation(wrongFrom, impl2, _setImplAuth(ADMIN_PK, wrongFrom, impl2));
     }
 
-    function test_setImplementation_rejectsNonAdmin() public {
-        uint256 senderPk = 0x5E9DE2; // SCOPE_SENDER only: operational, but not admin
+    /// @notice Verifies setImplementation reverts when the authenticated actor is operational but not an admin.
+    /// @dev Checks SetImplementationNotAdmin for a SENDER-only (scope != 0) actor. Fuzzes the non-admin signer key.
+    function test_setImplementation_revert_nonAdmin(uint256 senderSeed) public {
+        uint256 senderPk = _boundK1Pk(senderSeed);
+        vm.assume(vm.addr(senderPk) != account); // not the account's implicit admin
         _registerActor(bytes32(bytes20(vm.addr(senderPk))), k1Authenticator, SCOPE_SENDER);
         address impl2 = address(new DefaultAccount(address(accountConfiguration)));
 
@@ -92,22 +90,34 @@ contract EIP7702ProxyFor8130Test is AccountConfigurationTest {
         EIP7702ProxyFor8130(account).setImplementation(address(0), impl2, _setImplAuth(senderPk, address(0), impl2));
     }
 
-    function test_setImplementation_rejectsUnregisteredKey() public {
+    /// @notice Verifies setImplementation reverts when signed by a key that is not a registered actor.
+    /// @dev authenticateActor reverts for an unregistered actorId; that bubbles up as a top-level revert. Fuzzes the
+    ///      unregistered signer key (excluding the account's own implicit-admin key).
+    function test_setImplementation_revert_unregisteredKey(uint256 keySeed) public {
+        uint256 pk = _boundK1Pk(keySeed);
+        vm.assume(vm.addr(pk) != account);
         address impl2 = address(new DefaultAccount(address(accountConfiguration)));
-        // 0xBEEF is neither the account's own key nor a registered actor: authenticateActor reverts, caught as failure.
+
         vm.expectRevert();
-        EIP7702ProxyFor8130(account).setImplementation(address(0), impl2, _setImplAuth(0xBEEF, address(0), impl2));
+        EIP7702ProxyFor8130(account).setImplementation(address(0), impl2, _setImplAuth(pk, address(0), impl2));
     }
 
-    // ─────────────────────────────────────────────────────────────
-    //  Recovery: reset a corrupted ERC-1967 pointer (the A->B->A / 7702 slipperiness case)
-    // ─────────────────────────────────────────────────────────────
+    /// @notice Verifies an admin signature bootstraps the ERC-1967 slot from the fresh (zero) state.
+    /// @dev First explicit set signs `fromImplementation == address(0)`; asserts the slot points at the chosen impl.
+    function test_setImplementation_success_bootstrapFromZero() public {
+        address impl2 = address(new DefaultAccount(address(accountConfiguration)));
 
-    /// @dev Simulates an intervening delegate leaving a foreign/garbage value in the shared ERC-1967 slot. A normal
-    ///      UUPS upgrade cannot recover (its logic lives in whatever the slot points at); the proxy's first-class
-    ///      `setImplementation` can, because it is never forwarded.
-    function test_setImplementation_recoversCorruptedPointer() public {
-        address garbage = makeAddr("foreignWalletImpl"); // codeless: a normal delegatecall through here is broken
+        EIP7702ProxyFor8130(account).setImplementation(address(0), impl2, _setImplAuth(ADMIN_PK, address(0), impl2));
+
+        assertEq(_slot(), impl2, "explicit bootstrap sets the ERC-1967 slot to the chosen implementation");
+    }
+
+    /// @notice Verifies setImplementation recovers a slot corrupted to a foreign/garbage pointer.
+    /// @dev Simulates an intervening delegate leaving garbage in the shared ERC-1967 slot. A normal UUPS upgrade
+    ///      cannot recover (its logic lives in whatever the slot points at); the first-class setImplementation can,
+    ///      because it is never forwarded. Fuzzes the codeless garbage pointer and the post-recovery digest.
+    function test_setImplementation_success_recoversCorruptedPointer(address garbage, bytes32 hash) public {
+        vm.assume(garbage != address(0) && garbage != impl && garbage.code.length == 0);
         vm.store(account, ERC1967_IMPLEMENTATION_SLOT, bytes32(uint256(uint160(garbage))));
         assertEq(_slot(), garbage, "precondition: slot corrupted to a foreign pointer");
 
@@ -116,7 +126,6 @@ contract EIP7702ProxyFor8130Test is AccountConfigurationTest {
         assertEq(_slot(), impl, "setImplementation resets the pointer to a known-good implementation");
 
         // Forwarding works again after recovery.
-        bytes32 hash = keccak256("post-recovery");
         assertEq(
             DefaultAccount(account)
                 .isValidSignature(hash, _buildK1Auth(ADMIN_PK, accountConfiguration.replaySafeHash(account, hash))),
@@ -126,19 +135,18 @@ contract EIP7702ProxyFor8130Test is AccountConfigurationTest {
     }
 
     // ─────────────────────────────────────────────────────────────
-    //  No ecrecover/EOA fallback: ERC-1271 authority is exactly the registry's (the EIP7702Proxy contrast)
+    //  isValidSignature: no ecrecover/EOA fallback (the EIP7702Proxy contrast)
     // ─────────────────────────────────────────────────────────────
 
-    /// @dev Points the account at an implementation whose isValidSignature always rejects, then presents a signature
-    ///      by the account's OWN key. `EIP7702Proxy` would return the ERC-1271 magic value here via its `ecrecover`
-    ///      fallback (the sig recovers to the account); this proxy has no such fallback, so the implementation's
-    ///      rejection stands.
-    function test_noEcrecoverFallback_registryIsSoleSignatureAuthority() public {
+    /// @notice Verifies ERC-1271 has no ecrecover/EOA fallback: the implementation's answer is final.
+    /// @dev Points the account at an always-rejecting implementation, then presents a raw signature by the account's
+    ///      OWN key. `EIP7702Proxy` would return the magic value via its ecrecover fallback; this proxy has none, so
+    ///      the rejection stands. Fuzzes the signed digest.
+    function test_isValidSignature_success_noEcrecoverFallback(bytes32 hash) public {
         address rejecting = address(new RejectingImpl());
         EIP7702ProxyFor8130(account)
             .setImplementation(address(0), rejecting, _setImplAuth(ADMIN_PK, address(0), rejecting));
 
-        bytes32 hash = keccak256("would an EOA fallback accept this?");
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(ADMIN_PK, hash); // raw ECDSA by the account's own key
         bytes memory rawEoaSig = abi.encodePacked(r, s, v);
 
@@ -153,17 +161,26 @@ contract EIP7702ProxyFor8130Test is AccountConfigurationTest {
     //  Constructor safety (parity with the account / factory)
     // ─────────────────────────────────────────────────────────────
 
-    function test_constructor_rejectsCodelessDefaultImplementation() public {
+    /// @notice Verifies the constructor reverts when the default implementation has no deployed code.
+    /// @dev Checks DefaultImplementationNotDeployed. Fuzzes the codeless default-implementation address.
+    function test_constructor_revert_codelessDefaultImplementation(address undeployed) public {
+        vm.assume(undeployed.code.length == 0);
         vm.expectRevert(EIP7702ProxyFor8130.DefaultImplementationNotDeployed.selector);
-        new EIP7702ProxyFor8130(address(accountConfiguration), makeAddr("undeployed"), bytes32(0));
+        new EIP7702ProxyFor8130(address(accountConfiguration), undeployed, bytes32(0));
     }
 
-    function test_constructor_codehashPin_wrongHashReverts() public {
+    /// @notice Verifies the constructor reverts when a non-zero codehash pin does not match the registry code.
+    /// @dev Checks RegistryCodehashMismatch. Fuzzes the wrong pinned codehash (excluding zero, which disables the pin,
+    ///      and the registry's real codehash).
+    function test_constructor_revert_codehashPinMismatch(bytes32 wrongCodehash) public {
+        vm.assume(wrongCodehash != bytes32(0) && wrongCodehash != address(accountConfiguration).codehash);
         vm.expectRevert(EIP7702ProxyFor8130.RegistryCodehashMismatch.selector);
-        new EIP7702ProxyFor8130(address(accountConfiguration), impl, keccak256("malicious registry"));
+        new EIP7702ProxyFor8130(address(accountConfiguration), impl, wrongCodehash);
     }
 
-    function test_constructor_codehashPin_matchingHashSucceeds() public {
+    /// @notice Verifies the constructor succeeds and stores the pin when the codehash matches the registry code.
+    /// @dev Asserts ACCOUNT_CONFIGURATION_CODEHASH is set to the supplied (matching) codehash.
+    function test_constructor_success_codehashPinMatches() public {
         bytes32 codehash = address(accountConfiguration).codehash;
         EIP7702ProxyFor8130 pinned = new EIP7702ProxyFor8130(address(accountConfiguration), impl, codehash);
         assertEq(pinned.ACCOUNT_CONFIGURATION_CODEHASH(), codehash);
