@@ -20,8 +20,10 @@ address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak2
 
 /// @title PolicyManager
 ///
-/// @notice Minimal, self-contained reference policy manager for EIP-8130 actor policies. It resolves the acting
-///         identity from the transaction-context precompile, so it is only meant for use on EIP-8130 chains.
+/// @notice Minimal, self-contained reference policy manager for EIP-8130 actor policies. The account-acting {execute}
+///         path (direct protocol dispatch from the account itself) resolves identity from the transaction-context
+///         precompile, so it is only usable on EIP-8130 chains; the external-caller {executeFor} / {executeForMany}
+///         paths derive identity from `msg.sender` and work on any chain.
 ///
 /// @dev Role in the EIP-8130 flow:
 ///      - The manager is registered as an execution-enabled actor on the account (an actor whose authenticator is
