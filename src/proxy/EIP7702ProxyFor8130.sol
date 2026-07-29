@@ -39,9 +39,6 @@ import {AccountConfiguration} from "../AccountConfiguration.sol";
 ///      caught here and never forwarded. The implementation must not define a colliding selector, or that function
 ///      would become unreachable through the proxy.
 ///
-/// @dev Unaudited example. Provided in this repository so the EIP-7702 delegation pattern can be reviewed alongside
-///      the accounts it delegates to; not a protocol system contract.
-///
 /// @author Coinbase
 contract EIP7702ProxyFor8130 is Proxy {
     /// @notice The AccountConfiguration system contract used to authenticate {setImplementation} signatures.
