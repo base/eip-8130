@@ -223,75 +223,7 @@ contract PolicyManagerTest is AccountConfigurationTest {
         manager.execute(_binding(1), _action());
     }
 
-    // ── Acting-actor resolution: precompile vs account-exposed context ──
-
-    function test_execute_resolvesViaAccountExposedContext() public {
-        // Off-8130 (no precompile): the account publishes the acting actorId on its own {ITransactionContext}
-        // surface, and the manager resolves it from there — no protocol dispatch required.
-        bytes32 actorId = _installSession(1);
-        PolicyManager.PolicyBinding memory binding = _binding(1);
-        bytes32 commitment = manager.commitmentOf(binding);
-
-        // Intentionally do NOT mock the precompile (its STATICCALL returns nothing). Expose the actor on the account.
-        vm.mockCall(
-            account,
-            abi.encodeWithSelector(ITransactionContext.getTransactionSenderActorId.selector),
-            abi.encode(actorId)
-        );
-
-        vm.expectEmit(true, true, true, true);
-        emit PolicyManager.PolicyExecuted(account, address(policy), commitment, account);
-        vm.prank(account);
-        manager.execute(binding, _action());
-    }
-
-    function test_execute_precompilePrecedesAccountExposedContext() public {
-        // When both are present the protocol precompile wins; the account-exposed context is a fallback only. The
-        // account advertises a DIFFERENT, unauthorized actor — if it were consulted resolution would fail.
-        bytes32 actorId = _installSession(1);
-        PolicyManager.PolicyBinding memory binding = _binding(1);
-        bytes32 commitment = manager.commitmentOf(binding);
-
-        _mockActingActor(actorId);
-        vm.mockCall(
-            account,
-            abi.encodeWithSelector(ITransactionContext.getTransactionSenderActorId.selector),
-            abi.encode(keccak256("unauthorized-actor"))
-        );
-
-        vm.expectEmit(true, true, true, true);
-        emit PolicyManager.PolicyExecuted(account, address(policy), commitment, account);
-        vm.prank(account);
-        manager.execute(binding, _action());
-    }
-
-    function test_execute_enforcesActorExpiry() public {
-        // execute() enforces actor expiry locally, covering the off-8130 fallback path (which carries no protocol
-        // authentication and so cannot rely on the protocol's pre-dispatch expiry check).
-        uint48 expiry = uint48(block.timestamp + 1 days);
-        bytes32 actorId = _installSessionWithExpiry(1, expiry);
-        _mockActingActor(actorId);
-
-        vm.warp(uint256(expiry) + 1);
-        vm.expectRevert(abi.encodeWithSelector(PolicyManager.ActorExpired.selector, actorId));
-        vm.prank(account);
-        manager.execute(_binding(1), _action());
-    }
-
-    function test_execute_revertsForActorGatedToDifferentManager() public {
-        // The resolved actor is gated (policy_manager) to a DIFFERENT manager. Even if its commitment matched the
-        // presented binding, execute() must refuse: it is not this manager's actor to drive.
-        PolicyManager otherManager = new PolicyManager(address(accountConfiguration));
-        bytes32 actorId = _sessionActorId(42);
-        PolicyManager.PolicyBinding memory binding = _binding(42);
-        // Authorize the actor with its policy gated to `otherManager`, not `manager`.
-        _authorizePolicyActorForManager(actorId, address(otherManager), manager.commitmentOf(binding));
-        _mockActingActor(actorId);
-
-        vm.expectRevert(abi.encodeWithSelector(PolicyManager.NoActivePolicy.selector, actorId));
-        vm.prank(account);
-        manager.execute(binding, _action());
-    }
+    // ── Reentrancy ──
 
     function test_execute_reentrancy_directReenterReverts() public {
         // A malicious policy re-enters execute() from its own hook; the shared reentrancy guard blocks it.
@@ -408,24 +340,6 @@ contract PolicyManagerTest is AccountConfigurationTest {
             authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: expiry
         });
         bytes memory policyData = abi.encodePacked(address(manager), commitment);
-
-        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
-        changes[0] = AccountConfiguration.ActorChange({
-            actorId: actorId, changeType: AUTHORIZE_ACTOR, data: abi.encode(cfg, policyData)
-        });
-
-        uint64 chainId = uint64(block.chainid);
-        uint64 sequence = accountConfiguration.getChangeSequences(account).local;
-        bytes32 digest = _computeActorChangeBatchDigest(account, chainId, sequence, changes);
-        accountConfiguration.applySignedActorChanges(account, chainId, changes, _buildK1Auth(ROOT_PK, digest));
-    }
-
-    /// @dev Authorizes a policy-gated actor on `account` whose policy is gated to an arbitrary `policyManager`
-    ///      (not necessarily the manager under test), used to exercise the manager-match confinement check.
-    function _authorizePolicyActorForManager(bytes32 actorId, address policyManager, bytes32 commitment) internal {
-        AccountConfiguration.ActorConfig memory cfg =
-            AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: 0});
-        bytes memory policyData = abi.encodePacked(policyManager, commitment);
 
         AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
         changes[0] = AccountConfiguration.ActorChange({

@@ -32,10 +32,12 @@ address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak2
 ///        (routed through the account) can invoke {execute}.
 ///
 ///      Acting models and entrypoints:
-///      - {execute}: the *account itself* acts (a gated session key dispatched by the protocol as the account, or an
-///        ERC-4337 EntryPoint driving the account). The acting identity is resolved from the transaction-context
-///        precompile on an 8130 chain, and off-8130 (e.g. ERC-4337 only) from the account's own {ITransactionContext}
-///        read surface; either way `account == msg.sender`. See {_resolveActorId}.
+///      - {execute}: the *account itself* acts — a policy-gated session key that the EIP-8130 protocol dispatches as
+///        the account. The acting identity is read from the transaction-context precompile and `account == msg.sender`.
+///        Policies are 8130-native ONLY: there is deliberately no ERC-4337 / off-8130 policy path. A policy-gated key
+///        carrying a PAYER scope cannot be safely confined under 4337 (nothing forces it onto its own actorId), so the
+///        manager will not accept an account-attested identity; where the precompile is absent the acting actorId is
+///        unavailable and {execute} simply fails.
 ///      - {executeFor} / {executeForMany}: an *external caller* acts on behalf of one or more accounts that authorized
 ///        it (e.g. a subscription provider pulling from many accounts in one transaction). Identity is the caller
 ///        itself (`actorId == bytes20(msg.sender)`) and `account` comes from the supplied binding.
@@ -55,8 +57,8 @@ address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak2
 ///      {execute} with that target's binding and would otherwise resolve identity. Do not "optimize" the
 ///      entrypoints onto separate reentrancy guards.
 ///
-///      Scope: account-acting {execute} (transaction-context precompile on 8130, else the account-exposed context)
-///      and external-caller {executeFor} / {executeForMany}.
+///      Scope: account-acting {execute} (transaction-context precompile; 8130-native only) and external-caller
+///      {executeFor} / {executeForMany}.
 contract PolicyManager is ReentrancyGuard {
     using Address for address;
 
@@ -118,21 +120,22 @@ contract PolicyManager is ReentrancyGuard {
     /// @notice Exercises a policy authorized by the account's signed commitment and forwards the resulting call plan
     ///         to the account.
     ///
-    /// @dev The acting identity comes from the transaction context, not from the caller's calldata. On an 8130 chain,
-    ///      reaching this function as a protocol-dispatched call proves this manager is the acting key's configured
-    ///      gate, and {_resolveActorId} reads the actor from the transaction-context precompile. Off-8130 (e.g. an
-    ///      ERC-4337-only chain) the precompile is absent, so {_resolveActorId} falls back to the account's own
-    ///      {ITransactionContext} surface: the account authenticates the acting key itself (e.g. in `validateUserOp`)
-    ///      and publishes its `actorId` for the confined execution window. Either way the account is `msg.sender`; the
-    ///      caller supplies the full {PolicyBinding}, and recomputing its commitment against the live signed commitment
-    ///      authenticates config, validity window, and owning account in one check. The resolved actor is also
-    ///      required to be non-zero and gated to THIS manager (`policy_manager == address(this)`) — redundant on a
-    ///      protocol-dispatched 8130 call but load-bearing on the account-resolved (off-8130) path.
+    /// @dev Identity comes from the protocol, not the caller. Reaching this function as a dispatched call proves this
+    ///      manager is the acting key's configured gate. The manager reads the acting `actorId` from the
+    ///      transaction-context precompile and takes the account from `msg.sender`. The caller supplies the full
+    ///      {PolicyBinding}; recomputing its commitment and comparing to the live signed commitment authenticates
+    ///      config, validity window, and owning account in one check.
     ///
-    ///      Actor expiry IS enforced here. The off-8130 fallback carries no protocol authentication, so the manager
-    ///      checks expiry itself rather than trusting the account to have done so. On an 8130 chain this duplicates the
-    ///      protocol's own pre-dispatch expiry check for the cost of one SLOAD — accepted to keep a single, uniformly
-    ///      safe execution path across both chain kinds.
+    ///      8130-native only: there is deliberately no ERC-4337 / off-8130 policy path. The manager does not accept an
+    ///      account-attested identity (a PAYER-scoped session key cannot be confined under 4337), so where the
+    ///      transaction-context precompile is absent the acting `actorId` is `0` and this call reverts {NoActivePolicy}.
+    ///
+    ///      Actor expiry is not re-checked here: protocol authentication already rejects expired actors before
+    ///      dispatch. `AccountConfiguration._authenticate` reverts `ActorExpired`, so a protocol-dispatched call's
+    ///      sender actor was expiry-checked at authentication in the same transaction (same `block.timestamp`, so
+    ///      no gap), and any non-dispatched call yields `actorId == 0` → {NoActivePolicy}. This trades defense-in-depth
+    ///      for one SLOAD; soundness rests on the spec-level invariant that every conforming implementation enforces
+    ///      expiry at authentication. {executeFor} retains a local expiry check because it has no protocol auth.
     ///
     /// @param binding       Full account-authorized binding (config + window + salt).
     /// @param executionData Per-use action parameters interpreted by the policy.
@@ -140,21 +143,13 @@ contract PolicyManager is ReentrancyGuard {
         address account = msg.sender;
         if (binding.account != account) revert InvalidBindingAccount(account, binding.account);
 
-        bytes32 actorId = _resolveActorId(account);
-        // bytes32(0) is the "no acting actor" sentinel from {_resolveActorId}; never treat it as a real actor.
-        if (actorId == bytes32(0)) revert NoActivePolicy(actorId);
-        // Registry-consistency / confinement: the resolved actor must be gated to THIS manager. On a protocol-
-        // dispatched 8130 call the 8130 gate already guarantees this; off-8130 (account-resolved identity) it is the
-        // load-bearing check — the external paths enforce the same. Without it, an actor gated to a *different*
-        // manager whose commitment happens to match the presented binding could be driven through this manager.
-        if (ACCOUNT_CONFIGURATION.getPolicyManager(account, actorId) != address(this)) revert NoActivePolicy(actorId);
-
+        bytes32 actorId = _actingActorId();
         bytes32 commitment = _commitment(binding);
         bytes32 signed = ACCOUNT_CONFIGURATION.getPolicyCommitment(account, actorId);
         if (signed == bytes32(0)) revert NoActivePolicy(actorId);
         if (signed != commitment) revert BindingCommitmentMismatch(signed, commitment);
 
-        _requireNotExpired(account, actorId);
+        // No manager-match / expiry checks here — see @dev above. The external entrypoints below re-add both.
         _enforce(binding, commitment, executionData, account);
     }
 
@@ -260,36 +255,15 @@ contract PolicyManager is ReentrancyGuard {
         emit PolicyExecuted(account, binding.policy, commitment, caller);
     }
 
-    /// @dev Resolves the acting actorId for an account-acting {execute}. First reads the EIP-8130 transaction-context
-    ///      precompile, which the protocol populates while dispatching a transaction's calls on an 8130 chain. Off-8130
-    ///      the precompile is absent and the STATICCALL yields no data, so it falls back to the account's own
-    ///      {ITransactionContext} read surface: the account publishes the acting actorId under the SAME selector the
-    ///      precompile uses, so the manager imposes no ABI on the account and the account never learns this manager's
-    ///      ABI. Both reads are graceful low-level STATICCALLs: an inactive precompile or an account that does not
-    ///      expose the tx-context surface simply yields bytes32(0) (no acting actor) rather than reverting, so a call
-    ///      outside any confined policy window is surfaced uniformly by callers as {NoActivePolicy}. A non-zero actor
-    ///      is not trusted on its own — {execute} additionally rejects bytes32(0), requires the actor be gated to this
-    ///      manager, binds it to a live signed commitment, and enforces expiry. The return is accepted only when it is
-    ///      exactly 32 bytes, so a malformed (e.g. 33-byte) return degrades to "no actor" instead of reverting decode.
-    ///
-    ///      SECURITY (off-8130): trusting the account-resolved actorId assumes the account (msg.sender) publishes a
-    ///      nonzero actorId ONLY inside a confined, already-authenticated execution window and that untrusted callers
-    ///      cannot forge or leave it set. That account-side surface is a separate, not-yet-merged prototype; a human
-    ///      auditor must verify those invariants before this path is relied on in production.
-    ///
-    /// @param account The account to consult for the account-exposed context when the precompile is inactive.
-    ///
-    /// @return actorId The resolved acting actorId, or bytes32(0) if none is available.
-    function _resolveActorId(address account) internal view returns (bytes32 actorId) {
+    /// @dev Reads the authenticated actor of the in-flight EIP-8130 transaction from the transaction-context
+    ///      precompile. Outside a protocol-dispatched call (and on any chain without the precompile) the STATICCALL
+    ///      yields no data and this returns bytes32(0); the manager has no other identity source, so such calls fail
+    ///      as {NoActivePolicy}. Accepts the return only when it is exactly 32 bytes.
+    function _actingActorId() internal view returns (bytes32 actorId) {
         (bool ok, bytes memory ret) = TX_CONTEXT_ADDRESS.staticcall(
             abi.encodeWithSelector(ITransactionContext.getTransactionSenderActorId.selector)
         );
         if (ok && ret.length == 32) actorId = abi.decode(ret, (bytes32));
-        if (actorId == bytes32(0)) {
-            (ok, ret) =
-                account.staticcall(abi.encodeWithSelector(ITransactionContext.getTransactionSenderActorId.selector));
-            if (ok && ret.length == 32) actorId = abi.decode(ret, (bytes32));
-        }
     }
 
     function _commitment(PolicyBinding calldata binding) internal pure returns (bytes32) {
