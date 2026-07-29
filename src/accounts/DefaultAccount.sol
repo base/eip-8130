@@ -96,9 +96,7 @@ contract DefaultAccount is Receiver {
     /// @notice Executes a single call from the account. An outbound value transfer is blocked while the account is
     ///         locked.
     ///
-    /// @dev Equivalent to a one-element {executeBatch}. Selector-compatible with the widely deployed
-    ///      CoinbaseSmartWallet V1 `execute(address,uint256,bytes)` (0xb61d27f6), so integrations that call that ABI
-    ///      directly (e.g. SpendPermissionManager) keep working against this account.
+    /// @dev Equivalent to a one-element {executeBatch}.
     /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a TRUSTED_EXECUTOR actor.
     /// @dev Reverts with AccountLocked when the call carries non-zero value and the account is locked.
     /// @dev Reverts with CallFailed when the inner call reverts.
