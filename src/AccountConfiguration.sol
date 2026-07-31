@@ -436,14 +436,17 @@ contract AccountConfiguration {
         emit AccountCreated(account, userSalt, keccak256(bytecode));
     }
 
-    /// @notice Imports an existing account (which must have bytecode) into AccountConfiguration management via an
-    ///         ERC-1271 signature over a typed import digest. The implicit default-EOA key is disabled after import.
+    /// @notice Imports an existing account (which must have bytecode) into AccountConfiguration management. The
+    ///         implicit default-EOA key is disabled after import.
     ///
+    /// @dev Authorized either by an ERC-1271 signature the account validates over the import digest, or by the
+    ///      account self-calling.
     /// @dev Uses a custom (non-EIP-712) digest to partially mitigate eth_signTypedData phishing.
     /// @dev Reverts with AccountIsLocked when the account is locked.
     /// @dev Reverts with InvalidChainId when `chainId` is neither 0 (multichain) nor the current chain.
     /// @dev Reverts with AlreadyInitialized when the account already has EIP-8130 state.
-    /// @dev Reverts with InvalidImportSignature when the account's ERC-1271 check does not return the magic value.
+    /// @dev Reverts with InvalidImportSignature when the signature path is taken and the account's ERC-1271 check
+    ///      does not return the magic value.
     /// @dev Reverts with NoInitialActors when `initialActors` is empty.
     /// @dev Reverts with ActorsNotSortedOrDuplicate when `initialActors` is not strictly ascending by actorId.
     /// @dev Reverts with InvalidAuthenticator when an initial actor names a zero authenticator.
@@ -452,7 +455,8 @@ contract AccountConfiguration {
     /// @param chainId Replay domain of the import signature: 0 = multichain (valid on every chain), otherwise it
     ///        must equal the current chain.
     /// @param initialActors Bootstrap actors, strictly ascending by actorId; each carries its declared scope/policyData.
-    /// @param signature ERC-1271 signature the account validates over the import digest.
+    /// @param signature ERC-1271 signature the account validates over the import digest; ignored when the account
+    ///        self-calls (msg.sender == account).
     function importAccount(
         address account,
         uint256 chainId,
@@ -465,11 +469,15 @@ contract AccountConfiguration {
         if (_isInitialized(account)) revert AlreadyInitialized();
         _accountState[account].localSequence = 1;
 
-        bytes32 digest = _computeImportDigest(account, chainId, initialActors);
-        (bool success, bytes memory result) =
-            account.staticcall(abi.encodeWithSelector(ERC1271_SELECTOR, digest, signature));
-        if (!success || result.length != 32 || abi.decode(result, (bytes4)) != ERC1271_SELECTOR) {
-            revert InvalidImportSignature();
+        // Authorization: a self-call (msg.sender == account) is the account's own execution authority authorizing the
+        // import. Otherwise the account must validate an ERC-1271 signature.
+        if (msg.sender != account) {
+            bytes32 digest = _computeImportDigest(account, chainId, initialActors);
+            (bool success, bytes memory result) =
+                account.staticcall(abi.encodeWithSelector(ERC1271_SELECTOR, digest, signature));
+            if (!success || result.length != 32 || abi.decode(result, (bytes4)) != ERC1271_SELECTOR) {
+                revert InvalidImportSignature();
+            }
         }
 
         // Disable the implicit default-EOA path (parity with createAccount). Set *after* the ERC-1271 check: for an
