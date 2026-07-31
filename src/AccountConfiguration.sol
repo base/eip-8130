@@ -440,8 +440,7 @@ contract AccountConfiguration {
     ///         implicit default-EOA key is disabled after import.
     ///
     /// @dev Authorized either by an ERC-1271 signature the account validates over the import digest, or by the
-    ///      account self-calling (msg.sender == account) — its own execution authority stands in for the signature,
-    ///      letting an implementation import itself atomically during an upgrade. Signature is unused in that case.
+    ///      account self-calling.
     /// @dev Uses a custom (non-EIP-712) digest to partially mitigate eth_signTypedData phishing.
     /// @dev Reverts with AccountIsLocked when the account is locked.
     /// @dev Reverts with InvalidChainId when `chainId` is neither 0 (multichain) nor the current chain.
@@ -471,8 +470,7 @@ contract AccountConfiguration {
         _accountState[account].localSequence = 1;
 
         // Authorization: a self-call (msg.sender == account) is the account's own execution authority authorizing the
-        // import — whether bundled into an upgrade or triggered afterward. Otherwise the account must validate an
-        // ERC-1271 signature.
+        // import. Otherwise the account must validate an ERC-1271 signature.
         if (msg.sender != account) {
             bytes32 digest = _computeImportDigest(account, chainId, initialActors);
             (bool success, bytes memory result) =
