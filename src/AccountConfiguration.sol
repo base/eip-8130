@@ -154,9 +154,11 @@ contract AccountConfiguration {
 
     /// @notice Actor is gated to a policy: every call it makes must land on the resolved manager (this contract
     ///         stores manager + commitment; the protocol enforces that the actor's calls only ever reach that
-    ///         target). This contract does not reject scope combinations (e.g. SCOPE_POLICY | SCOPE_SELF_PAYER) — any
-    ///         use-time exclusivity between SCOPE_POLICY and the account's other capabilities is protocol-side, not
-    ///         enforced here.
+    ///         target). One scope combination is rejected at authorization: a policy-gated actor may NOT also hold a
+    ///         payer scope (SCOPE_SELF_PAYER or SCOPE_SPONSOR_PAYER). Payer authority lets a key spend the account's
+    ///         funds on gas, which cannot be metered or capped per-key, so a confined (policy) key must never be a
+    ///         payer — its gas must be covered by a separate, non-policy payer or a paymaster. All other scope
+    ///         combinations are stored verbatim; their use-time semantics are protocol-side.
     uint8 public constant SCOPE_POLICY = 0x02;
 
     /// @notice Permits a restricted (non-admin) actor to use sequenced `nonce_key`s for sender-context transactions;
@@ -318,6 +320,10 @@ contract AccountConfiguration {
     error InvalidAuthenticator();
     /// @notice The policyData length did not match `scope & SCOPE_POLICY` (52 bytes when set, empty when unset).
     error InvalidPolicyData();
+    /// @notice A policy-gated actor (`scope & SCOPE_POLICY`) also carried a payer scope (SCOPE_SELF_PAYER or
+    ///         SCOPE_SPONSOR_PAYER). Payer authority lets a key spend the account's funds on gas, which cannot be
+    ///         metered per-key, so it is disallowed for policy-gated (confined) keys.
+    error PolicyActorCannotBePayer();
 
     /// @notice The referenced actor is not currently authorized on the account.
     error UnknownActor();
@@ -951,9 +957,16 @@ contract AccountConfiguration {
         // authentication time, mirroring the reference PolicyManager's treatment of a zero-commitment policy actor.
         if (config.authenticator < K1_AUTHENTICATOR) revert InvalidAuthenticator();
 
-        // Slice the signed policy by scope & SCOPE_POLICY. The commitment is opaque to the protocol. This contract
-        // does not reject scope combinations (e.g. SCOPE_POLICY | SCOPE_SELF_PAYER) — any use-time exclusivity between
-        // SCOPE_POLICY and the account's other capabilities is protocol-side, not enforced here.
+        // A policy-gated (confined) actor may not also be a payer: payer authority lets a key spend the account's
+        // funds on gas, and that outflow cannot be metered or capped per-key, so a confined key could drain gas
+        // regardless of its policy gate. Its gas must be covered by a separate non-policy payer or a paymaster.
+        if (config.scope & SCOPE_POLICY != 0 && config.scope & (SCOPE_SELF_PAYER | SCOPE_SPONSOR_PAYER) != 0) {
+            revert PolicyActorCannotBePayer();
+        }
+
+        // Slice the signed policy by scope & SCOPE_POLICY. The commitment is opaque to the protocol. Beyond the
+        // policy+payer exclusion above, this contract stores scope combinations verbatim — their use-time semantics
+        // are protocol-side, not enforced here.
         (address manager, bytes32 commitment) = _slicePolicy(config.scope, policyData);
 
         if (actorId == bytes32(bytes20(account))) {

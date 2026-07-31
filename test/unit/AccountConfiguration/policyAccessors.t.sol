@@ -384,31 +384,47 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
 
     /// @notice This contract does not reject scope combinations: an actor may carry SCOPE_POLICY alongside any
     ///         other scope bits — use-time exclusivity is protocol-side, not enforced here.
-    function test_authorizePolicyActor_allowsAnyScopeCombination(
-        uint256 rootSeed,
-        uint256 managerSeed,
-        uint256 commitmentSeed
-    ) public {
+    /// @notice A policy-gated actor may carry non-payer scope bits (e.g. SCOPE_NONCE), but combining SCOPE_POLICY
+    ///         with a payer scope (SCOPE_SELF_PAYER or SCOPE_SPONSOR_PAYER) is rejected by `_authorizeActor` —
+    ///         payer authority would let a confined key spend the account's funds on gas.
+    function test_authorizePolicyActor_rejectsPayerScope(uint256 rootSeed, uint256 managerSeed, uint256 commitmentSeed)
+        public
+    {
         uint256 rootPk = _boundK1Pk(rootSeed);
         (address account,) = _createK1Account(rootPk);
         address manager = _boundNonZeroAddress(managerSeed);
         bytes32 commitment = _boundNonZeroWord(commitmentSeed);
+        uint8 POLICY = accountConfiguration.SCOPE_POLICY();
 
-        uint8[4] memory otherScopes = [
-            uint8(0),
-            accountConfiguration.SCOPE_SELF_PAYER(),
-            accountConfiguration.SCOPE_SPONSOR_PAYER(),
-            accountConfiguration.SCOPE_NONCE()
-        ];
-        for (uint256 i; i < otherScopes.length; i++) {
-            // Policy actors are keyed by actorId only; no signing key is needed, so a distinct address-shaped id
-            // avoids the vm.addr curve-order bound on an unbounded rootPk + i.
+        // Non-payer combinations are allowed.
+        uint8[2] memory okScopes = [uint8(0), accountConfiguration.SCOPE_NONCE()];
+        for (uint256 i; i < okScopes.length; i++) {
             bytes32 actorId = bytes32(bytes20(address(uint160(1000 + i))));
-            uint8 scope = otherScopes[i] | accountConfiguration.SCOPE_POLICY();
-            _authorizePolicyActor(account, rootPk, actorId, scope, manager, commitment);
-
+            _authorizePolicyActor(account, rootPk, actorId, okScopes[i] | POLICY, manager, commitment);
             assertEq(accountConfiguration.getPolicyManager(account, actorId), manager);
             assertEq(accountConfiguration.getPolicyCommitment(account, actorId), commitment);
+        }
+
+        // Payer combinations revert with PolicyActorCannotBePayer.
+        uint8[2] memory payerScopes =
+            [accountConfiguration.SCOPE_SELF_PAYER(), accountConfiguration.SCOPE_SPONSOR_PAYER()];
+        for (uint256 i; i < payerScopes.length; i++) {
+            bytes32 actorId = bytes32(bytes20(address(uint160(2000 + i))));
+            AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
+                authenticator: address(k1Authenticator), scope: payerScopes[i] | POLICY, expiry: 0
+            });
+            AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
+            changes[0] = AccountConfiguration.ActorChange({
+                actorId: actorId,
+                changeType: AUTHORIZE_ACTOR,
+                data: abi.encode(cfg, abi.encodePacked(manager, commitment))
+            });
+            uint64 seq = accountConfiguration.getChangeSequences(account).local;
+            bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
+            bytes memory auth = _buildK1Auth(rootPk, digest);
+
+            vm.expectRevert(AccountConfiguration.PolicyActorCannotBePayer.selector);
+            accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
         }
     }
 
@@ -580,7 +596,10 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
 
     /// @dev A policy-bearing actor's scope: always carries SCOPE_POLICY, with arbitrary other bits mixed in.
     function _boundGatedScope(uint8 seed) internal view returns (uint8) {
-        return uint8(seed) | accountConfiguration.SCOPE_POLICY();
+        // A policy-gated actor may not also hold a payer scope (rejected by _authorizeActor), so mask the payer bits
+        // out of the fuzzed seed before setting SCOPE_POLICY.
+        uint8 payer = accountConfiguration.SCOPE_SELF_PAYER() | accountConfiguration.SCOPE_SPONSOR_PAYER();
+        return (uint8(seed) & ~payer) | accountConfiguration.SCOPE_POLICY();
     }
 
     /// @dev A non-zero policy manager address (so a written slot is distinguishable from an unwritten one).

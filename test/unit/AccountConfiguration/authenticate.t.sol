@@ -515,8 +515,9 @@ contract AuthenticateTest is AccountConfigurationTest {
         vm.assume(vm.addr(ownerPk) != vm.addr(sessionPk));
         vm.assume(manager != address(0));
         vm.assume(commitment != bytes32(0));
-        // A policy-bearing actor's scope carries SCOPE_POLICY; other bits are arbitrary.
-        uint8 scope = uint8(scopeSeed) | SCOPE_POLICY;
+        // A policy-bearing actor's scope carries SCOPE_POLICY; other non-payer bits are arbitrary (a policy actor
+        // may not also be a payer, so mask SCOPE_SELF_PAYER | SCOPE_SPONSOR_PAYER out).
+        uint8 scope = (uint8(scopeSeed) & ~(SCOPE_SELF_PAYER | SCOPE_SPONSOR_PAYER)) | SCOPE_POLICY;
 
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(sessionPk) != account);
@@ -840,7 +841,8 @@ contract AuthenticateTest is AccountConfigurationTest {
         vm.assume(vm.addr(ownerPk) != vm.addr(sessionPk));
         vm.assume(manager != address(0));
         vm.assume(commitment != bytes32(0));
-        uint8 scope = uint8(scopeSeed) | SCOPE_POLICY;
+        // A policy actor may not also be a payer; mask the payer bits out of the fuzzed scope.
+        uint8 scope = (uint8(scopeSeed) & ~(SCOPE_SELF_PAYER | SCOPE_SPONSOR_PAYER)) | SCOPE_POLICY;
 
         (address account,) = _createK1Account(ownerPk);
         bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
