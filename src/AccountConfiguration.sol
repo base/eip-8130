@@ -471,7 +471,8 @@ contract AccountConfiguration {
         _accountState[account].localSequence = 1;
 
         // Authorization: a self-call (msg.sender == account) is the account's own execution authority authorizing the
-        // import — the atomic upgrade-then-import path. Otherwise the account must validate an ERC-1271 signature.
+        // import — whether bundled into an upgrade or triggered afterward. Otherwise the account must validate an
+        // ERC-1271 signature.
         if (msg.sender != account) {
             bytes32 digest = _computeImportDigest(account, chainId, initialActors);
             (bool success, bytes memory result) =
