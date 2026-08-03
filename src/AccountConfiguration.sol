@@ -153,8 +153,8 @@ contract AccountConfiguration {
 
     // This contract is deliberately scope-agnostic. `scope == 0` is the admin predicate (the only scope value it
     // acts on for config/lock changes), and it interprets exactly one grant bit — Scopes.POLICY — to slice and
-    // store an actor's policy data. Every other named grant (SENDER, NONCE, SELF_PAYER, SPONSOR_PAYER, DELEGATE,
-    // and future bits) is stored verbatim and never read here; its meaning is enforced by whoever consumes it
+    // store an actor's policy data. Every other named grant (SENDER, NONCE, SELF_PAYER, SPONSOR_PAYER, and future
+    // bits) is stored verbatim and never read here; its meaning is enforced by whoever consumes it
     // (protocol nodes, account contracts, policy managers). The full uint16 grant vocabulary lives in
     // {Scopes}. This contract does not reject scope combinations — any use-time exclusivity is protocol-side.
 

@@ -10,6 +10,10 @@ pragma solidity 0.8.36;
 ///      contracts for ERC-1271, policy managers for gating. This library only gives those consumers a shared set of
 ///      names so the same value is not re-declared as a magic number at each site.
 ///
+///      Delegation for agent fleets is expressed via the external-policy pattern (an account authorizes a hub as a
+///      single POLICY-gated external actor that drives it through a policy manager), so no dedicated delegate grant
+///      is defined here.
+///
 ///      The assignment is append-only: a value once given a name keeps it, and new grants take the next free bit.
 ///      That is safe against the immutable AccountConfiguration deployment because unknown bits grant nothing and
 ///      are stored verbatim (see the EIP's Actor Scope section), so adding a bit here can never change how an
@@ -34,9 +38,5 @@ library Scopes {
     /// @notice Sponsor gas: authorizes acting as `payer_auth` for a different sender (`payer != sender`).
     uint16 internal constant SPONSOR_PAYER = 0x0010;
 
-    /// @notice Manage delegate actors: authorizes authorizing/revoking actors whose
-    ///         `authenticator == DELEGATE_AUTHENTICATOR`, without conferring full admin config authority.
-    uint16 internal constant DELEGATE = 0x0020;
-
-    // 0x0040..0x8000 (bits 6–15) are spare, reserved for future pure grants.
+    // 0x0020..0x8000 (bits 5–15) are spare, reserved for future pure grants.
 }
