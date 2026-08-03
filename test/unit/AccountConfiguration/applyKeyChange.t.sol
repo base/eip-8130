@@ -553,7 +553,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
     /// @notice A changeType outside {authorize, revoke} reverts with UnknownChangeType (after the scope-0 gate).
     function test_applySignedActorChanges_revert_unknownChangeType(uint256 pk, uint8 changeType) public {
         pk = _boundK1Pk(pk);
-        vm.assume(changeType != 0x01 && changeType != 0x02);
+        vm.assume(changeType != 0x01 && changeType != 0x02 && changeType != 0x03);
         (address account,) = _createK1Account(pk);
 
         AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
@@ -782,8 +782,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: actorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: auth, scope: scope, expiry: 0, installEpoch: 0}),
-                policyData
+                AccountConfiguration.ActorConfig({authenticator: auth, scope: scope, expiry: 0}), policyData
             )
         });
     }
@@ -811,7 +810,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: scope, expiry: 0, installEpoch: 0
+                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: scope, expiry: 0
                 }),
                 bytes("")
             )
@@ -837,10 +836,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: authenticator, scope: scope, expiry: 0, installEpoch: 0
-                }),
-                bytes("")
+                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes("")
             )
         });
 
@@ -878,10 +874,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: authenticator, scope: scope, expiry: 0, installEpoch: 0
-                }),
-                bytes("")
+                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes("")
             )
         });
 

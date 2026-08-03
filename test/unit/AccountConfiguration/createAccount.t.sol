@@ -268,7 +268,7 @@ contract CreateAccountTest is AccountConfigurationTest {
         assertEq(accountConfiguration.getChangeSequences(account).local, 1);
         assertEq(accountConfiguration.getChangeSequences(account).multichain, 0);
 
-        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 unlockDelay) =
+        (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 unlockDelay) =
             accountConfiguration.getLockStatus(account);
         assertFalse(locked);
         assertFalse(hasInitiatedUnlock);

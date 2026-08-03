@@ -52,13 +52,12 @@ contract ImportAccountTest is AccountConfigurationTest {
     // retains the full Actor/ActorConfig typehash structure; for imported (always unrestricted) actors the config
     // fields are zero and policyData is empty.
     bytes32 constant ACTOR_INITIALIZATION_TYPEHASH = keccak256(
-        "ActorInitialization(bytes32 salt,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint24 installEpoch,uint16 scope)"
+        "ActorInitialization(bytes32 salt,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"
     );
     bytes32 constant ACTOR_TYPEHASH = keccak256(
-        "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint24 installEpoch,uint16 scope)"
+        "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"
     );
-    bytes32 constant ACTORCONFIG_TYPEHASH =
-        keccak256("ActorConfig(address authenticator,uint48 expiry,uint24 installEpoch,uint16 scope)");
+    bytes32 constant ACTORCONFIG_TYPEHASH = keccak256("ActorConfig(address authenticator,uint48 expiry,uint16 scope)");
 
     // ── digest helpers ──
 
@@ -80,9 +79,7 @@ contract ImportAccountTest is AccountConfigurationTest {
         for (uint256 i; i < initialActors.length; i++) {
             // Hash the actor's real scope; expiry is always 0 at import. policyData is hashed into the Actor hash.
             bytes32 configHash = keccak256(
-                abi.encode(
-                    ACTORCONFIG_TYPEHASH, initialActors[i].authenticator, uint48(0), uint24(0), initialActors[i].scope
-                )
+                abi.encode(ACTORCONFIG_TYPEHASH, initialActors[i].authenticator, uint48(0), initialActors[i].scope)
             );
             actorHashes[i] = keccak256(
                 abi.encode(ACTOR_TYPEHASH, initialActors[i].actorId, configHash, keccak256(initialActors[i].policyData))
@@ -150,7 +147,7 @@ contract ImportAccountTest is AccountConfigurationTest {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     /// @notice Verifies importAccount reverts when the account is hard-locked (onlyUnlocked runs before all else).
-    /// @dev A lock op sets unlocksAt = type(uint40).max, so the account stays locked regardless of warp; any non-zero
+    /// @dev A lock op sets unlocksAt = type(uint48).max, so the account stays locked regardless of warp; any non-zero
     ///      unlock delay locks it. The onlyUnlocked modifier trips before the chainId/sequence/signature checks, so
     ///      the account is a controllable EOA (its inline default-EOA self signs the lock) and the actors/sig are
     ///      never reached.
@@ -228,9 +225,7 @@ contract ImportAccountTest is AccountConfigurationTest {
             actorId: bytes32(bytes20(device)),
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, installEpoch: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
                 bytes("")
             )
         });

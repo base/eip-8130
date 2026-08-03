@@ -350,7 +350,7 @@ contract ExecuteAttestedTest is AccountConfigurationTest {
 
     function _authorizePolicyActor(bytes32 actorId, bytes32 commitment, uint48 expiry) internal {
         AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
-            authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: expiry, installEpoch: 0
+            authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: expiry
         });
         bytes memory policyData = abi.encodePacked(address(manager), commitment);
 

@@ -643,7 +643,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         bytes32 commitment
     ) internal {
         AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
-            authenticator: address(k1Authenticator), scope: scope, expiry: 0, installEpoch: 0
+            authenticator: address(k1Authenticator), scope: scope, expiry: 0
         });
         bytes memory policyData = abi.encodePacked(policyManager, commitment);
 
@@ -669,7 +669,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
     ) internal {
         bytes32 selfActorId = bytes32(bytes20(eoa));
         AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
-            authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: scope, expiry: 0, installEpoch: 0
+            authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: scope, expiry: 0
         });
         bytes memory policyData = abi.encodePacked(policyManager, commitment);
 
@@ -690,10 +690,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: AUTHORIZE_ACTOR,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: authenticator, scope: 0x00, expiry: 0, installEpoch: 0
-                }),
-                bytes("")
+                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: 0x00, expiry: 0}), bytes("")
             )
         });
         uint64 seq = accountConfiguration.getChangeSequences(account).local;

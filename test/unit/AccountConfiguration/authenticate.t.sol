@@ -941,10 +941,7 @@ contract AuthenticateTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: authenticator, scope: scope, expiry: 0, installEpoch: 0
-                }),
-                bytes("")
+                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes("")
             )
         });
 
@@ -966,10 +963,7 @@ contract AuthenticateTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: authenticator, scope: 0x00, expiry: expiry, installEpoch: 0
-                }),
-                bytes("")
+                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: 0x00, expiry: expiry}), bytes("")
             )
         });
 
@@ -1008,9 +1002,7 @@ contract AuthenticateTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: scope, expiry: 0, installEpoch: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0}),
                 abi.encodePacked(policyManager, commitment)
             )
         });

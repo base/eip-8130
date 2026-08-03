@@ -300,7 +300,7 @@ contract PolicyManagerTest is AccountConfigurationTest {
 
     function _authorizePolicyActor(bytes32 actorId, bytes32 commitment, uint48 expiry) internal {
         AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
-            authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: expiry, installEpoch: 0
+            authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: expiry
         });
         bytes memory policyData = abi.encodePacked(address(manager), commitment);
 
@@ -334,9 +334,8 @@ contract PolicyManagerTest is AccountConfigurationTest {
     }
 
     function _authorizePolicyActorOn(address target_, uint256 ownerPk, bytes32 actorId, bytes32 commitment) internal {
-        AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
-            authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: 0, installEpoch: 0
-        });
+        AccountConfiguration.ActorConfig memory cfg =
+            AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: 0});
         bytes memory policyData = abi.encodePacked(address(manager), commitment);
 
         AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);

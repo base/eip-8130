@@ -191,9 +191,8 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
     /// @dev Authorizes a new K1 actor (`newPk`) with `scope` on `account`, signed by the unrestricted
     ///      owner (`ownerPk`) via applySignedActorChanges on the local chain.
     function _authorizeScopedK1Actor(address account, uint256 ownerPk, uint256 newPk, uint8 scope) internal {
-        AccountConfiguration.ActorConfig memory config = AccountConfiguration.ActorConfig({
-            authenticator: address(k1Authenticator), scope: scope, expiry: 0, installEpoch: 0
-        });
+        AccountConfiguration.ActorConfig memory config =
+            AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0});
 
         AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
         changes[0] = AccountConfiguration.ActorChange({

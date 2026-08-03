@@ -25,16 +25,14 @@ contract AccountConfiguration {
         uint64 local; // chain_id == block.chainid; packed epoch|nonce (epoch = bits[63:40], nonce = bits[39:0])
     }
 
-    /// @notice An actor's authorization: authenticator, expiry, install epoch, and scope. Field order matches the
-    ///         normative `actor_config` slot layout:
-    ///         authenticator(20) ‖ expiry(6) ‖ installEpoch(3) ‖ scope(2) ‖ reserved(1).
+    /// @notice An actor's authorization: authenticator, expiry, and scope. Field order matches the normative
+    ///         `actor_config` slot layout: authenticator(20) ‖ expiry(6) ‖ scope(2) ‖ reserved(4).
     /// @dev `scope` occupies the last populated bytes so a future scope widening consumes reserved space and shifts
-    ///      nothing. `installEpoch` is never a caller input on the authorize path: it is stamped from the epoch bound
-    ///      in the change's sequence/digest (see {applySignedActorChanges} and the EIP's Actor Epoch section).
+    ///      nothing. There is no per-actor epoch stamp: the local-channel epoch guards install/change *signatures* at
+    ///      the apply path (see {applySignedActorChanges}/{BUMP_EPOCH}), not live actors at authentication.
     struct ActorConfig {
         address authenticator;
         uint48 expiry; // Unix seconds; 0 = no expiry. Actor invalid once block.timestamp > expiry
-        uint24 installEpoch; // local-channel epoch at authorization; non-admin actors are rejected once it != current
         uint16 scope;
     }
 
@@ -56,11 +54,11 @@ contract AccountConfiguration {
         bytes policyData;
     }
 
-    /// @notice A single authorize/revoke operation within a signed batch.
+    /// @notice A single authorize/revoke/bump operation within a signed batch.
     struct ActorChange {
-        uint8 changeType; // 0x01 = authorizeActor, 0x02 = revokeActor
-        bytes32 actorId;
-        bytes data; // operation-specific: ActorConfig || policyData for authorize, empty for revoke
+        uint8 changeType; // 0x01 = authorizeActor, 0x02 = revokeActor, 0x03 = bumpEpoch
+        bytes32 actorId; // ignored for bumpEpoch
+        bytes data; // operation-specific: ActorConfig || policyData for authorize, empty for revoke/bumpEpoch
     }
 
     /// @notice Per-account packed state: sequences, lock status, and the inline home for the account's k1 self key.
@@ -68,7 +66,7 @@ contract AccountConfiguration {
     /// @dev Packed into a single storage slot; the field layout is normative (nodes read the raw slot for mempool
     ///      rate-limit tiering, see the EIP's Account Lock section). Field order and widths match the spec's
     ///      account-state table: multichainSequence, localSequence, flags, lockUnion, defaultEOAExpiry,
-    ///      defaultEOAScope, then 2 reserved bytes that MUST stay zero.
+    ///      defaultEOAScope, then 1 reserved byte that MUST stay zero.
     ///      localSequence > 0 doubles as the account initialized flag.
     ///      `flags` is a bitfield: bit 0 (FLAG_REVOKE_DEFAULT_EOA) disables the k1 self key; bit 1 (FLAG_LOCKED)
     ///      freezes actor configuration; bit 2 (FLAG_UNLOCK_INITIATED) selects how `lockUnion` is interpreted.
@@ -85,10 +83,10 @@ contract AccountConfiguration {
         uint64 multichainSequence; // 8 bytes – plain monotonic counter (chain_id 0)
         uint64 localSequence; // 8 bytes – packed epoch|nonce (epoch = bits[63:40], nonce = bits[39:0]); != 0 = initialized
         uint8 flags; // 1 byte – bitfield: bit 0 REVOKE_DEFAULT_EOA, bit 1 LOCKED, bit 2 UNLOCK_INITIATED
-        uint40 lockUnion; // 5 bytes – union: unlockDelay while UNLOCK_INITIATED clear, else unlocksAt (timestamp)
+        uint48 lockUnion; // 6 bytes – union: unlockDelay while UNLOCK_INITIATED clear, else unlocksAt (Unix seconds)
         uint48 defaultEOAExpiry; // 6 bytes – inline self k1 expiry (Unix seconds; 0 = no expiry)
         uint16 defaultEOAScope; // 2 bytes – inline self k1 scope (0 = full owner)
-        // 2 bytes reserved (remaining slot bytes); MUST stay zero.
+        // 1 byte reserved (remaining slot byte); MUST stay zero.
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -105,17 +103,17 @@ contract AccountConfiguration {
     ///      import signature cannot be replayed on another chain. Initial actors are hashed structurally via
     ///      ACTOR_TYPEHASH / ACTORCONFIG_TYPEHASH below.
     bytes32 public constant ACTOR_INITIALIZATION_TYPEHASH = keccak256(
-        "ActorInitialization(bytes32 salt,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint24 installEpoch,uint16 scope)"
+        "ActorInitialization(bytes32 salt,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"
     );
 
     /// @notice Typehash used to structurally hash each Actor within an ActorInitialization import digest.
     bytes32 public constant ACTOR_TYPEHASH = keccak256(
-        "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint24 installEpoch,uint16 scope)"
+        "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"
     );
 
     /// @notice Typehash used to structurally hash an Actor's ActorConfig within an import digest.
     bytes32 public constant ACTORCONFIG_TYPEHASH =
-        keccak256("ActorConfig(address authenticator,uint48 expiry,uint24 installEpoch,uint16 scope)");
+        keccak256("ActorConfig(address authenticator,uint48 expiry,uint16 scope)");
 
     /// @notice Typehash binding a signed actor-change batch to its account, chainId, and sequence.
     ///
@@ -136,14 +134,6 @@ contract AccountConfiguration {
     bytes32 public constant LOCK_CHANGE_TYPEHASH =
         keccak256("SignedLockChange(address account,uint256 chainId,uint8 op,uint16 unlockDelay,uint64 sequence)");
 
-    /// @notice Typehash binding an epoch-bump signature to its account, chainId, and the epoch being advanced.
-    ///
-    /// @dev NOT compliant with EIP-712, to mitigate phishing attacks. Binds the current chainId (local-channel only)
-    ///      and the epoch the signer intends to advance; a replay fails once the epoch has moved on (see
-    ///      {applySignedEpochBump}).
-    bytes32 public constant EPOCH_BUMP_TYPEHASH =
-        keccak256("SignedEpochBump(address account,uint256 chainId,uint24 epoch)");
-
     // ----------------------------------------------------------------------------------------------------------------
     // ACTOR CHANGE TYPES
     // ----------------------------------------------------------------------------------------------------------------
@@ -153,6 +143,12 @@ contract AccountConfiguration {
 
     /// @notice Revoke an actor from the account
     uint8 public constant REVOKE_ACTOR = 0x02;
+
+    /// @notice Advance the account's local-channel epoch within a sequenced batch. `actorId`/`data` MUST be empty.
+    ///         Local channel only; not permitted on the unordered MAX-sentinel path. Enables an atomic
+    ///         [REVOKE_ACTOR(x), BUMP_EPOCH] batch that revokes x AND permanently kills x's install signature (and
+    ///         every other pending change/install bound to the old epoch) in one signature. See {applySignedActorChanges}.
+    uint8 public constant BUMP_EPOCH = 0x03;
 
     // ----------------------------------------------------------------------------------------------------------------
     // LOCK CHANGE OPS
@@ -287,10 +283,11 @@ contract AccountConfiguration {
     ///
     /// @param account The account whose unlock was initiated.
     /// @param unlocksAt The timestamp at which the account will unlock.
-    event AccountUnlockInitiated(address indexed account, uint40 unlocksAt);
+    event AccountUnlockInitiated(address indexed account, uint48 unlocksAt);
 
-    /// @notice Emitted when an account's local-channel epoch is advanced, mass-revoking every non-admin actor
-    ///         authorized at the old epoch.
+    /// @notice Emitted when an account's local-channel epoch is advanced (via a BUMP_EPOCH change), invalidating every
+    ///         pending local signed change/install bound to the old epoch. Live actors are unaffected — this cancels
+    ///         signatures, not agents. Wallets should treat it as a signal to re-prompt for any change they still want.
     ///
     /// @param account The account whose epoch was bumped.
     /// @param newEpoch The new (post-bump) epoch.
@@ -363,15 +360,15 @@ contract AccountConfiguration {
     /// @notice The actor's expiry has passed.
     error ActorExpired();
 
-    /// @notice A non-admin actor's installEpoch no longer matches the account's current local-channel epoch (its
-    ///         generation was mass-revoked by an epoch bump).
-    error ActorEpochRevoked();
-
     /// @notice A local-channel signed change bound an epoch that is not the account's current epoch (stale/replayed).
     error EpochMismatch();
 
     /// @notice The local-channel epoch is already at type(uint24).max and cannot be advanced further.
     error EpochExhausted();
+
+    /// @notice A BUMP_EPOCH change was invalid: it carried non-empty data, or was on the multichain channel
+    ///         (chainId 0), where the epoch does not live.
+    error InvalidBumpChange();
 
     /// @notice The ordered local nonce is exhausted (would collide with the MAX sentinel); use a fresh epoch.
     error SequenceExhausted();
@@ -541,24 +538,31 @@ contract AccountConfiguration {
     ///      (scope 0) — there is no elevated scope for changing actors; admin is exactly scope == 0. Replay is
     ///      bound by `chainId` and `sequence`, dispatched by channel and nonce:
     ///        - chainId 0 (multichain): `sequence` is a plain monotonic counter; it MUST equal the current value and
-    ///          is consumed. Authorized actors are stamped with the account's current local epoch.
+    ///          is consumed. The epoch does not participate (it is local-channel only).
     ///        - local (chainId == block.chainid), sequenced nonce (`_nonceOf(sequence) < SEQUENCE_MASK`): the packed
     ///          epoch|nonce MUST equal the current word; the nonce is consumed (carry-guarded so the ordered space
     ///          never collides with the MAX sentinel).
     ///        - local, MAX sentinel nonce (`_nonceOf(sequence) == SEQUENCE_MASK`): the epoch MUST equal the current
     ///          epoch; nothing is consumed. Restricted to AUTHORIZE_ACTOR, non-admin (scope != 0), expiring
     ///          (expiry != 0), insert-only actors — an unordered channel for installing agent-key fleets.
-    ///      `installEpoch` is never a caller input: it is stamped from the epoch bound in the digest (the sequence),
-    ///      never the live epoch at apply time, so a `[bump, replay]` cannot resurrect a change at a fresh generation.
+    ///      The epoch is purely a replay guard for install/change *signatures*, checked here at the apply path (the
+    ///      `_accountState` slot is already loaded by onlyUnlocked): a batch binds the epoch in its digest, so a
+    ///      BUMP_EPOCH change permanently invalidates every other pending local change/install bound to the old
+    ///      epoch. It never touches live actors (no per-actor stamp, no authentication-time check), so a bump cancels
+    ///      pending signatures, not agents.
+    /// @dev A BUMP_EPOCH change (local channel, empty data, never on the MAX path) advances the epoch and resets the
+    ///      nonce to 0. Batching [REVOKE_ACTOR(x), BUMP_EPOCH] atomically revokes x and kills its install signature.
     /// @dev Reverts with AccountIsLocked when the account is locked.
     /// @dev Reverts with InvalidChainId when `chainId` is neither 0 (multichain) nor the current chain.
     /// @dev Reverts with InvalidSequence, EpochMismatch, or SequenceExhausted when `sequence` does not match the
     ///      channel's current value / epoch or the ordered nonce is exhausted.
     /// @dev Reverts with InvalidAuthLength, InvalidSignature, AuthenticationFailed, AuthenticatorMismatch,
-    ///      ActorExpired, ActorEpochRevoked, or DefaultEoaRevoked when `auth` fails to authenticate a live actor.
+    ///      ActorExpired, or DefaultEoaRevoked when `auth` fails to authenticate a live actor.
     /// @dev Reverts with UnauthorizedActorChange when the authenticated actor is not unrestricted (scope != 0).
     /// @dev Reverts with InvalidMaxSentinelChange when a MAX-sentinel batch carries a non-authorize change, or an
     ///      admin/non-expiring/overwriting actor.
+    /// @dev Reverts with InvalidBumpChange when a BUMP_EPOCH change carries data or is on the multichain channel, or
+    ///      EpochExhausted when the epoch is already at its maximum.
     /// @dev Reverts with UnknownChangeType when a change carries an unrecognized changeType.
     /// @dev Reverts with InvalidAuthenticator or InvalidPolicyData on a malformed authorize.
     /// @dev Reverts with UnknownActor when revoking an actor that is not authorized.
@@ -578,8 +582,8 @@ contract AccountConfiguration {
     ) external onlyUnlocked(account) {
         if (chainId != 0 && chainId != block.chainid) revert InvalidChainId();
 
-        // Validate/consume the channel and resolve the epoch to stamp into every authorized actor.
-        (uint24 installEpoch, bool isMaxSentinel) = _consumeChangeSequence(account, chainId, sequence);
+        // Validate/consume the channel; the MAX sentinel path is unordered and non-consuming.
+        bool isMaxSentinel = _consumeChangeSequence(account, chainId, sequence);
 
         // Compute digest and authenticate
         bytes32 digest = _computeSignedActorChangesDigest(account, chainId, sequence, actorChanges);
@@ -590,53 +594,70 @@ contract AccountConfiguration {
 
         // Apply actorChanges
         for (uint256 i; i < actorChanges.length; i++) {
-            if (actorChanges[i].changeType == AUTHORIZE_ACTOR) {
+            uint8 changeType = actorChanges[i].changeType;
+            if (changeType == AUTHORIZE_ACTOR) {
                 (ActorConfig memory newActorConfig, bytes memory policyData) =
                     abi.decode(actorChanges[i].data, (ActorConfig, bytes));
-                // Stamp installEpoch from the epoch bound in the digest; the caller-provided value is ignored.
-                newActorConfig.installEpoch = installEpoch;
                 if (isMaxSentinel) _requireMaxSentinelAuthorize(account, actorChanges[i].actorId, newActorConfig);
                 _authorizeActor(account, actorChanges[i].actorId, newActorConfig, policyData);
-            } else if (actorChanges[i].changeType == REVOKE_ACTOR) {
+            } else if (changeType == REVOKE_ACTOR) {
                 // The MAX sentinel is an install-only channel; revokes must use the ordered/multichain path.
                 if (isMaxSentinel) revert InvalidMaxSentinelChange();
                 _revokeActor(account, actorChanges[i].actorId);
+            } else if (changeType == BUMP_EPOCH) {
+                // The MAX sentinel is authorize-only; a bump must ride the ordered channel so it is itself
+                // single-use (its batch binds the pre-bump epoch and can never replay).
+                if (isMaxSentinel) revert InvalidMaxSentinelChange();
+                // The epoch lives only in the local channel; reject a multichain bump or any bound data.
+                if (chainId == 0 || actorChanges[i].data.length != 0) revert InvalidBumpChange();
+                _bumpEpoch(account);
             } else {
                 revert UnknownChangeType();
             }
         }
     }
 
-    /// @dev Validates and (for consuming paths) advances the change channel for a signed actor-change batch, returning
-    ///      the epoch to stamp into every authorized actor and whether this is the MAX sentinel (non-consuming) path.
-    ///      See {applySignedActorChanges} for the per-channel/nonce dispatch rules.
+    /// @dev Validates and (for consuming paths) advances the change channel for a signed actor-change batch,
+    ///      returning whether this is the MAX sentinel (unordered, non-consuming) path. See {applySignedActorChanges}
+    ///      for the per-channel/nonce dispatch rules.
     function _consumeChangeSequence(address account, uint256 chainId, uint64 sequence)
         private
-        returns (uint24 installEpoch, bool isMaxSentinel)
+        returns (bool isMaxSentinel)
     {
         AccountState storage st = _accountState[account];
 
-        // Multichain channel: a plain monotonic counter. Stamp the account's current local epoch.
+        // Multichain channel: a plain monotonic counter (no epoch).
         if (chainId == 0) {
             if (sequence != st.multichainSequence) revert InvalidSequence();
             st.multichainSequence = sequence + 1;
-            return (_epochOf(st.localSequence), false);
+            return false;
         }
 
         // Local channel: the packed epoch|nonce word.
         uint64 local = st.localSequence;
-        uint24 currentEpoch = _epochOf(local);
-        if (_epochOf(sequence) != currentEpoch) revert EpochMismatch();
+        if (_epochOf(sequence) != _epochOf(local)) revert EpochMismatch();
 
         uint64 nonce = _nonceOf(sequence);
-        if (nonce == SEQUENCE_MASK) return (currentEpoch, true); // MAX sentinel: unordered, non-consuming
+        if (nonce == SEQUENCE_MASK) return true; // MAX sentinel: unordered, non-consuming
 
         // Sequenced: bind the exact current nonce and consume it, carry-guarding the ordered space away from the
         // MAX sentinel (the nonce never reaches SEQUENCE_MASK - 1).
         if (nonce != _nonceOf(local)) revert InvalidSequence();
         if (nonce >= SEQUENCE_MASK - 2) revert SequenceExhausted();
         st.localSequence = local + 1;
-        return (currentEpoch, false);
+        return false;
+    }
+
+    /// @dev Advances the account's local-channel epoch and resets the nonce to 0, invalidating every pending local
+    ///      signed change/install bound to the old epoch. Overwrites the nonce consumed for the enclosing sequenced
+    ///      batch (harmless: that batch bound the old epoch, so a replay now fails the epoch check). Reverts
+    ///      EpochExhausted at the max epoch. Live actors are untouched — the epoch is never read at authentication.
+    function _bumpEpoch(address account) private {
+        AccountState storage st = _accountState[account];
+        uint24 epoch = _epochOf(st.localSequence);
+        if (epoch >= type(uint24).max) revert EpochExhausted();
+        st.localSequence = uint64((uint256(epoch) + 1) << EPOCH_SHIFT);
+        emit EpochBumped(account, epoch + 1);
     }
 
     /// @dev Enforces the MAX-sentinel authorize restrictions: the actor MUST be non-admin (scope != 0), carry a
@@ -714,60 +735,13 @@ contract AccountConfiguration {
             if (flags & FLAG_LOCKED == 0 || flags & FLAG_UNLOCK_INITIATED != 0) revert NotLocked();
 
             // Reinterpret the union: it held the stored delay, now it holds the effective unlock timestamp.
-            uint40 unlocksAt = uint40(block.timestamp + uint16(config.lockUnion));
+            uint48 unlocksAt = uint48(block.timestamp + uint16(config.lockUnion));
             config.flags = flags | FLAG_UNLOCK_INITIATED;
             config.lockUnion = unlocksAt;
             emit AccountUnlockInitiated(account, unlocksAt);
         } else {
             revert UnknownLockOp();
         }
-    }
-
-    // ----------------------------------------------------------------------------------------------------------------
-    // EPOCH BUMP
-    // ----------------------------------------------------------------------------------------------------------------
-
-    /// @notice Advances the account's local-channel epoch, mass-revoking every non-admin actor authorized at the old
-    ///         epoch (their installEpoch no longer matches — see {authenticateActor}). Admin actors and the inline
-    ///         secp256k1 self are exempt, so the key needed to bump/recover always survives.
-    ///
-    /// @dev Signed, relayable, admin-authorized (scope 0). The digest binds `block.chainid` and `epoch`; the contract
-    ///      requires `epoch == _epochOf(localSequence)` (the current epoch) and `epoch < type(uint24).max`. On success
-    ///      it sets `localSequence = (epoch + 1) << EPOCH_SHIFT` — advancing the epoch and resetting the nonce to 0 —
-    ///      and emits EpochBumped. The bump is epoch-bound (never nonce-bound), so it never races a pending admin
-    ///      change for a nonce slot, and self-invalidating: a replay binding `epoch` fails once the epoch is `epoch+1`.
-    ///      It consumes no nonce and, unlike the other config paths, is NOT gated by lock: a bump can only remove
-    ///      authority, and refusing it while locked would create a brick path. In one operation it kills every pending
-    ///      local signed change (sequenced and MAX sentinel — their bound epoch is now stale) and revokes every
-    ///      non-admin actor at the old epoch, instantly at authentication, node-filterable, with no enumeration.
-    /// @dev Reverts with EpochMismatch when `epoch` is not the account's current epoch.
-    /// @dev Reverts with EpochExhausted when the epoch is already at type(uint24).max.
-    /// @dev Reverts with InvalidAuthLength, InvalidSignature, AuthenticationFailed, AuthenticatorMismatch,
-    ///      ActorExpired, or DefaultEoaRevoked when `auth` fails to authenticate a live actor.
-    /// @dev Reverts with UnauthorizedActorChange when the authenticated actor is not unrestricted (scope != 0).
-    ///
-    /// @param account The account whose epoch is advanced.
-    /// @param epoch The current epoch the signer intends to advance (bound in the digest).
-    /// @param auth Authenticator(20) || authenticator-specific data authenticating an unrestricted (admin) actor.
-    function applySignedEpochBump(address account, uint24 epoch, bytes calldata auth) external {
-        AccountState storage st = _accountState[account];
-
-        // Bind the bump to the current epoch: a stale/replayed epoch fails, and once bumped the same signature is
-        // self-invalidating (its epoch is no longer current).
-        if (epoch != _epochOf(st.localSequence)) revert EpochMismatch();
-        if (epoch >= type(uint24).max) revert EpochExhausted();
-
-        bytes32 digest = _computeEpochBumpDigest(account, block.chainid, epoch);
-        (, uint16 scope,) = authenticateActor(account, digest, auth);
-
-        // Only an unrestricted actor (scope 0, admin) may bump; admins are exempt from the epoch check, so the signer
-        // needed here always survives a prior bump.
-        if (scope != 0) revert UnauthorizedActorChange();
-
-        // Advance the epoch and reset the nonce to 0. This invalidates every pending local change (their bound
-        // epoch|nonce no longer matches) and revokes every non-admin actor stamped at the old epoch.
-        st.localSequence = uint64((uint256(epoch) + 1) << EPOCH_SHIFT);
-        emit EpochBumped(account, epoch + 1);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -887,10 +861,8 @@ contract AccountConfiguration {
         if (config.authenticator >= K1_AUTHENTICATOR) return config;
         if (actorId == bytes32(bytes20(account)) && !_isDefaultEoaRevoked(account)) {
             AccountState storage st = _accountState[account];
-            // The inline k1 self carries no install stamp (it is exempt from the epoch check); report installEpoch 0.
-            return ActorConfig({
-                authenticator: K1_AUTHENTICATOR, expiry: st.defaultEOAExpiry, installEpoch: 0, scope: st.defaultEOAScope
-            });
+            return
+                ActorConfig({authenticator: K1_AUTHENTICATOR, expiry: st.defaultEOAExpiry, scope: st.defaultEOAScope});
         }
         return config;
     }
@@ -967,12 +939,12 @@ contract AccountConfiguration {
     ///
     /// @return locked True if the account is locked at the current block timestamp.
     /// @return hasInitiatedUnlock True if an unlock has been initiated but not yet elapsed.
-    /// @return unlocksAt The timestamp at which the account unlocks (type(uint40).max while hard-locked).
+    /// @return unlocksAt The timestamp at which the account unlocks (type(uint48).max while hard-locked).
     /// @return unlockDelay The configured unlock delay in seconds.
     function getLockStatus(address account)
         external
         view
-        returns (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 unlockDelay)
+        returns (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 unlockDelay)
     {
         AccountState storage config = _accountState[account];
         uint8 flags = config.flags;
@@ -982,10 +954,10 @@ contract AccountConfiguration {
         }
         if (flags & FLAG_UNLOCK_INITIATED == 0) {
             // Hard-locked: lockUnion holds the configured delay; synthesize the max sentinel for unlocksAt.
-            return (true, false, type(uint40).max, uint16(config.lockUnion));
+            return (true, false, type(uint48).max, uint16(config.lockUnion));
         }
         // Unlock initiated: lockUnion holds the effective unlock timestamp; the delay has been consumed.
-        uint40 unlockTime = config.lockUnion;
+        uint48 unlockTime = config.lockUnion;
         return (block.timestamp < unlockTime, true, unlockTime, 0);
     }
 
@@ -1048,11 +1020,8 @@ contract AccountConfiguration {
             // Initial actors carry scope verbatim (0x00 = unrestricted admin) and never an expiry. When
             // scope & Scopes.POLICY is set, policyData is validated by the same frozen rule as authorizeActor
             // (52 bytes). Authorizing the self-actorId as k1 writes its scope into the inline default-EOA fields.
-            // Creation/import is the bootstrap at epoch 0: initial actors are stamped installEpoch 0 (matching the
-            // localSequence epoch set to 0 on init) and never carry an expiry.
-            ActorConfig memory config = ActorConfig({
-                authenticator: initialActors[i].authenticator, expiry: 0, installEpoch: 0, scope: initialActors[i].scope
-            });
+            ActorConfig memory config =
+                ActorConfig({authenticator: initialActors[i].authenticator, expiry: 0, scope: initialActors[i].scope});
             _authorizeActor(account, initialActors[i].actorId, config, initialActors[i].policyData);
         }
     }
@@ -1126,7 +1095,7 @@ contract AccountConfiguration {
     }
 
     /// @dev Emit ActorAuthorized with a tightly packed payload. The base packs to 32 bytes
-    ///      (authenticator(20) || expiry(6) || installEpoch(3) || scope(2) || reserved(1 zero byte)); the policy gate
+    ///      (authenticator(20) || expiry(6) || scope(2) || reserved(4 zero bytes)); the policy gate
     ///      (manager(20) || commitment(32), 52 bytes) is appended only when scope & Scopes.POLICY != 0.
     function _emitActorAuthorized(
         address account,
@@ -1136,10 +1105,8 @@ contract AccountConfiguration {
         bytes32 commitment
     ) private {
         bytes memory actorData = (config.scope & Scopes.POLICY != 0)
-            ? abi.encodePacked(
-                config.authenticator, config.expiry, config.installEpoch, config.scope, bytes1(0), manager, commitment
-            )
-            : abi.encodePacked(config.authenticator, config.expiry, config.installEpoch, config.scope, bytes1(0));
+            ? abi.encodePacked(config.authenticator, config.expiry, config.scope, bytes4(0), manager, commitment)
+            : abi.encodePacked(config.authenticator, config.expiry, config.scope, bytes4(0));
         emit ActorAuthorized(account, actorId, actorData);
     }
 
@@ -1247,13 +1214,11 @@ contract AccountConfiguration {
     {
         bytes32[] memory actorHashes = new bytes32[](initialActors.length);
         for (uint256 i; i < initialActors.length; i++) {
-            // Hash the actor's real scope. Expiry and installEpoch are always 0 at import — import is the bootstrap
-            // at epoch 0, and an actor-provided expiry/install epoch is never accepted here. policyData is hashed via
-            // keccak256 into the Actor struct hash. The typehash structure matches the importAccount payload.
+            // Hash the actor's real scope. Expiry is always 0 at import — an actor-provided expiry is never accepted
+            // here. policyData is hashed via keccak256 into the Actor struct hash. The typehash structure matches the
+            // importAccount payload.
             bytes32 configHash = keccak256(
-                abi.encode(
-                    ACTORCONFIG_TYPEHASH, initialActors[i].authenticator, uint48(0), uint24(0), initialActors[i].scope
-                )
+                abi.encode(ACTORCONFIG_TYPEHASH, initialActors[i].authenticator, uint48(0), initialActors[i].scope)
             );
             actorHashes[i] = keccak256(
                 abi.encode(ACTOR_TYPEHASH, initialActors[i].actorId, configHash, keccak256(initialActors[i].policyData))
@@ -1318,12 +1283,6 @@ contract AccountConfiguration {
         return keccak256(abi.encode(LOCK_CHANGE_TYPEHASH, account, chainId, op, unlockDelay, sequence));
     }
 
-    /// @dev Computes the digest signed over an applySignedEpochBump call, binding it to `account`, `chainId`, and the
-    ///      epoch being advanced via EPOCH_BUMP_TYPEHASH.
-    function _computeEpochBumpDigest(address account, uint256 chainId, uint24 epoch) internal pure returns (bytes32) {
-        return keccak256(abi.encode(EPOCH_BUMP_TYPEHASH, account, chainId, epoch));
-    }
-
     // ----------------------------------------------------------------------------------------------------------------
     // AUTHENTICATION
     // ----------------------------------------------------------------------------------------------------------------
@@ -1348,10 +1307,8 @@ contract AccountConfiguration {
 
     /// @dev Resolves an explicit _actorConfig-homed actor: requires a matching authenticator and an unexpired entry,
     ///      returning its scope and policy gate target. Shared by the non-k1 (_authenticate) and k1 other-actor
-    ///      (_authenticateK1) paths. Non-admin actors (scope != 0) additionally fail if their installEpoch no longer
-    ///      matches the account's current local epoch (mass-revoked by an epoch bump) — one cold SLOAD paid only by
-    ///      restricted actors; admins (scope 0) skip it. Reverts with AuthenticatorMismatch, ActorExpired, or
-    ///      ActorEpochRevoked.
+    ///      (_authenticateK1) paths. The one-SLOAD validation invariant holds: the epoch is never read here (it guards
+    ///      install signatures at the apply path, not live actors). Reverts with AuthenticatorMismatch or ActorExpired.
     function _resolveExplicitActor(address account, bytes32 actorId, address expectedAuthenticator)
         private
         view
@@ -1362,11 +1319,6 @@ contract AccountConfiguration {
         // Expiry is read from the same slot; an expired actor fails authentication. 0 = no expiry.
         if (config.expiry != 0 && block.timestamp > config.expiry) revert ActorExpired();
         scope = config.scope;
-        // Epoch check: a non-admin actor is live only while its install generation is current. Admins are exempt so
-        // the scope==0 signer needed to bump/recover always survives.
-        if (scope != 0 && config.installEpoch != _epochOf(_accountState[account].localSequence)) {
-            revert ActorEpochRevoked();
-        }
         policyTarget = _policyTargetFor(scope, actorId, account);
     }
 

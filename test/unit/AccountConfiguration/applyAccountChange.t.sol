@@ -34,9 +34,7 @@ contract AccountLockTest is AccountConfigurationTest {
             changeType: 0x01,
             actorId: actorId,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, installEpoch: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
                 bytes("")
             )
         });
@@ -50,9 +48,7 @@ contract AccountLockTest is AccountConfigurationTest {
             changeType: 0x01,
             actorId: bytes32(bytes20(newSigner)),
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), scope: scope, expiry: 0, installEpoch: 0
-                }),
+                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0}),
                 bytes("")
             )
         });
@@ -259,11 +255,11 @@ contract AccountLockTest is AccountConfigurationTest {
 
         _signedLock(pk, account, delay);
 
-        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 storedDelay) =
+        (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 storedDelay) =
             accountConfiguration.getLockStatus(account);
         assertTrue(locked);
         assertFalse(hasInitiatedUnlock);
-        assertEq(unlocksAt, type(uint40).max);
+        assertEq(unlocksAt, type(uint48).max);
         assertEq(storedDelay, delay);
         assertTrue(accountConfiguration.isLocked(account));
     }
@@ -308,11 +304,11 @@ contract AccountLockTest is AccountConfigurationTest {
 
         _signedLock(pk, account, secondDelay);
 
-        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 storedDelay) =
+        (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 storedDelay) =
             accountConfiguration.getLockStatus(account);
         assertTrue(locked);
         assertFalse(hasInitiatedUnlock);
-        assertEq(unlocksAt, type(uint40).max);
+        assertEq(unlocksAt, type(uint48).max);
         assertEq(storedDelay, secondDelay);
     }
 
@@ -329,7 +325,7 @@ contract AccountLockTest is AccountConfigurationTest {
         vm.warp(t0);
         _signedUnlock(pk, account);
 
-        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 storedDelay) =
+        (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 storedDelay) =
             accountConfiguration.getLockStatus(account);
         assertTrue(locked); // block.timestamp (t0) < unlocksAt (t0 + delay)
         assertTrue(hasInitiatedUnlock);
@@ -419,7 +415,7 @@ contract AccountLockTest is AccountConfigurationTest {
 
     /// @notice getLockStatus reports all-clear for a never-locked account: unlocked, not initiated, zeroed fields.
     function test_getLockStatus_success_whenNeverLocked(address account) public view {
-        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 unlockDelay) =
+        (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 unlockDelay) =
             accountConfiguration.getLockStatus(account);
         assertFalse(locked);
         assertFalse(hasInitiatedUnlock);
@@ -450,7 +446,7 @@ contract AccountLockTest is AccountConfigurationTest {
 
         vm.warp(t0 + delay + extra); // past unlocksAt, but no onlyUnlocked call to clear it
 
-        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 storedDelay) =
+        (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 storedDelay) =
             accountConfiguration.getLockStatus(account);
         assertFalse(locked);
         assertTrue(hasInitiatedUnlock);
@@ -495,7 +491,7 @@ contract AccountLockTest is AccountConfigurationTest {
 
         assertTrue(_isActor(account, newActorId));
         // The onlyUnlocked prelude cleared the stale unlock timestamp back to 0.
-        (,, uint40 unlocksAt,) = accountConfiguration.getLockStatus(account);
+        (,, uint48 unlocksAt,) = accountConfiguration.getLockStatus(account);
         assertEq(unlocksAt, 0);
     }
 
