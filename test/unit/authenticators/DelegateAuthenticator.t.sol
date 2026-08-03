@@ -144,7 +144,7 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
         bytes memory wrappedAuth = abi.encodePacked(
             k1Authenticator, _signDigest(signerPk, accountConfiguration.replaySafeHash(delegateAccount, hash))
         );
-        assertTrue(accountConfiguration.verifySignature(delegateAccount, hash, wrappedAuth));
+        assertTrue(_isValidSig(delegateAccount, hash, wrappedAuth));
 
         // But it cannot vouch as a delegate — the nested check stays admin-only.
         bytes memory data = abi.encodePacked(delegateAccount, nestedAuth);

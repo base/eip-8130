@@ -7,7 +7,7 @@ import {IAuthenticator} from "../interfaces/IAuthenticator.sol";
 /// @notice Delegates authentication to another account's actor configuration; a single hop only.
 ///         actorId = bytes32(bytes20(delegate_address))
 ///
-///         This contract exists for non-8130 chains where verifySignature() runs in normal EVM.
+///         This contract exists for non-8130 chains where authentication runs in normal EVM.
 ///         On 8130 chains, the protocol handles DELEGATE directly at the protocol level.
 ///
 ///         Data layout: delegate_address (20) || nested_authenticator (20) || nested_data
@@ -54,13 +54,12 @@ contract DelegateAuthenticator is IAuthenticator {
         address nestedAuthenticator = address(bytes20(nestedAuth[:20]));
         if (nestedAuthenticator == address(this)) revert RecursiveDelegation();
 
-        // The nested actor MUST be the admin (scope == 0x00) of the delegate account. This is enforced
-        // independently of verifySignature, which is now operational (signing is not admin-only, but a delegate
-        // vouch requires admin to preserve non-escalation): an operational SENDER key can sign for its own account,
-        // yet it must NOT be able to vouch as a delegate here. authenticateActor reverts on any auth failure and
-        // otherwise returns the resolved scope, so we require scope == 0x00 explicitly.
+        // The nested actor MUST be the admin (scope == 0x00) of the delegate account, to preserve non-escalation:
+        // an operational (e.g. SENDER) key can sign for its own account, yet it must NOT be able to vouch as a
+        // delegate here. authenticateActor reverts on any auth failure and otherwise returns the resolved scope,
+        // so we require scope == 0x00 explicitly.
         try ACCOUNT_CONFIGURATION.authenticateActor(delegate, hash, nestedAuth) returns (
-            bytes32, uint8 nestedScope, address
+            bytes32, uint16 nestedScope, address
         ) {
             if (nestedScope != 0) revert InvalidNestedSignature();
         } catch {

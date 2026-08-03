@@ -48,13 +48,13 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         (address account, bytes32 ownerId) = _createK1Account(pk);
         vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
         _authorizeActor(account, pk, actorId, address(k1Authenticator));
-        assertTrue(accountConfiguration.isActor(account, actorId));
+        assertTrue(_isActor(account, actorId));
 
         AccountConfiguration.ActorChange[] memory ch = new AccountConfiguration.ActorChange[](1);
         ch[0] = AccountConfiguration.ActorChange({actorId: actorId, changeType: 0x02, data: ""});
         _signApply(account, pk, ch);
 
-        assertFalse(accountConfiguration.isActor(account, actorId));
+        assertFalse(_isActor(account, actorId));
     }
 
     /// @notice A batch of multiple authorize operations applies every element.
@@ -70,8 +70,8 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         ch[1] = _authorizeChange(idB, address(k1Authenticator), 0, "")[0];
         _signApply(account, pk, ch);
 
-        assertTrue(accountConfiguration.isActor(account, idA));
-        assertTrue(accountConfiguration.isActor(account, idB));
+        assertTrue(_isActor(account, idA));
+        assertTrue(_isActor(account, idB));
     }
 
     /// @notice Each applied batch increments the account's local change sequence by one.
@@ -124,7 +124,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         AccountConfiguration.ActorChange[] memory ch = _authorizeChange(targetId, address(k1Authenticator), 0, "");
         _signApply(account, actorPk, ch);
-        assertTrue(accountConfiguration.isActor(account, targetId));
+        assertTrue(_isActor(account, targetId));
     }
 
     /// @notice Any scoped (non-zero) actor cannot authorize actors; admin is exactly scope == 0.
@@ -188,7 +188,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);
         assertEq(cfg.scope, newScope);
         assertEq(cfg.authenticator, accountConfiguration.K1_AUTHENTICATOR());
-        assertTrue(accountConfiguration.isActor(eoa, selfActorId));
+        assertTrue(_isActor(eoa, selfActorId));
     }
 
     /// @notice Revoking an actor that was never authorized reverts.
@@ -232,7 +232,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         vm.assume(actorId != bytes32(bytes20(eoa)));
 
         _signApply(eoa, eoaPk, _authorizeChange(actorId, address(k1Authenticator), 0, ""));
-        assertTrue(accountConfiguration.isActor(eoa, actorId));
+        assertTrue(_isActor(eoa, actorId));
     }
 
     /// @notice The implicit EOA self key can be revoked via the default-EOA flag using another key.
@@ -245,13 +245,13 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         bytes32 selfActorId = bytes32(bytes20(eoa));
         bytes32 newActorId = bytes32(bytes20(vm.addr(newPk)));
         vm.assume(newActorId != selfActorId);
-        assertTrue(accountConfiguration.isActor(eoa, selfActorId));
+        assertTrue(_isActor(eoa, selfActorId));
 
         _implicitAuthorizeActor(eoa, eoaPk, newActorId, address(k1Authenticator));
         _revokeActor(eoa, newPk, selfActorId);
 
-        assertFalse(accountConfiguration.isActor(eoa, selfActorId));
-        assertTrue(accountConfiguration.isActor(eoa, newActorId));
+        assertFalse(_isActor(eoa, selfActorId));
+        assertTrue(_isActor(eoa, newActorId));
 
         AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);
         assertEq(cfg.authenticator, address(0));
@@ -277,16 +277,16 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         bytes32 selfActorId = bytes32(bytes20(eoa));
         scope = uint8(bound(uint256(scope), 1, 255)) & ~SCOPE_POLICY;
         vm.assume(scope != 0);
-        assertTrue(accountConfiguration.isActor(eoa, selfActorId));
+        assertTrue(_isActor(eoa, selfActorId));
 
         _implicitAuthorizeActorWithScope(eoa, eoaPk, selfActorId, address(k1Authenticator), scope);
 
-        assertTrue(accountConfiguration.isActor(eoa, selfActorId));
+        assertTrue(_isActor(eoa, selfActorId));
         AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);
         assertEq(cfg.authenticator, address(k1Authenticator));
         assertEq(cfg.scope, scope);
 
-        (, uint8 outScope,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (, uint16 outScope,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(outScope, scope);
     }
 
@@ -318,7 +318,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         uint64 seq = accountConfiguration.getChangeSequences(eoa).multichain;
         bytes32 digest = _computeActorChangeBatchDigest(eoa, 0, seq, ch);
         accountConfiguration.applySignedActorChanges(eoa, 0, ch, _buildK1Auth(eoaPk, digest));
-        assertTrue(accountConfiguration.isActor(eoa, actorId));
+        assertTrue(_isActor(eoa, actorId));
     }
 
     // ── Default EOA self-actorId semantics ──
@@ -335,7 +335,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         (address account,) = _createK1Account(pk);
         bytes32 selfActorId = bytes32(bytes20(account));
 
-        assertFalse(accountConfiguration.isActor(account, selfActorId));
+        assertFalse(_isActor(account, selfActorId));
         AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, selfActorId);
         assertEq(cfg.authenticator, address(0));
         assertEq(cfg.scope, 0);
@@ -346,11 +346,11 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
         bytes32 selfActorId = bytes32(bytes20(account));
-        assertFalse(accountConfiguration.isActor(account, selfActorId));
+        assertFalse(_isActor(account, selfActorId));
 
         _authorizeActor(account, pk, selfActorId, accountConfiguration.K1_AUTHENTICATOR());
 
-        assertTrue(accountConfiguration.isActor(account, selfActorId));
+        assertTrue(_isActor(account, selfActorId));
         AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, selfActorId);
         assertEq(cfg.authenticator, accountConfiguration.K1_AUTHENTICATOR());
         assertEq(cfg.scope, 0);
@@ -366,19 +366,19 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         bytes32 selfActorId = bytes32(bytes20(eoa));
         bytes32 newActorId = bytes32(bytes20(vm.addr(newPk)));
         vm.assume(newActorId != selfActorId);
-        assertTrue(accountConfiguration.isActor(eoa, selfActorId));
+        assertTrue(_isActor(eoa, selfActorId));
 
         _implicitAuthorizeActor(eoa, eoaPk, newActorId, address(k1Authenticator));
         _revokeActor(eoa, newPk, selfActorId);
-        assertFalse(accountConfiguration.isActor(eoa, selfActorId));
+        assertFalse(_isActor(eoa, selfActorId));
 
         vm.expectRevert();
         accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
 
         _authorizeActor(eoa, newPk, selfActorId, accountConfiguration.K1_AUTHENTICATOR());
-        assertTrue(accountConfiguration.isActor(eoa, selfActorId));
+        assertTrue(_isActor(eoa, selfActorId));
 
-        (, uint8 scope,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (, uint16 scope,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(scope, 0);
     }
 
@@ -394,8 +394,8 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         vm.assume(deviceActorId != selfActorId);
 
         // Phase 0: the default EOA is live and authenticates with its own k1 signature.
-        assertTrue(accountConfiguration.isActor(eoa, selfActorId));
-        (, uint8 scope0,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        assertTrue(_isActor(eoa, selfActorId));
+        (, uint16 scope0,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(scope0, 0);
 
         // Phase 1: in one batch signed by the EOA, add the device key as a full owner and revoke the default EOA.
@@ -404,11 +404,11 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         switchChanges[1] = AccountConfiguration.ActorChange({actorId: selfActorId, changeType: 0x02, data: ""});
         _signApply(eoa, eoaPk, switchChanges);
 
-        assertFalse(accountConfiguration.isActor(eoa, selfActorId));
-        assertTrue(accountConfiguration.isActor(eoa, deviceActorId));
+        assertFalse(_isActor(eoa, selfActorId));
+        assertTrue(_isActor(eoa, deviceActorId));
         vm.expectRevert();
         accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
-        (, uint8 scope1,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(devicePk, hash));
+        (, uint16 scope1,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(devicePk, hash));
         assertEq(scope1, 0);
 
         // Phase 2: the device key re-enables the K1 key by authorizing the self-actorId as a native k1 owner.
@@ -416,8 +416,8 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             _authorizeChange(selfActorId, accountConfiguration.K1_AUTHENTICATOR(), 0, "");
         _signApply(eoa, devicePk, reEnable);
 
-        assertTrue(accountConfiguration.isActor(eoa, selfActorId));
-        (, uint8 scope2,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        assertTrue(_isActor(eoa, selfActorId));
+        (, uint16 scope2,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(scope2, 0);
     }
 
@@ -436,8 +436,8 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         ch[1] = AccountConfiguration.ActorChange({actorId: selfActorId, changeType: 0x02, data: ""});
         _signApply(eoa, eoaPk, ch);
 
-        assertFalse(accountConfiguration.isActor(eoa, selfActorId));
-        assertTrue(accountConfiguration.isActor(eoa, newActorId));
+        assertFalse(_isActor(eoa, selfActorId));
+        assertTrue(_isActor(eoa, newActorId));
 
         AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(eoa, selfActorId);
         assertEq(cfg.authenticator, address(0));
@@ -467,7 +467,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         accountConfiguration.applySignedActorChanges(eoa, uint64(block.chainid), ch, _buildK1Auth(eoaPk, digest));
 
         accountConfiguration.applySignedActorChanges(eoa, uint64(block.chainid), ch, _buildK1Auth(newPk, digest));
-        assertTrue(accountConfiguration.isActor(eoa, targetId));
+        assertTrue(_isActor(eoa, targetId));
     }
 
     /// @notice A revoked signer key can no longer authorize actor changes.
@@ -577,7 +577,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         AccountConfiguration.ActorChange[] memory ch = _authorizeChange(targetId, address(k1Authenticator), 0, "");
         if (signerScope == 0) {
             _signApply(account, signerPk, ch);
-            assertTrue(accountConfiguration.isActor(account, targetId));
+            assertTrue(_isActor(account, targetId));
         } else {
             bytes memory auth = _authOver(account, signerPk, ch);
             vm.expectRevert(AccountConfiguration.UnauthorizedActorChange.selector);
@@ -661,7 +661,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         ch[0] = _authorizeChange(actorId, address(k1Authenticator), 0, "")[0];
         ch[1] = AccountConfiguration.ActorChange({actorId: actorId, changeType: 0x02, data: ""});
         _signApply(account, pk, ch);
-        assertFalse(accountConfiguration.isActor(account, actorId));
+        assertFalse(_isActor(account, actorId));
 
         // Pre-authorize, then [revoke A, authorize A] → A ends live.
         _authorizeActor(account, pk, actorId, address(k1Authenticator));
@@ -669,7 +669,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         ch2[0] = AccountConfiguration.ActorChange({actorId: actorId, changeType: 0x02, data: ""});
         ch2[1] = _authorizeChange(actorId, address(k1Authenticator), 0, "")[0];
         _signApply(account, pk, ch2);
-        assertTrue(accountConfiguration.isActor(account, actorId));
+        assertTrue(_isActor(account, actorId));
     }
 
     /// @notice An unrestricted (scope 0) signer may revoke itself mid-batch; the scope gate is evaluated once,
@@ -694,8 +694,8 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         ch[1] = _authorizeChange(bId, address(k1Authenticator), 0, "")[0];
         _signApply(account, signerPk, ch);
 
-        assertFalse(accountConfiguration.isActor(account, signerId));
-        assertTrue(accountConfiguration.isActor(account, bId));
+        assertFalse(_isActor(account, signerId));
+        assertTrue(_isActor(account, bId));
     }
 
     /// @notice Self-actorId flip: k1 self → non-k1 (p256) self → k1 self; the non-k1 config replaces then is replaced.
@@ -723,7 +723,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         assertEq(
             accountConfiguration.getActorConfig(eoa, selfId).authenticator, accountConfiguration.K1_AUTHENTICATOR()
         );
-        (, uint8 scope,) = accountConfiguration.authenticateActor(eoa, h, _buildK1Auth(eoaPk, h));
+        (, uint16 scope,) = accountConfiguration.authenticateActor(eoa, h, _buildK1Auth(eoaPk, h));
         assertEq(scope, 0);
     }
 
