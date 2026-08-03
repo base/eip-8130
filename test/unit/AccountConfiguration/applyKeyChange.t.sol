@@ -102,8 +102,9 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         AccountConfiguration.ActorChange[] memory ch = _authorizeChange(actorId, address(k1Authenticator), 0, "");
         bytes memory auth = _authOver(account, pk, ch);
+        uint64 __seqR = accountConfiguration.getChangeSequences(account).local;
         vm.expectRevert(AccountConfiguration.AccountIsLocked.selector);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), ch, auth);
+        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), __seqR, ch, auth);
     }
 
     /// @notice Any authorized unrestricted actor, not only the owner, may authorize further actors.
@@ -149,8 +150,9 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         AccountConfiguration.ActorChange[] memory ch = _authorizeChange(targetId, address(k1Authenticator), 0, "");
         bytes memory auth = _authOver(account, actorPk, ch);
+        uint64 __seqR = accountConfiguration.getChangeSequences(account).local;
         vm.expectRevert(AccountConfiguration.UnauthorizedActorChange.selector);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), ch, auth);
+        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), __seqR, ch, auth);
     }
 
     /// @notice Re-authorizing an already-configured non-self actor upserts its config in place.
@@ -200,8 +202,9 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         AccountConfiguration.ActorChange[] memory ch = new AccountConfiguration.ActorChange[](1);
         ch[0] = AccountConfiguration.ActorChange({actorId: actorId, changeType: 0x02, data: ""});
         bytes memory auth = _authOver(account, pk, ch);
+        uint64 __seqR = accountConfiguration.getChangeSequences(account).local;
         vm.expectRevert();
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), ch, auth);
+        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), __seqR, ch, auth);
     }
 
     /// @notice A batch signed by a key that is not an actor on the account reverts.
@@ -215,8 +218,9 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         AccountConfiguration.ActorChange[] memory ch = _authorizeChange(actorId, address(k1Authenticator), 0, "");
         bytes memory badAuth = _authOver(account, wrongPk, ch);
+        uint64 __seqR = accountConfiguration.getChangeSequences(account).local;
         vm.expectRevert();
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), ch, badAuth);
+        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), __seqR, ch, badAuth);
     }
 
     // ── Implicit EOA (registered by default) ──
@@ -304,8 +308,9 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         AccountConfiguration.ActorChange[] memory ch =
             _authorizeChange(selfActorId, accountConfiguration.K1_AUTHENTICATOR(), 0, "");
         bytes memory auth = _authOver(eoa, eoaPk, ch);
+        uint64 __seqR = accountConfiguration.getChangeSequences(eoa).local;
         vm.expectRevert(AccountConfiguration.UnauthorizedActorChange.selector);
-        accountConfiguration.applySignedActorChanges(eoa, uint64(block.chainid), ch, auth);
+        accountConfiguration.applySignedActorChanges(eoa, uint64(block.chainid), __seqR, ch, auth);
     }
 
     /// @notice A never-created EOA can apply a multichain (chainId 0) actor change via its implicit self key.
@@ -317,7 +322,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         AccountConfiguration.ActorChange[] memory ch = _authorizeChange(actorId, address(k1Authenticator), 0, "");
         uint64 seq = accountConfiguration.getChangeSequences(eoa).multichain;
         bytes32 digest = _computeActorChangeBatchDigest(eoa, 0, seq, ch);
-        accountConfiguration.applySignedActorChanges(eoa, 0, ch, _buildK1Auth(eoaPk, digest));
+        _applyActorChanges(eoa, 0, ch, _buildK1Auth(eoaPk, digest));
         assertTrue(_isActor(eoa, actorId));
     }
 
@@ -463,10 +468,13 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         uint64 seq = accountConfiguration.getChangeSequences(eoa).local;
         bytes32 digest = _computeActorChangeBatchDigest(eoa, uint64(block.chainid), seq, ch);
 
+        uint64 __seqR = accountConfiguration.getChangeSequences(eoa).local;
         vm.expectRevert();
-        accountConfiguration.applySignedActorChanges(eoa, uint64(block.chainid), ch, _buildK1Auth(eoaPk, digest));
+        accountConfiguration.applySignedActorChanges(
+            eoa, uint64(block.chainid), __seqR, ch, _buildK1Auth(eoaPk, digest)
+        );
 
-        accountConfiguration.applySignedActorChanges(eoa, uint64(block.chainid), ch, _buildK1Auth(newPk, digest));
+        _applyActorChanges(eoa, uint64(block.chainid), ch, _buildK1Auth(newPk, digest));
         assertTrue(_isActor(eoa, targetId));
     }
 
@@ -487,8 +495,9 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         AccountConfiguration.ActorChange[] memory ch = _authorizeChange(targetId, address(k1Authenticator), 0, "");
         bytes memory auth = _authOver(account, ownerPk, ch);
+        uint64 __seqR = accountConfiguration.getChangeSequences(account).local;
         vm.expectRevert();
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), ch, auth);
+        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), __seqR, ch, auth);
     }
 
     /// @notice Revoking a non-self actor deletes its config slot.
@@ -519,8 +528,9 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             _authorizeChange(bytes32(bytes20(vm.addr(0xBEEF))), address(k1Authenticator), 0, "");
         bytes memory auth = _buildK1Auth(pk, _computeActorChangeBatchDigest(account, uint64(badChainId), 0, changes));
 
+        uint64 __seqR = accountConfiguration.getChangeSequences(account).local;
         vm.expectRevert(AccountConfiguration.InvalidChainId.selector);
-        accountConfiguration.applySignedActorChanges(account, uint64(badChainId), changes, auth);
+        accountConfiguration.applySignedActorChanges(account, uint64(badChainId), __seqR, changes, auth);
     }
 
     /// @notice Replaying an identical (changes, auth) pair fails once the sequence is consumed.
@@ -533,10 +543,11 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         AccountConfiguration.ActorChange[] memory changes = _authorizeChange(actorId, address(k1Authenticator), 0, "");
         bytes memory auth = _authOver(account, pk, changes);
 
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
+        _applyActorChanges(account, uint64(block.chainid), changes, auth);
 
+        uint64 __seqR = accountConfiguration.getChangeSequences(account).local;
         vm.expectRevert();
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
+        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), __seqR, changes, auth);
     }
 
     /// @notice A changeType outside {authorize, revoke} reverts with UnknownChangeType (after the scope-0 gate).
@@ -551,8 +562,9 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         });
 
         bytes memory auth = _authOver(account, pk, changes);
+        uint64 __seqR = accountConfiguration.getChangeSequences(account).local;
         vm.expectRevert(AccountConfiguration.UnknownChangeType.selector);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
+        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), __seqR, changes, auth);
     }
 
     /// @notice The admin gate: an authenticated actor may change actors iff its scope == 0.
@@ -580,8 +592,9 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             assertTrue(_isActor(account, targetId));
         } else {
             bytes memory auth = _authOver(account, signerPk, ch);
+            uint64 __seqR = accountConfiguration.getChangeSequences(account).local;
             vm.expectRevert(AccountConfiguration.UnauthorizedActorChange.selector);
-            accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), ch, auth);
+            accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), __seqR, ch, auth);
         }
     }
 
@@ -593,8 +606,9 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         AccountConfiguration.ActorChange[] memory ch = _authorizeChange(actorId, address(0), 0, "");
         bytes memory auth = _authOver(account, pk, ch);
+        uint64 __seqR = accountConfiguration.getChangeSequences(account).local;
         vm.expectRevert(AccountConfiguration.InvalidAuthenticator.selector);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), ch, auth);
+        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), __seqR, ch, auth);
     }
 
     /// @notice An ungated actor (scope & SCOPE_POLICY == 0) with non-empty policyData reverts with InvalidPolicyData.
@@ -610,8 +624,9 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
         AccountConfiguration.ActorChange[] memory ch = _authorizeChange(actorId, address(k1Authenticator), 0, data);
         bytes memory auth = _authOver(account, pk, ch);
+        uint64 __seqR = accountConfiguration.getChangeSequences(account).local;
         vm.expectRevert(AccountConfiguration.InvalidPolicyData.selector);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), ch, auth);
+        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), __seqR, ch, auth);
     }
 
     /// @notice A gated actor (scope & SCOPE_POLICY) whose policyData is not exactly 52 bytes reverts.
@@ -628,8 +643,9 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         AccountConfiguration.ActorChange[] memory ch =
             _authorizeChange(actorId, address(k1Authenticator), SCOPE_POLICY, data);
         bytes memory auth = _authOver(account, pk, ch);
+        uint64 __seqR = accountConfiguration.getChangeSequences(account).local;
         vm.expectRevert(AccountConfiguration.InvalidPolicyData.selector);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), ch, auth);
+        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), __seqR, ch, auth);
     }
 
     /// @notice A gated actor with a zero manager and zero commitment is valid (relaxed policyData rule).
@@ -766,7 +782,8 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: actorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: auth, scope: scope, expiry: 0}), policyData
+                AccountConfiguration.ActorConfig({authenticator: auth, scope: scope, expiry: 0, installEpoch: 0}),
+                policyData
             )
         });
     }
@@ -783,9 +800,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
 
     /// @dev Sign (with pk) and apply a batch on the local chain.
     function _signApply(address account, uint256 pk, AccountConfiguration.ActorChange[] memory changes) internal {
-        accountConfiguration.applySignedActorChanges(
-            account, uint64(block.chainid), changes, _authOver(account, pk, changes)
-        );
+        _applyActorChanges(account, uint64(block.chainid), changes, _authOver(account, pk, changes));
     }
 
     /// @dev Authorize/overwrite the EOA's own inline k1 self-actorId with the given scope, signed by the EOA key.
@@ -796,14 +811,14 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             changeType: 0x01,
             data: abi.encode(
                 AccountConfiguration.ActorConfig({
-                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: scope, expiry: 0
+                    authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: scope, expiry: 0, installEpoch: 0
                 }),
                 bytes("")
             )
         });
         uint64 seq = accountConfiguration.getChangeSequences(eoa).local;
         bytes32 digest = _computeActorChangeBatchDigest(eoa, uint64(block.chainid), seq, changes);
-        accountConfiguration.applySignedActorChanges(eoa, uint64(block.chainid), changes, _buildK1Auth(eoaPk, digest));
+        _applyActorChanges(eoa, uint64(block.chainid), changes, _buildK1Auth(eoaPk, digest));
     }
 
     function _authorizeActor(address account, uint256 pk, bytes32 newActorId, address authenticator) internal {
@@ -822,7 +837,10 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes("")
+                AccountConfiguration.ActorConfig({
+                    authenticator: authenticator, scope: scope, expiry: 0, installEpoch: 0
+                }),
+                bytes("")
             )
         });
 
@@ -830,7 +848,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(pk, digest);
 
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
+        _applyActorChanges(account, uint64(block.chainid), changes, auth);
     }
 
     function _revokeActor(address account, uint256 pk, bytes32 actorId) internal {
@@ -841,7 +859,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(pk, digest);
 
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
+        _applyActorChanges(account, uint64(block.chainid), changes, auth);
     }
 
     function _implicitAuthorizeActor(address account, uint256 pk, bytes32 newActorId, address authenticator) internal {
@@ -860,7 +878,10 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes("")
+                AccountConfiguration.ActorConfig({
+                    authenticator: authenticator, scope: scope, expiry: 0, installEpoch: 0
+                }),
+                bytes("")
             )
         });
 
@@ -868,7 +889,7 @@ contract ApplyConfigChangeActorTest is AccountConfigurationTest {
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(pk, digest);
 
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
+        _applyActorChanges(account, uint64(block.chainid), changes, auth);
     }
 
     /// @dev Hard-lock `account` via the signed lock path, authorized by its admin owner key `pk`.

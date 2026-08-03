@@ -300,7 +300,7 @@ contract PolicyManagerTest is AccountConfigurationTest {
 
     function _authorizePolicyActor(bytes32 actorId, bytes32 commitment, uint48 expiry) internal {
         AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
-            authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: expiry
+            authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: expiry, installEpoch: 0
         });
         bytes memory policyData = abi.encodePacked(address(manager), commitment);
 
@@ -312,7 +312,7 @@ contract PolicyManagerTest is AccountConfigurationTest {
         uint64 chainId = uint64(block.chainid);
         uint64 sequence = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, chainId, sequence, changes);
-        accountConfiguration.applySignedActorChanges(account, chainId, changes, _buildK1Auth(ROOT_PK, digest));
+        _applyActorChanges(account, chainId, changes, _buildK1Auth(ROOT_PK, digest));
     }
 
     function _createAttackerAccount() internal returns (address attacker, uint256 attackerOwnerPk) {
@@ -334,8 +334,9 @@ contract PolicyManagerTest is AccountConfigurationTest {
     }
 
     function _authorizePolicyActorOn(address target_, uint256 ownerPk, bytes32 actorId, bytes32 commitment) internal {
-        AccountConfiguration.ActorConfig memory cfg =
-            AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: 0});
+        AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
+            authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: 0, installEpoch: 0
+        });
         bytes memory policyData = abi.encodePacked(address(manager), commitment);
 
         AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
@@ -346,7 +347,7 @@ contract PolicyManagerTest is AccountConfigurationTest {
         uint64 chainId = uint64(block.chainid);
         uint64 sequence = accountConfiguration.getChangeSequences(target_).local;
         bytes32 digest = _computeActorChangeBatchDigest(target_, chainId, sequence, changes);
-        accountConfiguration.applySignedActorChanges(target_, chainId, changes, _buildK1Auth(ownerPk, digest));
+        _applyActorChanges(target_, chainId, changes, _buildK1Auth(ownerPk, digest));
     }
 
     function _revokePolicyActor(bytes32 actorId) internal {
@@ -356,6 +357,6 @@ contract PolicyManagerTest is AccountConfigurationTest {
         uint64 chainId = uint64(block.chainid);
         uint64 sequence = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, chainId, sequence, changes);
-        accountConfiguration.applySignedActorChanges(account, chainId, changes, _buildK1Auth(ROOT_PK, digest));
+        _applyActorChanges(account, chainId, changes, _buildK1Auth(ROOT_PK, digest));
     }
 }

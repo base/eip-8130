@@ -746,8 +746,9 @@ contract SessionPolicyTest is AccountConfigurationTest {
         });
         bytes32 commitment = manager.commitmentOf(binding);
 
-        AccountConfiguration.ActorConfig memory cfg =
-            AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: 0});
+        AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
+            authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: 0, installEpoch: 0
+        });
         AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
         changes[0] = AccountConfiguration.ActorChange({
             actorId: actorId,
@@ -757,6 +758,6 @@ contract SessionPolicyTest is AccountConfigurationTest {
         uint64 chainId = uint64(block.chainid);
         uint64 sequence = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, chainId, sequence, changes);
-        accountConfiguration.applySignedActorChanges(account, chainId, changes, _buildK1Auth(ROOT_PK, digest));
+        _applyActorChanges(account, chainId, changes, _buildK1Auth(ROOT_PK, digest));
     }
 }

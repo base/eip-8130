@@ -140,6 +140,23 @@ contract AccountConfigurationTest is Test {
         );
     }
 
+    /// @dev Relay an actor-change batch, threading the account's *current* channel sequence (multichain for
+    ///      chainId 0, otherwise the local packed epoch|nonce). Every existing test signs its digest over that same
+    ///      current sequence, so this preserves the pre-epoch call semantics (including replay: a stale `auth`
+    ///      recomputes against the advanced sequence and fails). New epoch/MAX-sentinel tests that need a specific
+    ///      sequence call {AccountConfiguration.applySignedActorChanges} directly with an explicit sequence.
+    function _applyActorChanges(
+        address account,
+        uint256 chainId,
+        AccountConfiguration.ActorChange[] memory changes,
+        bytes memory auth
+    ) internal {
+        uint64 sequence = chainId == 0
+            ? accountConfiguration.getChangeSequences(account).multichain
+            : accountConfiguration.getChangeSequences(account).local;
+        accountConfiguration.applySignedActorChanges(account, chainId, sequence, changes, auth);
+    }
+
     // ── Signed lock-change helpers ──
     //
     // Lock state changes go through applySignedLockChanges: a relayable, admin-authorized (scope 0) signed call.

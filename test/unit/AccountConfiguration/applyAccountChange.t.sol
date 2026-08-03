@@ -34,7 +34,9 @@ contract AccountLockTest is AccountConfigurationTest {
             changeType: 0x01,
             actorId: actorId,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
+                AccountConfiguration.ActorConfig({
+                    authenticator: address(k1Authenticator), scope: 0x00, expiry: 0, installEpoch: 0
+                }),
                 bytes("")
             )
         });
@@ -48,7 +50,9 @@ contract AccountLockTest is AccountConfigurationTest {
             changeType: 0x01,
             actorId: bytes32(bytes20(newSigner)),
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0}),
+                AccountConfiguration.ActorConfig({
+                    authenticator: address(k1Authenticator), scope: scope, expiry: 0, installEpoch: 0
+                }),
                 bytes("")
             )
         });
@@ -56,7 +60,7 @@ contract AccountLockTest is AccountConfigurationTest {
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, chainId, seq, changes);
         bytes memory auth = _buildK1Auth(ownerPk, digest);
-        accountConfiguration.applySignedActorChanges(account, chainId, changes, auth);
+        _applyActorChanges(account, chainId, changes, auth);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -221,7 +225,7 @@ contract AccountLockTest is AccountConfigurationTest {
         bytes memory auth = _buildK1Auth(pk, digest);
 
         vm.expectRevert(AccountConfiguration.AccountIsLocked.selector);
-        accountConfiguration.applySignedActorChanges(account, chainId, changes, auth);
+        accountConfiguration.applySignedActorChanges(account, chainId, seq, changes, auth);
     }
 
     /// @notice importAccount reverts AccountIsLocked while the target account is hard-locked.
@@ -487,7 +491,7 @@ contract AccountLockTest is AccountConfigurationTest {
         bytes32 digest = _computeActorChangeBatchDigest(account, chainId, seq, changes);
         bytes memory auth = _buildK1Auth(pk, digest);
 
-        accountConfiguration.applySignedActorChanges(account, chainId, changes, auth);
+        _applyActorChanges(account, chainId, changes, auth);
 
         assertTrue(_isActor(account, newActorId));
         // The onlyUnlocked prelude cleared the stale unlock timestamp back to 0.
@@ -522,6 +526,6 @@ contract AccountLockTest is AccountConfigurationTest {
         bytes memory auth = _buildK1Auth(pk, digest);
 
         vm.expectRevert(AccountConfiguration.AccountIsLocked.selector);
-        accountConfiguration.applySignedActorChanges(account, chainId, changes, auth);
+        accountConfiguration.applySignedActorChanges(account, chainId, seq, changes, auth);
     }
 }

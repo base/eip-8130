@@ -643,7 +643,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         bytes32 commitment
     ) internal {
         AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
-            authenticator: address(k1Authenticator), scope: scope, expiry: 0
+            authenticator: address(k1Authenticator), scope: scope, expiry: 0, installEpoch: 0
         });
         bytes memory policyData = abi.encodePacked(policyManager, commitment);
 
@@ -654,9 +654,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        accountConfiguration.applySignedActorChanges(
-            account, uint64(block.chainid), changes, _buildK1Auth(rootPk, digest)
-        );
+        _applyActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(rootPk, digest));
     }
 
     /// @dev Authorize the EOA's self-actorId as a scoped k1 actor carrying a gated policy. The EOA is not
@@ -671,7 +669,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
     ) internal {
         bytes32 selfActorId = bytes32(bytes20(eoa));
         AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
-            authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: scope, expiry: 0
+            authenticator: accountConfiguration.K1_AUTHENTICATOR(), scope: scope, expiry: 0, installEpoch: 0
         });
         bytes memory policyData = abi.encodePacked(policyManager, commitment);
 
@@ -682,7 +680,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
 
         uint64 seq = accountConfiguration.getChangeSequences(eoa).local;
         bytes32 digest = _computeActorChangeBatchDigest(eoa, uint64(block.chainid), seq, changes);
-        accountConfiguration.applySignedActorChanges(eoa, uint64(block.chainid), changes, _buildK1Auth(eoaPk, digest));
+        _applyActorChanges(eoa, uint64(block.chainid), changes, _buildK1Auth(eoaPk, digest));
     }
 
     /// @dev Authorize an ungated (scope 0) actor under `authenticator`, signed by `pk`.
@@ -692,12 +690,15 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: AUTHORIZE_ACTOR,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: 0x00, expiry: 0}), bytes("")
+                AccountConfiguration.ActorConfig({
+                    authenticator: authenticator, scope: 0x00, expiry: 0, installEpoch: 0
+                }),
+                bytes("")
             )
         });
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
+        _applyActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
     }
 
     /// @dev Revoke `actorId` from `account`, signed by `pk`.
@@ -706,6 +707,6 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         changes[0] = AccountConfiguration.ActorChange({actorId: actorId, changeType: REVOKE_ACTOR, data: ""});
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
+        _applyActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
     }
 }

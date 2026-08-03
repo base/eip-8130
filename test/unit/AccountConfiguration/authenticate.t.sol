@@ -941,13 +941,16 @@ contract AuthenticateTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes("")
+                AccountConfiguration.ActorConfig({
+                    authenticator: authenticator, scope: scope, expiry: 0, installEpoch: 0
+                }),
+                bytes("")
             )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
+        _applyActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
     }
 
     /// @dev Authorize `newActorId` under `authenticator` with the given `expiry` (scope 0, no policy), signed by `pk`.
@@ -963,13 +966,16 @@ contract AuthenticateTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: 0x00, expiry: expiry}), bytes("")
+                AccountConfiguration.ActorConfig({
+                    authenticator: authenticator, scope: 0x00, expiry: expiry, installEpoch: 0
+                }),
+                bytes("")
             )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
+        _applyActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
     }
 
     /// @dev Authorize `newActorId` under `authenticator` as an unrestricted owner (scope 0), signed by `pk`.
@@ -984,7 +990,7 @@ contract AuthenticateTest is AccountConfigurationTest {
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
+        _applyActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
     }
 
     /// @dev Authorize a K1 policy-gated actor: manager[20] || commitment[32] policy data, signed by the owner `pk`.
@@ -1002,15 +1008,15 @@ contract AuthenticateTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0}),
+                AccountConfiguration.ActorConfig({
+                    authenticator: address(k1Authenticator), scope: scope, expiry: 0, installEpoch: 0
+                }),
                 abi.encodePacked(policyManager, commitment)
             )
         });
 
         uint64 seq = accountConfiguration.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        accountConfiguration.applySignedActorChanges(
-            account, uint64(block.chainid), changes, _buildK1Auth(ownerPk, digest)
-        );
+        _applyActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(ownerPk, digest));
     }
 }

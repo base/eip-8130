@@ -66,7 +66,10 @@ contract DefaultAccountTest is AccountConfigurationTest {
             actorId: newActorId,
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes("")
+                AccountConfiguration.ActorConfig({
+                    authenticator: authenticator, scope: scope, expiry: 0, installEpoch: 0
+                }),
+                bytes("")
             )
         });
 
@@ -74,7 +77,7 @@ contract DefaultAccountTest is AccountConfigurationTest {
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(pk, digest);
 
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
+        _applyActorChanges(account, uint64(block.chainid), changes, auth);
     }
 
     // ══════════════════════════════════════════════
