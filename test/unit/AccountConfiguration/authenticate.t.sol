@@ -894,6 +894,73 @@ contract AuthenticateTest is AccountConfigurationTest {
         assertEq(cfg.scope, uint8(0x00));
     }
 
+    /// @notice getActorConfig returns the live config before expiry and the empty config once expired, for a stored
+    ///         (_actorConfig-homed) actor — as if it had never been authorized.
+    function test_getActorConfig_success_expiredStoredActorReturnsEmpty(uint256 ownerSeed, uint256 actorSeed) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 actorPk = _boundK1Pk(actorSeed);
+        vm.assume(ownerPk != actorPk);
+        (address account, bytes32 ownerId) = _createK1Account(ownerPk);
+        bytes32 actorId = bytes32(bytes20(vm.addr(actorPk)));
+        vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
+
+        uint48 expiry = uint48(block.timestamp + 1 days);
+        _authorizeActorWithExpiry(account, ownerPk, actorId, address(k1Authenticator), expiry);
+
+        // Live before expiry.
+        AccountConfiguration.ActorConfig memory live = accountConfiguration.getActorConfig(account, actorId);
+        assertEq(live.authenticator, address(k1Authenticator));
+        assertEq(live.expiry, expiry);
+
+        // Past expiry -> empty, indistinguishable from an unknown actor.
+        vm.warp(uint256(expiry) + 1);
+        AccountConfiguration.ActorConfig memory dead = accountConfiguration.getActorConfig(account, actorId);
+        assertEq(dead.authenticator, address(0));
+        assertEq(dead.expiry, uint48(0));
+        assertEq(dead.scope, uint16(0));
+    }
+
+    /// @notice getActorConfig returns the empty config once an *inline self* (defaultEOA) config is expired, matching
+    ///         the stored-actor behavior and authentication (which reverts ActorExpired).
+    function test_getActorConfig_success_expiredInlineSelfReturnsEmpty(uint256 ownerSeed) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        (address account,) = _createK1Account(ownerPk);
+        bytes32 selfId = bytes32(bytes20(account));
+
+        // Re-enable the inline self (scope 0) with an expiry.
+        uint48 expiry = uint48(block.timestamp + 1 days);
+        _authorizeActorWithExpiry(account, ownerPk, selfId, accountConfiguration.K1_AUTHENTICATOR(), expiry);
+
+        AccountConfiguration.ActorConfig memory live = accountConfiguration.getActorConfig(account, selfId);
+        assertEq(live.authenticator, accountConfiguration.K1_AUTHENTICATOR());
+        assertEq(live.expiry, expiry);
+
+        vm.warp(uint256(expiry) + 1);
+        AccountConfiguration.ActorConfig memory dead = accountConfiguration.getActorConfig(account, selfId);
+        assertEq(dead.authenticator, address(0));
+        assertEq(dead.expiry, uint48(0));
+        assertEq(dead.scope, uint16(0));
+    }
+
+    /// @notice A non-zero expiry that is still in the future returns the live config verbatim (boundary: expiry == now
+    ///         is NOT past, so still live).
+    function test_getActorConfig_success_atExpiryBoundaryStillLive(uint256 ownerSeed, uint256 actorSeed) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 actorPk = _boundK1Pk(actorSeed);
+        vm.assume(ownerPk != actorPk);
+        (address account, bytes32 ownerId) = _createK1Account(ownerPk);
+        bytes32 actorId = bytes32(bytes20(vm.addr(actorPk)));
+        vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
+
+        uint48 expiry = uint48(block.timestamp + 1 days);
+        _authorizeActorWithExpiry(account, ownerPk, actorId, address(k1Authenticator), expiry);
+
+        vm.warp(expiry); // exactly at expiry: block.timestamp > expiry is false
+        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, actorId);
+        assertEq(cfg.authenticator, address(k1Authenticator));
+        assertEq(cfg.expiry, expiry);
+    }
+
     /// @notice isActor reports the implicit self-actorId of a never-created EOA as live.
     /// @dev No _actorConfig entry, actorId == self, flag unset -> true.
     function test_isActor_success_implicitEoaTrue(uint256 eoaSeed) public view {

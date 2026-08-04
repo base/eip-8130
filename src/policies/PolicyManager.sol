@@ -284,11 +284,14 @@ contract PolicyManager is ReentrancyGuard {
         _enforce(binding, commitment, executionData, caller);
     }
 
-    /// @dev Reject when the acting actor's stored expiry has passed. Required on the external path (no protocol
-    ///      auth); omitted on {execute}, where authentication already enforced expiry before dispatch.
+    /// @dev Reject when the acting actor's expiry has passed. Required on the external path (no protocol auth);
+    ///      omitted on {execute}, where authentication already enforced expiry before dispatch. getActorConfig
+    ///      returns the empty config (zero authenticator) for an expired actor, so an absent authenticator here means
+    ///      the actor has expired — the commitment match performed above already proved it was an authorized,
+    ///      policy-gated actor, so expiry is the only remaining reason the config would be empty.
     function _requireNotExpired(address account, bytes32 actorId) internal view {
         AccountConfiguration.ActorConfig memory config = ACCOUNT_CONFIGURATION.getActorConfig(account, actorId);
-        if (config.expiry != 0 && block.timestamp > config.expiry) revert ActorExpired(actorId);
+        if (config.authenticator == address(0)) revert ActorExpired(actorId);
     }
 
     /// @dev Common enforcement: enforce the binding's validity window (authenticated by the commitment check at the

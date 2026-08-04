@@ -842,29 +842,47 @@ contract AccountConfiguration {
     // STORAGE VIEWS
     // ----------------------------------------------------------------------------------------------------------------
 
-    /// @notice Resolves the effective ActorConfig for `actorId` on `account`.
+    /// @notice Resolves the effective ActorConfig for `actorId` on `account`, or the all-zero (empty) config when the
+    ///         actor is not live.
     ///
     /// @dev With a populated _actorConfig entry, returns it verbatim (any non-self actor, or a non-k1 self). For the
     ///      self-actorId without such an entry, the k1 self lives inline in AccountState: a live one (flag unset)
     ///      reports as a native ecrecover owner carrying its inline scope/expiry (all-zero = full owner); a
     ///      disabled one, or any unknown actor, reports as the all-zero (empty) config, keeping live-vs-disabled
     ///      unambiguous without a sentinel.
+    /// @dev An *expired* actor (non-zero expiry with block.timestamp > expiry) resolves to the empty config, exactly
+    ///      as if it had never been authorized — matching authentication (which reverts ActorExpired) so liveness has
+    ///      one meaning across the read and hot paths. This makes the view a pure function of (raw storage,
+    ///      block.timestamp): an expired slot carries no live authority, so it can be reclaimed/pruned without
+    ///      changing any observable answer, and the whole accessor can migrate to a precompile that reads the raw
+    ///      account/actor storage and applies the same expiry rule.
     ///
     /// @param account The account to read.
     /// @param actorId The actor identifier to resolve.
     ///
-    /// @return The resolved actor configuration, or the all-zero config if the actor is not live.
+    /// @return The resolved actor configuration, or the all-zero config if the actor is not live (unknown, disabled,
+    ///         or expired).
     function getActorConfig(address account, bytes32 actorId) external view returns (ActorConfig memory) {
         ActorConfig memory config = _actorConfig[actorId][account];
         // Non-zero authenticator = a stored entry. Uses the same `>= K1_AUTHENTICATOR` namespace idiom as _isActor:
         // every stored authenticator is K1_AUTHENTICATOR (0x1) or a contract, so this is equivalent to != address(0).
-        if (config.authenticator >= K1_AUTHENTICATOR) return config;
+        if (config.authenticator >= K1_AUTHENTICATOR) {
+            // An expired stored actor reports as empty (as if never authorized), never its stale config.
+            if (_isExpired(config.expiry)) return _emptyActorConfig();
+            return config;
+        }
         if (actorId == bytes32(bytes20(account)) && !_isDefaultEoaRevoked(account)) {
             AccountState storage st = _accountState[account];
+            if (_isExpired(st.defaultEOAExpiry)) return _emptyActorConfig();
             return
                 ActorConfig({authenticator: K1_AUTHENTICATOR, expiry: st.defaultEOAExpiry, scope: st.defaultEOAScope});
         }
         return config;
+    }
+
+    /// @dev The all-zero ActorConfig returned for a non-live actor (unknown, disabled, or expired).
+    function _emptyActorConfig() private pure returns (ActorConfig memory) {
+        return ActorConfig({authenticator: address(0), expiry: 0, scope: 0});
     }
 
     /// @notice Resolves an actor's policy gate target (manager) and signed commitment.
@@ -1317,7 +1335,7 @@ contract AccountConfiguration {
         ActorConfig memory config = _actorConfig[actorId][account];
         if (config.authenticator != expectedAuthenticator) revert AuthenticatorMismatch();
         // Expiry is read from the same slot; an expired actor fails authentication. 0 = no expiry.
-        if (config.expiry != 0 && block.timestamp > config.expiry) revert ActorExpired();
+        if (_isExpired(config.expiry)) revert ActorExpired();
         scope = config.scope;
         policyTarget = _policyTargetFor(scope, actorId, account);
     }
@@ -1349,7 +1367,7 @@ contract AccountConfiguration {
             // inline scope/expiry govern (all-zero = full owner).
             AccountState storage st = _accountState[account];
             if (st.flags & FLAG_REVOKE_DEFAULT_EOA != 0) revert DefaultEoaRevoked();
-            if (st.defaultEOAExpiry != 0 && block.timestamp > st.defaultEOAExpiry) revert ActorExpired();
+            if (_isExpired(st.defaultEOAExpiry)) revert ActorExpired();
             bytes32 selfActorId = bytes32(bytes20(account));
             uint16 selfScope = st.defaultEOAScope;
             return (selfActorId, selfScope, _policyTargetFor(selfScope, selfActorId, account));
@@ -1363,6 +1381,12 @@ contract AccountConfiguration {
     /// @dev True if the account's default (implicit) EOA has been revoked via the AccountState flag.
     function _isDefaultEoaRevoked(address account) internal view returns (bool) {
         return _accountState[account].flags & FLAG_REVOKE_DEFAULT_EOA != 0;
+    }
+
+    /// @dev The single actor-expiry rule shared by authentication and {getActorConfig}: an actor is expired when it
+    ///      carries a non-zero `expiry` and the current block timestamp is past it. `expiry == 0` means no expiry.
+    function _isExpired(uint48 expiry) internal view returns (bool) {
+        return expiry != 0 && block.timestamp > expiry;
     }
 
     /// @dev Recovers the ECDSA signer from a 65-byte r‖s‖v signature over `hash`, enforcing EIP-2 (low-s only,
