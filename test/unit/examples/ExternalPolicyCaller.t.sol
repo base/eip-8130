@@ -42,7 +42,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
     uint8 internal constant SCOPE_POLICY = 0x02;
 
     bytes4 internal constant TRANSFER = bytes4(keccak256("transfer(address,uint256)"));
-    uint40 internal constant MONTH = 30 days;
+    uint48 internal constant MONTH = 30 days;
 
     PolicyManager.PolicyBinding internal lastBinding;
 
@@ -257,11 +257,11 @@ contract ExternalPolicyCallerTest is KeystoreTest {
     /// @dev SessionPolicy config: `transfer` only on `token`, with a USDC-style recurring spend limit. The struct
     ///      build is split from the abi.encode so the deeply-nested encoder (Config → CallScope[] → SelectorRule[]
     ///      → address[]) runs in its own minimal-local frame, staying within the via-IR stack limit.
-    function _config(uint256 limit, uint40 period) internal view returns (bytes memory) {
+    function _config(uint256 limit, uint48 period) internal view returns (bytes memory) {
         return abi.encode(_sessionConfig(limit, period));
     }
 
-    function _sessionConfig(uint256 limit, uint40 period) internal view returns (SessionPolicy.Config memory) {
+    function _sessionConfig(uint256 limit, uint48 period) internal view returns (SessionPolicy.Config memory) {
         SessionPolicy.TokenLimit[] memory limits = new SessionPolicy.TokenLimit[](1);
         limits[0] = SessionPolicy.TokenLimit({token: address(token), limit: limit, period: period});
         SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](1);
@@ -271,7 +271,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         return SessionPolicy.Config({tokenLimits: limits, callScopes: scopes});
     }
 
-    function _binding(address account, uint256 salt, uint256 limit, uint40 period)
+    function _binding(address account, uint256 salt, uint256 limit, uint48 period)
         internal
         view
         returns (PolicyManager.PolicyBinding memory binding, bytes32 commitment)
@@ -289,11 +289,11 @@ contract ExternalPolicyCallerTest is KeystoreTest {
 
     /// @dev Full opt-in for one subscriber: create the account, mint it tokens, and authorize the provider as an
     ///      external-policy actor gated to this manager with the binding commitment.
-    function _optIn(bytes32 accountSalt, uint256 limit, uint40 period) internal returns (address account) {
+    function _optIn(bytes32 accountSalt, uint256 limit, uint48 period) internal returns (address account) {
         return _optInWithExpiry(accountSalt, limit, period, 0);
     }
 
-    function _optInWithExpiry(bytes32 accountSalt, uint256 limit, uint40 period, uint48 expiry)
+    function _optInWithExpiry(bytes32 accountSalt, uint256 limit, uint48 period, uint48 expiry)
         internal
         returns (address account)
     {

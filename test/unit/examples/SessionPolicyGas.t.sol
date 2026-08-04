@@ -44,7 +44,7 @@ contract SessionPolicyGasTest is KeystoreTest {
     uint8 internal constant SCOPE_POLICY = 0x02;
 
     bytes4 internal constant TRANSFER = bytes4(keccak256("transfer(address,uint256)"));
-    uint40 internal constant WEEK = 7 days;
+    uint48 internal constant WEEK = 7 days;
 
     uint256 internal saltNonce;
     PolicyManager.PolicyBinding internal lastBinding;
@@ -301,7 +301,7 @@ contract SessionPolicyGasTest is KeystoreTest {
         return new SessionPolicy.TokenLimit[](0);
     }
 
-    function _limit(address tkn, uint256 lim, uint40 period)
+    function _limit(address tkn, uint256 lim, uint48 period)
         internal
         pure
         returns (SessionPolicy.TokenLimit[] memory limits)

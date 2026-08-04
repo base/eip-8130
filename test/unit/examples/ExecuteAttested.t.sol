@@ -64,7 +64,7 @@ contract ExecuteAttestedTest is KeystoreTest {
 
     uint8 internal constant SCOPE_POLICY = 0x02;
 
-    uint40 internal constant MONTH = 30 days;
+    uint48 internal constant MONTH = 30 days;
 
     function setUp() public override {
         super.setUp();
@@ -179,23 +179,23 @@ contract ExecuteAttestedTest is KeystoreTest {
     }
 
     function test_executeAttested_revertsBeforeValidAfter() public {
-        uint40 validAfter = uint40(block.timestamp + 1 days);
+        uint48 validAfter = uint48(block.timestamp + 1 days);
         (bytes32 actorId, PolicyManager.PolicyBinding memory binding) = _installSessionWithWindow(1, validAfter, 0);
 
         vm.expectRevert(
-            abi.encodeWithSelector(PolicyManager.OutsideValidityWindow.selector, validAfter, uint40(0), block.timestamp)
+            abi.encodeWithSelector(PolicyManager.OutsideValidityWindow.selector, validAfter, uint48(0), block.timestamp)
         );
         vm.prank(account, bundler);
         manager.executeAttested(actorId, binding, _transfer(1));
     }
 
     function test_executeAttested_revertsAfterValidUntil() public {
-        uint40 validUntil = uint40(block.timestamp + 1 days);
+        uint48 validUntil = uint48(block.timestamp + 1 days);
         (bytes32 actorId, PolicyManager.PolicyBinding memory binding) = _installSessionWithWindow(1, 0, validUntil);
 
         vm.warp(uint256(validUntil));
         vm.expectRevert(
-            abi.encodeWithSelector(PolicyManager.OutsideValidityWindow.selector, uint40(0), validUntil, block.timestamp)
+            abi.encodeWithSelector(PolicyManager.OutsideValidityWindow.selector, uint48(0), validUntil, block.timestamp)
         );
         vm.prank(account, bundler);
         manager.executeAttested(actorId, binding, _transfer(1));
@@ -312,7 +312,7 @@ contract ExecuteAttestedTest is KeystoreTest {
         _authorizePolicyActor(actorId, commitment, expiry);
     }
 
-    function _installSessionWithWindow(uint256 salt, uint40 validAfter, uint40 validUntil)
+    function _installSessionWithWindow(uint256 salt, uint48 validAfter, uint48 validUntil)
         internal
         returns (bytes32 actorId, PolicyManager.PolicyBinding memory binding)
     {

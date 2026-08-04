@@ -135,25 +135,25 @@ contract PolicyManagerTest is KeystoreTest {
     }
 
     function test_execute_revertsBeforeValidAfter() public {
-        uint40 validAfter = uint40(block.timestamp + 1 days);
+        uint48 validAfter = uint48(block.timestamp + 1 days);
         (bytes32 actorId, PolicyManager.PolicyBinding memory binding) = _installSessionWithWindow(1, validAfter, 0);
         _mockActingActor(actorId);
 
         vm.expectRevert(
-            abi.encodeWithSelector(PolicyManager.OutsideValidityWindow.selector, validAfter, uint40(0), block.timestamp)
+            abi.encodeWithSelector(PolicyManager.OutsideValidityWindow.selector, validAfter, uint48(0), block.timestamp)
         );
         vm.prank(account);
         manager.execute(binding, _action());
     }
 
     function test_execute_revertsAfterValidUntil() public {
-        uint40 validUntil = uint40(block.timestamp + 1 days);
+        uint48 validUntil = uint48(block.timestamp + 1 days);
         (bytes32 actorId, PolicyManager.PolicyBinding memory binding) = _installSessionWithWindow(2, 0, validUntil);
         _mockActingActor(actorId);
 
         vm.warp(uint256(validUntil));
         vm.expectRevert(
-            abi.encodeWithSelector(PolicyManager.OutsideValidityWindow.selector, uint40(0), validUntil, block.timestamp)
+            abi.encodeWithSelector(PolicyManager.OutsideValidityWindow.selector, uint48(0), validUntil, block.timestamp)
         );
         vm.prank(account);
         manager.execute(binding, _action());
@@ -258,7 +258,7 @@ contract PolicyManagerTest is KeystoreTest {
         _authorizePolicyActor(actorId, manager.commitmentOf(binding), expiry);
     }
 
-    function _installSessionWithWindow(uint256 salt, uint40 validAfter, uint40 validUntil)
+    function _installSessionWithWindow(uint256 salt, uint48 validAfter, uint48 validUntil)
         internal
         returns (bytes32 actorId, PolicyManager.PolicyBinding memory binding)
     {

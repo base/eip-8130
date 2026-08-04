@@ -13,19 +13,19 @@ library RecurringAllowance {
         /// @dev Maximum spend per period window.
         uint160 allowance;
         /// @dev Period length in seconds.
-        uint40 period;
+        uint48 period;
         /// @dev Start timestamp (seconds) inclusive.
-        uint40 start;
+        uint48 start;
         /// @dev End timestamp (seconds) exclusive.
-        uint40 end;
+        uint48 end;
     }
 
     /// @notice Stored usage snapshot for a particular active period.
     struct PeriodUsage {
         /// @dev Period start timestamp (seconds).
-        uint40 start;
+        uint48 start;
         /// @dev Period end timestamp (seconds).
-        uint40 end;
+        uint48 end;
         /// @dev Amount spent during the period window.
         uint160 spend;
     }
@@ -43,13 +43,13 @@ library RecurringAllowance {
     error ZeroAllowance();
 
     /// @notice Thrown when `start >= end` in the limit bounds.
-    error InvalidStartEnd(uint40 start, uint40 end);
+    error InvalidStartEnd(uint48 start, uint48 end);
 
     /// @notice Thrown when the current timestamp is before the allowance window.
-    error BeforeStart(uint40 currentTimestamp, uint40 start);
+    error BeforeStart(uint48 currentTimestamp, uint48 start);
 
     /// @notice Thrown when the current timestamp is at or past the allowance window end.
-    error AfterEnd(uint40 currentTimestamp, uint40 end);
+    error AfterEnd(uint48 currentTimestamp, uint48 end);
 
     /// @notice Thrown when the spend value is zero.
     error ZeroValue();
@@ -99,7 +99,7 @@ library RecurringAllowance {
         view
         returns (PeriodUsage memory)
     {
-        uint40 currentTimestamp = uint40(block.timestamp);
+        uint48 currentTimestamp = uint48(block.timestamp);
         if (currentTimestamp < limit.start) revert BeforeStart(currentTimestamp, limit.start);
         if (currentTimestamp >= limit.end) revert AfterEnd(currentTimestamp, limit.end);
 
@@ -108,10 +108,10 @@ library RecurringAllowance {
         bool lastStillActive = currentTimestamp < lastUpdated.end;
         if (lastExists && lastStillActive) return lastUpdated;
 
-        uint40 currentPeriodProgress = (currentTimestamp - limit.start) % limit.period;
-        uint40 start = currentTimestamp - currentPeriodProgress;
+        uint48 currentPeriodProgress = (currentTimestamp - limit.start) % limit.period;
+        uint48 start = currentTimestamp - currentPeriodProgress;
         bool endOverflow = uint256(start) + uint256(limit.period) > limit.end;
-        uint40 end = endOverflow ? limit.end : start + limit.period;
+        uint48 end = endOverflow ? limit.end : start + limit.period;
         return PeriodUsage({start: start, end: end, spend: 0});
     }
 }

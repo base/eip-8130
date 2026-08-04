@@ -73,7 +73,7 @@ contract SessionPolicyTest is KeystoreTest {
     uint8 internal constant SCOPE_POLICY = 0x02;
 
     bytes4 internal constant TRANSFER = bytes4(keccak256("transfer(address,uint256)"));
-    uint40 internal constant WEEK = 7 days;
+    uint48 internal constant WEEK = 7 days;
 
     uint256 internal saltNonce;
     PolicyManager.PolicyBinding internal lastBinding;
@@ -297,7 +297,7 @@ contract SessionPolicyTest is KeystoreTest {
         // A second ERC-20 plays the role of USDC (6 decimals); `token` (minted in setUp) is the MyApp token.
         SessionMockERC20 usdc = new SessionMockERC20();
         usdc.mint(account, 1_000e6);
-        uint40 monthPeriod = 30 days;
+        uint48 monthPeriod = 30 days;
         uint256 fiveUsdc = 5e6; // $5 at 6 decimals
 
         // Spend limits: only USDC ($5/month). The MyApp token has no entry, so its transfers are uncapped.
@@ -592,7 +592,7 @@ contract SessionPolicyTest is KeystoreTest {
         assertTrue(policy.isRecipientAllowed(cfg, address(token), TRANSFER, bob));
         assertFalse(policy.isRecipientAllowed(cfg, address(token), TRANSFER, mallory));
 
-        (bool set, uint160 allowance, uint40 period) = policy.getTokenLimit(cfg, address(token));
+        (bool set, uint160 allowance, uint48 period) = policy.getTokenLimit(cfg, address(token));
         assertTrue(set);
         assertEq(allowance, 500e18);
         assertEq(period, WEEK);
@@ -613,9 +613,9 @@ contract SessionPolicyTest is KeystoreTest {
         assertFalse(otherAllowed);
 
         // A one-time (period == 0) native cap is normalized to the never-resetting ONE_TIME period.
-        (bool set,, uint40 period) = policy.getTokenLimit(cfg, address(0));
+        (bool set,, uint48 period) = policy.getTokenLimit(cfg, address(0));
         assertTrue(set);
-        assertEq(period, type(uint40).max);
+        assertEq(period, type(uint48).max);
     }
 
     // ── Helpers ──
@@ -669,7 +669,7 @@ contract SessionPolicyTest is KeystoreTest {
         return new SessionPolicy.TokenLimit[](0);
     }
 
-    function _limit(address tkn, uint256 lim, uint40 period)
+    function _limit(address tkn, uint256 lim, uint48 period)
         internal
         pure
         returns (SessionPolicy.TokenLimit[] memory limits)

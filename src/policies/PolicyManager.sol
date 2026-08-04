@@ -77,9 +77,9 @@ contract PolicyManager is ReentrancyGuard {
         /// @dev Committed, opaque policy configuration interpreted by `policy`.
         bytes policyConfig;
         /// @dev Earliest timestamp (seconds) at which execution is allowed. Zero = no lower bound.
-        uint40 validAfter;
+        uint48 validAfter;
         /// @dev Timestamp (seconds) at/after which execution is disallowed. Zero = no upper bound.
-        uint40 validUntil;
+        uint48 validUntil;
         /// @dev Salt allowing multiple distinct bindings for the same (account, policy, config).
         uint256 salt;
     }
@@ -90,7 +90,7 @@ contract PolicyManager is ReentrancyGuard {
     event ExecutionSkipped(address indexed account, address indexed policy, bytes32 indexed actorId);
 
     /// @notice The current time is outside the binding's `[validAfter, validUntil)` execution window.
-    error OutsideValidityWindow(uint40 validAfter, uint40 validUntil, uint256 timestamp);
+    error OutsideValidityWindow(uint48 validAfter, uint48 validUntil, uint256 timestamp);
     /// @notice The supplied binding does not recompute to the actor's live signed commitment.
     error BindingCommitmentMismatch(bytes32 expected, bytes32 actual);
     /// @notice {execute} requires `binding.account == msg.sender` (the protocol-dispatched account).

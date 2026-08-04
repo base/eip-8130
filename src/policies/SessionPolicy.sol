@@ -59,7 +59,7 @@ contract SessionPolicy is Policy {
         /// @dev Maximum spend per period (one-time: total cap). Must fit uint160.
         uint256 limit;
         /// @dev Recurring period in seconds. 0 = one-time (a single cumulative cap that never resets).
-        uint40 period;
+        uint48 period;
     }
 
     /// @notice A function selector and an optional recipient allowlist.
@@ -102,9 +102,9 @@ contract SessionPolicy is Policy {
     bytes4 internal constant TRANSFER_FROM = IERC20.transferFrom.selector; // transferFrom(address,address,uint256)
     bytes4 internal constant APPROVE = IERC20.approve.selector; // approve(address,uint256)
 
-    /// @dev One-time limits are modeled as a never-resetting window: period is type(uint40).max so the cumulative
+    /// @dev One-time limits are modeled as a never-resetting window: period is type(uint48).max so the cumulative
     ///      spend never refreshes within representable time.
-    uint40 internal constant ONE_TIME_PERIOD = type(uint40).max;
+    uint48 internal constant ONE_TIME_PERIOD = type(uint48).max;
 
     /// @notice The action's `target` is not in the committed call-target allowlist.
     error TargetNotAllowed(address target);
@@ -207,7 +207,7 @@ contract SessionPolicy is Policy {
     function getTokenLimit(Config calldata config, address token)
         external
         pure
-        returns (bool set, uint160 allowance, uint40 period)
+        returns (bool set, uint160 allowance, uint48 period)
     {
         for (uint256 i; i < config.tokenLimits.length; i++) {
             TokenLimit calldata tl = config.tokenLimits[i];
@@ -232,10 +232,10 @@ contract SessionPolicy is Policy {
             return RecurringAllowance.PeriodUsage({start: 0, end: 0, spend: 0});
         }
         if (limit.limit > type(uint160).max) revert LimitTooLarge(limit.token, limit.limit);
-        uint40 period = limit.period == 0 ? ONE_TIME_PERIOD : limit.period;
+        uint48 period = limit.period == 0 ? ONE_TIME_PERIOD : limit.period;
         return _usage.getCurrentPeriod(
             _spendKey(commitment, limit.token),
-            RecurringAllowance.Limit({allowance: uint160(limit.limit), period: period, start: 0, end: type(uint40).max})
+            RecurringAllowance.Limit({allowance: uint160(limit.limit), period: period, start: 0, end: type(uint48).max})
         );
     }
 
@@ -284,7 +284,7 @@ contract SessionPolicy is Policy {
             // 3a. ERC-20 spend limit: consume the target token's cap for decodable spend selectors. Note `approve`
             // debits at grant time; a standing allowance can still be reused across periods (see contract NatSpec).
             if (_isErc20Selector(selector)) {
-                (bool set, uint160 allowance, uint40 period) = _findTokenLimit(config, action.target);
+                (bool set, uint160 allowance, uint48 period) = _findTokenLimit(config, action.target);
                 if (set) {
                     (, uint256 amount) = _decodeErc20(selector, action.data);
                     _consume(commitment, action.target, allowance, period, amount);
@@ -297,7 +297,7 @@ contract SessionPolicy is Policy {
 
         // 3b. Native-ETH spend limit: consume from the call value, independent of calldata.
         if (action.value > 0) {
-            (bool set, uint160 allowance, uint40 period) = _findTokenLimit(config, address(0));
+            (bool set, uint160 allowance, uint48 period) = _findTokenLimit(config, address(0));
             if (set) _consume(commitment, address(0), allowance, period, action.value);
         }
 
@@ -351,11 +351,11 @@ contract SessionPolicy is Policy {
     }
 
     /// @dev Consume `amount` against a token's cap. Skips zero amounts (the library rejects zero-value spends).
-    function _consume(bytes32 commitment, address token, uint160 allowance, uint40 period, uint256 amount) internal {
+    function _consume(bytes32 commitment, address token, uint160 allowance, uint48 period, uint256 amount) internal {
         if (amount == 0) return;
         _usage.useLimit(
             _spendKey(commitment, token),
-            RecurringAllowance.Limit({allowance: allowance, period: period, start: 0, end: type(uint40).max}),
+            RecurringAllowance.Limit({allowance: allowance, period: period, start: 0, end: type(uint48).max}),
             amount
         );
     }
@@ -375,7 +375,7 @@ contract SessionPolicy is Policy {
     function _findTokenLimit(Config memory config, address token)
         internal
         pure
-        returns (bool set, uint160 allowance, uint40 period)
+        returns (bool set, uint160 allowance, uint48 period)
     {
         for (uint256 i; i < config.tokenLimits.length; i++) {
             TokenLimit memory tl = config.tokenLimits[i];
