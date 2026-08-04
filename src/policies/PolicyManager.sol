@@ -13,7 +13,7 @@ import {Policy} from "./Policy.sol";
 ///      directly. Distinct from `TRUSTED_EXECUTOR` (which grants direct `executeBatch`): this is a
 ///      no-code, hash-derived sentinel, so the actor is recognized by Keystore (non-zero authenticator)
 ///      yet cannot drive the account directly and cannot authenticate an 8130 transaction (its `authenticate()` would
-///      call into empty code and fail). Only the account-side authorization (and these examples/tests) ever reference
+///      call into empty code and fail). Only the account-side authorization (and these tests) ever reference
 ///      it; neither the account nor the manager runtime reads it — `executeFor` authorizes purely on
 ///      `actorId == bytes20(msg.sender)`, `policy_manager == this`, and a matching binding commitment.
 address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak256("externalPolicyCaller"))));
