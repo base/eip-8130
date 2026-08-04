@@ -321,7 +321,7 @@ contract AccountLockTest is KeystoreTest {
         (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 storedDelay) = keystore.getLockStatus(account);
         assertTrue(locked); // block.timestamp (t0) < unlocksAt (t0 + delay)
         assertTrue(hasInitiatedUnlock);
-        assertEq(unlocksAt, uint40(t0 + delay));
+        assertEq(unlocksAt, uint48(t0 + delay));
         assertEq(storedDelay, 0);
         assertTrue(keystore.isLocked(account));
     }
@@ -339,7 +339,7 @@ contract AccountLockTest is KeystoreTest {
 
         bytes memory auth = _unlockAuth(pk, account);
         vm.expectEmit(true, false, false, true, address(keystore));
-        emit Keystore.AccountUnlockInitiated(account, uint40(t0 + delay));
+        emit Keystore.AccountUnlockInitiated(account, uint48(t0 + delay));
         keystore.applySignedLockChanges(account, Keystore.LockOp.Unlock, 0, auth);
     }
 
@@ -440,7 +440,7 @@ contract AccountLockTest is KeystoreTest {
         (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 storedDelay) = keystore.getLockStatus(account);
         assertFalse(locked);
         assertTrue(hasInitiatedUnlock);
-        assertEq(unlocksAt, uint40(t0 + delay));
+        assertEq(unlocksAt, uint48(t0 + delay));
         assertEq(storedDelay, 0);
     }
 
