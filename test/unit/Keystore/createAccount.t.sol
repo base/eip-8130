@@ -70,6 +70,16 @@ contract CreateAccountTest is KeystoreTest {
         keystore.createAccount(salt, bytecode, actors);
     }
 
+    /// @notice Verifies createAccount reverts on empty bytecode, which would deploy a code-less but actor-initialized
+    ///         account.
+    /// @dev The EmptyBytecode guard trips before deployment; no state is written and nothing is deployed.
+    function test_createAccount_revert_emptyBytecode(bytes32 salt) public {
+        Keystore.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(1))));
+
+        vm.expectRevert(Keystore.EmptyBytecode.selector);
+        keystore.createAccount(salt, "", actors);
+    }
+
     /// @notice Verifies re-creating an account at an address that already holds 8130 state reverts
     /// @dev localSequence is set to 1 on first create and doubles as the initialized flag; the guard trips on retry
     function test_createAccount_revert_alreadyInitialized(uint256 pk, bytes32 salt, uint256 lenSeed, bytes32 content)

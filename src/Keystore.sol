@@ -358,6 +358,10 @@ contract Keystore {
     /// @notice The actor's expiry has passed.
     error ActorExpired();
 
+    /// @notice An authorize named a non-zero expiry that is not strictly in the future (`expiry <= block.timestamp`),
+    ///         which would install an already-dead key. A perpetual key uses `expiry == 0`.
+    error ExpiryInPast();
+
     /// @notice A local-channel signed change bound an epoch that is not the account's current epoch (stale/replayed).
     error EpochMismatch();
 
@@ -386,6 +390,10 @@ contract Keystore {
 
     /// @notice The provided account bytecode exceeds the maximum encodable length.
     error BytecodeTooLarge();
+
+    /// @notice createAccount was called with empty bytecode, which would deploy an actor-initialized account with no
+    ///         code.
+    error EmptyBytecode();
 
     /// @notice CREATE2 did not deploy code at the expected account address (e.g. bytecode too large per EIP-170,
     ///      leading 0xEF byte per EIP-3541, or out of gas). Reverting unwinds all state writes so no orphaned
@@ -438,6 +446,7 @@ contract Keystore {
     ///         always 0 at create — scoped-with-expiry keys are added afterwards via applySignedActorChanges. The
     ///         implicit default-EOA key is disabled on creation.
     ///
+    /// @dev Reverts with EmptyBytecode when `bytecode` is empty.
     /// @dev Reverts with BytecodeTooLarge when `bytecode` exceeds the maximum encodable length.
     /// @dev Reverts with AlreadyInitialized when the account already has EIP-8130 state.
     /// @dev Reverts with NoInitialActors when `initialActors` is empty.
@@ -454,6 +463,9 @@ contract Keystore {
         external
         returns (address account)
     {
+        // Reject empty bytecode: it would deploy a code-less account that is nonetheless initialized with actors.
+        if (bytecode.length == 0) revert EmptyBytecode();
+
         bytes32 effectiveSalt;
         bytes memory deploymentCode;
         (account, effectiveSalt, deploymentCode) = _prepareDeployment(userSalt, bytecode, initialActors);
@@ -510,8 +522,10 @@ contract Keystore {
 
         // Import is a one-time bootstrap for accounts with no 8130 state yet.
         if (_isInitialized(account)) revert AlreadyInitialized();
-        _accountState[account].localSequence = 1;
 
+        // Validate the account's ERC-1271 import signature BEFORE writing any 8130 state. No storage is touched until
+        // the staticcall returns, so a read-only reentrant call made during it can never observe a half-initialized
+        // account (localSequence set but actors not yet written).
         bytes32 digest = _computeImportDigest(account, chainId, initialActors);
         (bool success, bytes memory result) =
             account.staticcall(abi.encodeWithSelector(ERC1271_SELECTOR, digest, signature));
@@ -519,11 +533,12 @@ contract Keystore {
             revert InvalidImportSignature();
         }
 
-        // Disable the implicit default-EOA path (parity with createAccount). Set *after* the ERC-1271 check: for an
-        // EIP-7702 delegated EOA its own k1 signature (the implicit full owner) is the only authenticator available
-        // at import time, so it must stay live for that check. An owner who wants to keep using the key can include
-        // the self-actorId as an explicit k1 actor in initialActors (still a full owner, now via its config), or
-        // re-enable it later. Folds into the same slot as localSequence.
+        // Mark initialized (localSequence = 1) and disable the implicit default-EOA path (parity with createAccount),
+        // folded into one slot write. Both are set *after* the ERC-1271 check: for an EIP-7702 delegated EOA its own
+        // k1 signature (the implicit full owner) is the only authenticator available at import time, so it must stay
+        // live for that check. An owner who wants to keep using the key can include the self-actorId as an explicit
+        // k1 actor in initialActors (still a full owner, now via its config), or re-enable it later.
+        _accountState[account].localSequence = 1;
         _accountState[account].flags = FLAG_REVOKE_DEFAULT_EOA;
 
         _initializeAccount(account, initialActors);
@@ -562,7 +577,7 @@ contract Keystore {
     /// @dev Reverts with InvalidBumpChange when a ChangeType.BumpEpoch change carries data or is on the multichain
     ///      channel, or EpochExhausted when the epoch is already at its maximum.
     /// @dev Reverts with UnknownChangeType when a change carries an unrecognized changeType.
-    /// @dev Reverts with InvalidAuthenticator or InvalidPolicyData on a malformed authorize.
+    /// @dev Reverts with InvalidAuthenticator, ExpiryInPast, or InvalidPolicyData on a malformed authorize.
     /// @dev Reverts with UnknownActor when revoking an actor that is not authorized.
     ///
     /// @param account The account whose configuration is changed.
@@ -1045,7 +1060,7 @@ contract Keystore {
     /// @dev Authorizes (upserts) `actorId` with `config` and optional `policyData`, emitting ActorAuthorized. Rejects
     ///      a sub-K1 authenticator. The self-actorId is routed by authenticator type (a k1 self inline in
     ///      AccountState, a non-k1 self in _actorConfig) and the two are kept mutually exclusive; every other actor
-    ///      lives in _actorConfig. Reverts with InvalidAuthenticator or InvalidPolicyData.
+    ///      lives in _actorConfig. Reverts with InvalidAuthenticator, ExpiryInPast, or InvalidPolicyData.
     function _authorizeActor(address account, bytes32 actorId, ActorConfig memory config, bytes memory policyData)
         internal
         nonZeroAccount(account)
@@ -1055,6 +1070,10 @@ contract Keystore {
         // codeless sentinels (e.g. EXTERNAL_POLICY_AUTHENTICATOR). A bad authenticator simply fails fail-closed at
         // authentication time, mirroring the reference PolicyManager's treatment of a zero-commitment policy actor.
         if (config.authenticator < K1_AUTHENTICATOR) revert InvalidAuthenticator();
+
+        // A set expiry must be strictly in the future: installing a key that is already expired (or expires this very
+        // block) is never useful and getActorConfig would immediately report it empty. expiry == 0 = perpetual.
+        if (config.expiry != 0 && config.expiry <= block.timestamp) revert ExpiryInPast();
 
         // Slice the signed policy by scope & Scopes.POLICY. The commitment is opaque to the protocol. This contract
         // does not reject scope combinations (e.g. Scopes.POLICY | Scopes.SELF_PAYER) — any use-time exclusivity between

@@ -174,7 +174,7 @@ contract AuthenticateTest is KeystoreTest {
         address eoa = vm.addr(eoaPk);
         bytes32 selfActorId = bytes32(bytes20(eoa));
 
-        uint48 expiry = uint48(bound(uint256(expirySeed), 1, uint256(type(uint48).max) - 1));
+        uint48 expiry = uint48(bound(uint256(expirySeed), block.timestamp + 1, uint256(type(uint48).max) - 1));
         // Authorize the self-actorId as a scoped-0 K1 actor carrying an expiry (re-enables the inline self).
         _authorizeActorWithExpiry(eoa, eoaPk, selfActorId, address(k1Authenticator), expiry);
 
@@ -198,7 +198,7 @@ contract AuthenticateTest is KeystoreTest {
 
         (address account,) = _createK1Account(ownerPk);
         bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
-        uint48 expiry = uint48(bound(uint256(expirySeed), 1, uint256(type(uint48).max) - 1));
+        uint48 expiry = uint48(bound(uint256(expirySeed), block.timestamp + 1, uint256(type(uint48).max) - 1));
         _authorizeActorWithExpiry(account, ownerPk, sessionActorId, address(k1Authenticator), expiry);
 
         vm.warp(uint256(expiry) + bound(warpSeed, 1, 1_000_000));
@@ -219,7 +219,7 @@ contract AuthenticateTest is KeystoreTest {
         uint256 pk = _boundP256Pk(pkSeed);
 
         (address account,) = _createK1Account(ownerPk);
-        uint48 expiry = uint48(bound(uint256(expirySeed), 1, uint256(type(uint48).max) - 1));
+        uint48 expiry = uint48(bound(uint256(expirySeed), block.timestamp + 1, uint256(type(uint48).max) - 1));
         _authorizeActorWithExpiry(account, ownerPk, _p256ActorId(pk), address(p256Authenticator), expiry);
 
         vm.warp(uint256(expiry) + bound(warpSeed, 1, 1_000_000));

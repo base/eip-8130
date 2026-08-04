@@ -564,6 +564,38 @@ contract ApplyConfigChangeActorTest is KeystoreTest {
         keystore.applySignedActorChanges(account, uint64(block.chainid), __seqR, changes, auth);
     }
 
+    /// @notice Authorizing an actor with a non-zero expiry that is not strictly in the future reverts ExpiryInPast.
+    /// @dev Covers both the past and the at-now boundary (expiry == block.timestamp), proving the strict `>` rule; a
+    ///      perpetual (expiry == 0) actor is unaffected and exercised throughout the rest of the suite.
+    function test_applySignedActorChanges_revert_expiryInPast(
+        uint256 pk,
+        bytes32 targetId,
+        uint256 nowSeed,
+        uint256 expirySeed
+    ) public {
+        pk = _boundK1Pk(pk);
+        (address account, bytes32 ownerId) = _createK1Account(pk);
+        vm.assume(targetId != ownerId && targetId != bytes32(bytes20(account)));
+
+        uint256 nowTs = bound(nowSeed, 2, uint256(type(uint48).max));
+        vm.warp(nowTs);
+        uint48 expiry = uint48(bound(expirySeed, 1, nowTs)); // non-zero, at or before now
+
+        Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](1);
+        ch[0] = Keystore.ActorChange({
+            actorId: targetId,
+            changeType: Keystore.ChangeType.Authorize,
+            data: abi.encode(
+                Keystore.ActorConfig({authenticator: address(k1Authenticator), scope: 0, expiry: expiry}), bytes("")
+            )
+        });
+
+        bytes memory auth = _authOver(account, pk, ch);
+        uint64 seq = keystore.getChangeSequences(account).local;
+        vm.expectRevert(Keystore.ExpiryInPast.selector);
+        keystore.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
+    }
+
     /// @notice The admin gate: an authenticated actor may change actors iff its scope == 0.
     /// @dev Fuzzes the signer's scope (SCOPE_POLICY masked out) and asserts success only when scope is 0.
     function test_applySignedActorChanges_adminGate_acrossScopes(
