@@ -3,7 +3,7 @@ pragma solidity ^0.8.30;
 
 import {Script, console} from "forge-std/Script.sol";
 
-import {AccountConfiguration} from "../src/AccountConfiguration.sol";
+import {Keystore} from "../src/Keystore.sol";
 import {DefaultAccount} from "../src/accounts/DefaultAccount.sol";
 import {CanonicalHighRatePayerAccount} from "../src/accounts/CanonicalHighRatePayerAccount.sol";
 import {P256Authenticator} from "../src/authenticators/P256Authenticator.sol";
@@ -20,7 +20,7 @@ address constant CREATE2_FACTORY = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
 
 bytes32 constant SALT = bytes32(0);
 
-/// @notice Deploys the full EIP-8130 system: AccountConfiguration, account implementations, canonical
+/// @notice Deploys the full EIP-8130 system: Keystore, account implementations, canonical
 ///         authenticators, and the unaudited example policy contracts (PolicyManager, SessionPolicy).
 ///
 ///         Two account implementations are deployed:
@@ -70,15 +70,15 @@ contract Deploy is Script {
     }
 
     /// @dev ERC-1167 minimal-proxy runtime bytecode for `implementation`.
-    ///      Same encoding used by AccountConfiguration.createAccount callers and by nodes when admitting
+    ///      Same encoding used by Keystore.createAccount callers and by nodes when admitting
     ///      high-rate payer accounts (exact 45-byte code match).
     function _erc1167Runtime(address implementation) internal pure returns (bytes memory) {
         return abi.encodePacked(hex"363d3d373d3d3d363d73", implementation, hex"5af43d82803e903d91602b57fd5bf3");
     }
 
-    /// @dev Init code for each contract, given the resolved AccountConfiguration address.
+    /// @dev Init code for each contract, given the resolved Keystore address.
     function _accountConfigInit() internal pure returns (bytes memory) {
-        return type(AccountConfiguration).creationCode;
+        return type(Keystore).creationCode;
     }
 
     function _defaultAccountInit(address accountConfig) internal pure returns (bytes memory) {
@@ -127,14 +127,14 @@ contract Deploy is Script {
         address canonicalHighRatePayer = _addr(_canonicalHighRatePayerInit(accountConfig));
         address policyManager = _addr(_policyManagerInit(accountConfig));
 
-        console.log("AccountConfiguration:    ", accountConfig);
+        console.log("Keystore:    ", accountConfig);
         console.log("");
         console.log("=== Account implementations ===");
         console.log("DefaultAccount:          ", _addr(_defaultAccountInit(accountConfig)));
         console.log("CanonicalHighRatePayerAccount:", canonicalHighRatePayer);
         console.log("");
         console.log("=== Authenticators ===");
-        console.log("(secp256k1 is built in: AccountConfiguration.K1_AUTHENTICATOR() == address(1))");
+        console.log("(secp256k1 is built in: Keystore.K1_AUTHENTICATOR() == address(1))");
         console.log("P256Authenticator:       ", _addr(type(P256Authenticator).creationCode));
         console.log("WebAuthnAuthenticator:   ", _addr(type(WebAuthnAuthenticator).creationCode));
         console.log("DelegateAuthenticator:   ", _addr(_delegateAuthInit(accountConfig)));
@@ -165,7 +165,7 @@ contract Deploy is Script {
         address defaultAccount = _create2(_defaultAccountInit(accountConfig));
         address canonicalHighRatePayer = _create2(_canonicalHighRatePayerInit(accountConfig));
 
-        // ── Authenticators (secp256k1 is built into AccountConfiguration; no contract to deploy) ──
+        // ── Authenticators (secp256k1 is built into Keystore; no contract to deploy) ──
 
         address p256 = _create2(type(P256Authenticator).creationCode);
         address webAuthn = _create2(type(WebAuthnAuthenticator).creationCode);
@@ -179,14 +179,14 @@ contract Deploy is Script {
 
         vm.stopBroadcast();
 
-        console.log("AccountConfiguration:    ", accountConfig);
+        console.log("Keystore:    ", accountConfig);
         console.log("");
         console.log("=== Account implementations ===");
         console.log("DefaultAccount:          ", defaultAccount);
         console.log("CanonicalHighRatePayerAccount:", canonicalHighRatePayer);
         console.log("");
         console.log("=== Authenticators ===");
-        console.log("(secp256k1 is built in: AccountConfiguration.K1_AUTHENTICATOR() == address(1))");
+        console.log("(secp256k1 is built in: Keystore.K1_AUTHENTICATOR() == address(1))");
         console.log("P256Authenticator:       ", p256);
         console.log("WebAuthnAuthenticator:   ", webAuthn);
         console.log("DelegateAuthenticator:   ", delegate);

@@ -3,13 +3,13 @@ pragma solidity ^0.8.30;
 
 import {Script, console} from "forge-std/Script.sol";
 
-import {AccountConfiguration} from "../src/AccountConfiguration.sol";
+import {Keystore} from "../src/Keystore.sol";
 import {IAuthenticator} from "../src/interfaces/IAuthenticator.sol";
 
 /// @notice End-to-end smoke test against a live deployment.
 ///
 ///         Tests:
-///           1. Account creation via AccountConfiguration
+///           1. Account creation via Keystore
 ///           2. Actor authorization + data reads
 ///           3. K1 signature authentication
 ///           4. ERC-1167 proxy bytecode correctness
@@ -19,7 +19,7 @@ contract SmokeTest is Script {
     function run(address acctConfig, address k1Authenticator, address defaultImpl) public {
         address signer = vm.addr(SIGNER_PK);
         bytes32 actorId = bytes32(bytes20(signer));
-        AccountConfiguration config = AccountConfiguration(acctConfig);
+        Keystore config = Keystore(acctConfig);
 
         // 1. Create account
         address account = _createAccount(config, k1Authenticator, defaultImpl, actorId);
@@ -41,14 +41,12 @@ contract SmokeTest is Script {
         console.log("=== ALL SMOKE TESTS PASSED ===");
     }
 
-    function _createAccount(AccountConfiguration config, address k1Authenticator, address defaultImpl, bytes32 actorId)
+    function _createAccount(Keystore config, address k1Authenticator, address defaultImpl, bytes32 actorId)
         internal
         returns (address)
     {
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](1);
-        actors[0] = AccountConfiguration.InitialActor({
-            actorId: actorId, authenticator: k1Authenticator, scope: 0, policyData: ""
-        });
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
+        actors[0] = Keystore.InitialActor({actorId: actorId, authenticator: k1Authenticator, scope: 0, policyData: ""});
 
         bytes memory bytecode =
             abi.encodePacked(hex"363d3d373d3d3d363d73", defaultImpl, hex"5af43d82803e903d91602b57fd5bf3");
@@ -59,16 +57,13 @@ contract SmokeTest is Script {
         return account;
     }
 
-    function _checkActor(AccountConfiguration config, address account, bytes32 actorId, address k1Authenticator)
-        internal
-        view
-    {
-        AccountConfiguration.ActorConfig memory actorCfg = config.getActorConfig(account, actorId);
+    function _checkActor(Keystore config, address account, bytes32 actorId, address k1Authenticator) internal view {
+        Keystore.ActorConfig memory actorCfg = config.getActorConfig(account, actorId);
         require(actorCfg.authenticator != address(0), "actor not authorized");
         require(actorCfg.authenticator == k1Authenticator, "wrong authenticator");
     }
 
-    function _checkSignature(AccountConfiguration config, address k1Authenticator, address account) internal view {
+    function _checkSignature(Keystore config, address k1Authenticator, address account) internal view {
         bytes32 testHash = keccak256("hello EIP-8130");
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(SIGNER_PK, testHash);
 

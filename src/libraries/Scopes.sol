@@ -4,7 +4,7 @@ pragma solidity 0.8.36;
 /// @notice Canonical EIP-8130 actor scope grants: the named bits of the `uint16` scope bitmask carried in an
 ///         actor's config.
 ///
-/// @dev Reference vocabulary, not enforcement. AccountConfiguration is deliberately scope-agnostic: it treats
+/// @dev Reference vocabulary, not enforcement. Keystore is deliberately scope-agnostic: it treats
 ///      `scope == 0` as the admin predicate and interprets only {POLICY} (to slice/store policy data). Every other
 ///      bit's *meaning* is enforced by whoever reads it — protocol nodes for the transaction paths, account
 ///      contracts for ERC-1271, policy managers for gating. This library only gives those consumers a shared set of
@@ -15,7 +15,7 @@ pragma solidity 0.8.36;
 ///      is defined here.
 ///
 ///      The assignment is append-only: a value once given a name keeps it, and new grants take the next free bit.
-///      That is safe against the immutable AccountConfiguration deployment because unknown bits grant nothing and
+///      That is safe against the immutable Keystore deployment because unknown bits grant nothing and
 ///      are stored verbatim (see the EIP's Actor Scope section), so adding a bit here can never change how an
 ///      already-deployed config behaves. Admin is intentionally absent — it is the *absence* of grants
 ///      (`scope == 0`), a predicate rather than a pure grant.
@@ -26,7 +26,7 @@ library Scopes {
     uint16 internal constant SENDER = 0x0001;
 
     /// @notice Gated initiation (`sender_auth`): may originate transactions only to the actor's `policy_manager`.
-    ///         The one bit AccountConfiguration itself interprets, to slice and store the actor's policy data.
+    ///         The one bit Keystore itself interprets, to slice and store the actor's policy data.
     uint16 internal constant POLICY = 0x0002;
 
     /// @notice Permits a restricted actor to use sequenced `nonce_key`s for sender-context transactions.

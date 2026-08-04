@@ -17,7 +17,7 @@ import {RecurringAllowance} from "./RecurringAllowance.sol";
 ///      per call; bundling every dimension here lets them all gate the same call atomically.
 ///
 ///      Config model: no config storage. Every {onExecute} receives the config preimage via calldata;
-///      {PolicyManager} authenticates it by recomputing the binding commitment against AccountConfiguration.
+///      {PolicyManager} authenticates it by recomputing the binding commitment against Keystore.
 ///      Config shape checks (ZeroLimit, LimitTooLarge, SelfTargetNotAllowed, AnySelectorOnLimitedToken,
 ///      duplicates, RecipientRuleUnsupportedSelector) run at execute via {_validateConfig}.
 ///      {_findTokenLimit} still defensively re-checks LimitTooLarge before the uint160 cast. The only storage is

@@ -4,14 +4,14 @@ pragma solidity ^0.8.30;
 import {Address} from "openzeppelin/utils/Address.sol";
 import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
 
-import {AccountConfiguration} from "../AccountConfiguration.sol";
+import {Keystore} from "../Keystore.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../interfaces/ITransactionContext.sol";
 import {Policy} from "./Policy.sol";
 
 /// @dev Recommended `authenticator` for an actor that represents an *external caller* governed by a policy (e.g. a
 ///      subscription provider): an address that may act ONLY through its policy manager's external entrypoints, never
 ///      directly. Distinct from `TRUSTED_EXECUTOR` (which grants direct `executeBatch`): this is a
-///      no-code, hash-derived sentinel, so the actor is recognized by AccountConfiguration (non-zero authenticator)
+///      no-code, hash-derived sentinel, so the actor is recognized by Keystore (non-zero authenticator)
 ///      yet cannot drive the account directly and cannot authenticate an 8130 transaction (its `authenticate()` would
 ///      call into empty code and fail). Only the account-side authorization (and these examples/tests) ever reference
 ///      it; neither the account nor the manager runtime reads it — `executeFor` authorizes purely on
@@ -62,10 +62,10 @@ contract PolicyManager is ReentrancyGuard {
     using Address for address;
 
     /// @notice The EIP-8130 Account Configuration system contract used to resolve signed policy commitments.
-    AccountConfiguration public immutable ACCOUNT_CONFIGURATION;
+    Keystore public immutable KEYSTORE;
 
-    constructor(address accountConfiguration) {
-        ACCOUNT_CONFIGURATION = AccountConfiguration(accountConfiguration);
+    constructor(address keystore) {
+        KEYSTORE = Keystore(keystore);
     }
 
     /// @notice Policy binding authorized by the account. Its hash is the policy commitment.
@@ -134,7 +134,7 @@ contract PolicyManager is ReentrancyGuard {
     ///      config, validity window, and owning account in one check.
     ///
     ///      Actor expiry is not re-checked here: protocol authentication already rejects expired actors before
-    ///      dispatch. `AccountConfiguration._authenticate` reverts `ActorExpired`, so a protocol-dispatched call's
+    ///      dispatch. `Keystore._authenticate` reverts `ActorExpired`, so a protocol-dispatched call's
     ///      sender actor was expiry-checked at authentication in the same transaction (same `block.timestamp`, so
     ///      no gap), and any non-dispatched or off-8130 call yields `actorId == 0` → {NoActivePolicy}. This trades
     ///      defense-in-depth for one SLOAD; soundness rests on the spec-level invariant that every conforming
@@ -149,7 +149,7 @@ contract PolicyManager is ReentrancyGuard {
 
         bytes32 actorId = _actingActorId();
         bytes32 commitment = _commitment(binding);
-        bytes32 signed = ACCOUNT_CONFIGURATION.getPolicyCommitment(account, actorId);
+        bytes32 signed = KEYSTORE.getPolicyCommitment(account, actorId);
         if (signed == bytes32(0)) revert NoActivePolicy(actorId);
         if (signed != commitment) revert BindingCommitmentMismatch(signed, commitment);
 
@@ -203,7 +203,7 @@ contract PolicyManager is ReentrancyGuard {
         if (binding.account != account) revert InvalidBindingAccount(account, binding.account);
 
         bytes32 commitment = _commitment(binding);
-        bytes32 signed = ACCOUNT_CONFIGURATION.getPolicyCommitment(account, actorId);
+        bytes32 signed = KEYSTORE.getPolicyCommitment(account, actorId);
         if (signed == bytes32(0)) revert NoActivePolicy(actorId);
         if (signed != commitment) revert BindingCommitmentMismatch(signed, commitment);
 
@@ -271,12 +271,12 @@ contract PolicyManager is ReentrancyGuard {
         address caller
     ) internal {
         address account = binding.account;
-        if (ACCOUNT_CONFIGURATION.getPolicyManager(account, actorId) != address(this)) {
+        if (KEYSTORE.getPolicyManager(account, actorId) != address(this)) {
             revert NoActivePolicy(actorId);
         }
 
         bytes32 commitment = _commitment(binding);
-        bytes32 signed = ACCOUNT_CONFIGURATION.getPolicyCommitment(account, actorId);
+        bytes32 signed = KEYSTORE.getPolicyCommitment(account, actorId);
         if (signed == bytes32(0)) revert NoActivePolicy(actorId);
         if (signed != commitment) revert BindingCommitmentMismatch(signed, commitment);
 
@@ -290,7 +290,7 @@ contract PolicyManager is ReentrancyGuard {
     ///      the actor has expired — the commitment match performed above already proved it was an authorized,
     ///      policy-gated actor, so expiry is the only remaining reason the config would be empty.
     function _requireNotExpired(address account, bytes32 actorId) internal view {
-        AccountConfiguration.ActorConfig memory config = ACCOUNT_CONFIGURATION.getActorConfig(account, actorId);
+        Keystore.ActorConfig memory config = KEYSTORE.getActorConfig(account, actorId);
         if (config.authenticator == address(0)) revert ActorExpired(actorId);
     }
 

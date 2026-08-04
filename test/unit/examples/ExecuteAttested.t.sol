@@ -3,7 +3,7 @@ pragma solidity ^0.8.30;
 
 import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
 
-import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
+import {Keystore} from "../../../src/Keystore.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../../src/interfaces/ITransactionContext.sol";
 import {Call, DefaultAccount, TRUSTED_EXECUTOR} from "../../../src/accounts/DefaultAccount.sol";
 
@@ -12,7 +12,7 @@ import {Policy} from "../../../src/policies/Policy.sol";
 import {SessionPolicy} from "../../../src/policies/SessionPolicy.sol";
 import {RecurringAllowance} from "../../../src/policies/RecurringAllowance.sol";
 
-import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
+import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 contract AttMockERC20 {
     mapping(address => uint256) public balanceOf;
@@ -51,7 +51,7 @@ contract ReentrantAttestedPolicy is Policy {
 ///         `actorId`. In these tests the precompile is left un-mocked so `getTransactionSenderActorId()` returns 0
 ///         (a precompile-less chain), and calls are driven with a distinct `tx.origin` (a bundler / trusted executor)
 ///         so the self-origination guard passes — the realistic ERC-4337 shape.
-contract ExecuteAttestedTest is AccountConfigurationTest {
+contract ExecuteAttestedTest is KeystoreTest {
     PolicyManager internal manager;
     SessionPolicy internal policy;
     AttMockERC20 internal token;
@@ -63,8 +63,6 @@ contract ExecuteAttestedTest is AccountConfigurationTest {
     uint256 internal constant ROOT_PK = 0xA11CE;
 
     uint8 internal constant SCOPE_POLICY = 0x02;
-    uint8 internal constant AUTHORIZE_ACTOR = 0x01;
-    uint8 internal constant REVOKE_ACTOR = 0x02;
 
     uint40 internal constant MONTH = 30 days;
 
@@ -72,7 +70,7 @@ contract ExecuteAttestedTest is AccountConfigurationTest {
         super.setUp();
         vm.warp(1_700_000_000);
 
-        manager = new PolicyManager(address(accountConfiguration));
+        manager = new PolicyManager(address(keystore));
         policy = new SessionPolicy(address(manager));
         token = new AttMockERC20();
         account = _createAccount(bytes32(0));
@@ -331,45 +329,44 @@ contract ExecuteAttestedTest is AccountConfigurationTest {
     }
 
     function _createAccount(bytes32 salt) internal returns (address acct) {
-        AccountConfiguration.InitialActor memory root = AccountConfiguration.InitialActor({
+        Keystore.InitialActor memory root = Keystore.InitialActor({
             actorId: bytes32(bytes20(vm.addr(ROOT_PK))),
             authenticator: address(k1Authenticator),
             scope: 0,
             policyData: ""
         });
-        AccountConfiguration.InitialActor memory mgr = AccountConfiguration.InitialActor({
+        Keystore.InitialActor memory mgr = Keystore.InitialActor({
             actorId: bytes32(bytes20(address(manager))), authenticator: TRUSTED_EXECUTOR, scope: 0, policyData: ""
         });
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](2);
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](2);
         (actors[0], actors[1]) = root.actorId < mgr.actorId ? (root, mgr) : (mgr, root);
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        acct = accountConfiguration.createAccount(salt, bytecode, actors);
+        acct = keystore.createAccount(salt, bytecode, actors);
         token.mint(acct, 1_000e6);
     }
 
     function _authorizePolicyActor(bytes32 actorId, bytes32 commitment, uint48 expiry) internal {
-        AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
-            authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: expiry
-        });
+        Keystore.ActorConfig memory cfg =
+            Keystore.ActorConfig({authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: expiry});
         bytes memory policyData = abi.encodePacked(address(manager), commitment);
 
-        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
-        changes[0] = AccountConfiguration.ActorChange({
-            actorId: actorId, changeType: AUTHORIZE_ACTOR, data: abi.encode(cfg, policyData)
+        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
+        changes[0] = Keystore.ActorChange({
+            actorId: actorId, changeType: Keystore.ChangeType.Authorize, data: abi.encode(cfg, policyData)
         });
         _applyAsRoot(changes);
     }
 
     function _revokePolicyActor(bytes32 actorId) internal {
-        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
-        changes[0] = AccountConfiguration.ActorChange({actorId: actorId, changeType: REVOKE_ACTOR, data: ""});
+        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
+        changes[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ChangeType.Revoke, data: ""});
         _applyAsRoot(changes);
     }
 
-    function _applyAsRoot(AccountConfiguration.ActorChange[] memory changes) internal {
+    function _applyAsRoot(Keystore.ActorChange[] memory changes) internal {
         uint64 chainId = uint64(block.chainid);
-        uint64 sequence = accountConfiguration.getChangeSequences(account).local;
+        uint64 sequence = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, chainId, sequence, changes);
         _applyActorChanges(account, chainId, changes, _buildK1Auth(ROOT_PK, digest));
     }

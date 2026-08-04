@@ -6,13 +6,13 @@ import {Math} from "openzeppelin/utils/math/Math.sol";
 import {P256} from "openzeppelin/utils/cryptography/P256.sol";
 import {WebAuthn} from "openzeppelin/utils/cryptography/WebAuthn.sol";
 
-import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
+import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice WebAuthnAuthenticator tests. The authenticator decodes abi.encode(WebAuthnAuth, x, y), derives
 ///         actorId = keccak256(x‖y), and calls WebAuthn.verify(challenge: abi.encode(hash), auth, x, y,
 ///         requireUV: false). It returns bytes32(0) on any verification failure and reverts only when the calldata
 ///         cannot be abi-decoded into the expected tuple.
-contract WebAuthnAuthenticatorTest is AccountConfigurationTest {
+contract WebAuthnAuthenticatorTest is KeystoreTest {
     // ── revert: undecodable calldata ──
 
     /// @notice Reverts when calldata is too short to abi-decode into (WebAuthnAuth, bytes32, bytes32).

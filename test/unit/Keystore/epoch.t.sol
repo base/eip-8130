@@ -1,80 +1,70 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
-import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
+import {Keystore} from "../../../src/Keystore.sol";
+import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 import {Scopes} from "../../../src/libraries/Scopes.sol";
 
-/// @notice Local-channel epoch: the BUMP_EPOCH change type, the MAX-sentinel install channel, and the epoch's role as
+/// @notice Local-channel epoch: the ChangeType.BumpEpoch change type, the MAX-sentinel install channel, and the epoch's role as
 ///         a replay guard for install/change *signatures* (checked at the apply path, never at authentication).
-contract EpochTest is AccountConfigurationTest {
+contract EpochTest is KeystoreTest {
     // ── Helpers ──
 
     function _scopedAuthorizeChange(bytes32 actorId, uint16 scope, uint48 expiry)
         internal
         view
-        returns (AccountConfiguration.ActorChange[] memory ch)
+        returns (Keystore.ActorChange[] memory ch)
     {
-        ch = new AccountConfiguration.ActorChange[](1);
-        ch[0] = AccountConfiguration.ActorChange({
+        ch = new Keystore.ActorChange[](1);
+        ch[0] = Keystore.ActorChange({
             actorId: actorId,
-            changeType: 0x01,
+            changeType: Keystore.ChangeType.Authorize,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({
-                    authenticator: address(k1Authenticator), expiry: expiry, scope: scope
-                }),
-                bytes("")
+                Keystore.ActorConfig({authenticator: address(k1Authenticator), expiry: expiry, scope: scope}), bytes("")
             )
         });
     }
 
-    function _bumpChange() internal pure returns (AccountConfiguration.ActorChange memory) {
-        return AccountConfiguration.ActorChange({actorId: bytes32(0), changeType: 0x03, data: ""});
+    function _bumpChange() internal pure returns (Keystore.ActorChange memory) {
+        return Keystore.ActorChange({actorId: bytes32(0), changeType: Keystore.ChangeType.BumpEpoch, data: ""});
     }
 
     /// @dev The MAX-sentinel local sequence for `epoch`: epoch bits set, nonce == SEQUENCE_MASK (unordered channel).
     function _maxSentinelSeq(uint24 epoch) internal view returns (uint64) {
-        return (uint64(epoch) << uint64(accountConfiguration.EPOCH_SHIFT())) | accountConfiguration.SEQUENCE_MASK();
+        return (uint64(epoch) << uint64(keystore.EPOCH_SHIFT())) | keystore.SEQUENCE_MASK();
     }
 
     /// @dev Sign and relay `ch` at an explicit `seq`.
-    function _applyAt(address account, uint256 adminPk, uint64 seq, AccountConfiguration.ActorChange[] memory ch)
-        internal
-    {
+    function _applyAt(address account, uint256 adminPk, uint64 seq, Keystore.ActorChange[] memory ch) internal {
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, ch);
-        accountConfiguration.applySignedActorChanges(
-            account, uint64(block.chainid), seq, ch, _buildK1Auth(adminPk, digest)
-        );
+        keystore.applySignedActorChanges(account, uint64(block.chainid), seq, ch, _buildK1Auth(adminPk, digest));
     }
 
     /// @dev Admin-signed sequenced authorize at the account's current local sequence.
     function _authorizeScoped(address account, uint256 adminPk, bytes32 actorId, uint16 scope, uint48 expiry) internal {
         _applyAt(
-            account,
-            adminPk,
-            accountConfiguration.getChangeSequences(account).local,
-            _scopedAuthorizeChange(actorId, scope, expiry)
+            account, adminPk, keystore.getChangeSequences(account).local, _scopedAuthorizeChange(actorId, scope, expiry)
         );
     }
 
     /// @dev Admin-signed sequenced bump at the account's current local sequence.
     function _bump(address account, uint256 adminPk) internal {
-        AccountConfiguration.ActorChange[] memory ch = new AccountConfiguration.ActorChange[](1);
+        Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](1);
         ch[0] = _bumpChange();
-        _applyAt(account, adminPk, accountConfiguration.getChangeSequences(account).local, ch);
+        _applyAt(account, adminPk, keystore.getChangeSequences(account).local, ch);
     }
 
     function _epoch(address account) internal view returns (uint64) {
-        return accountConfiguration.getChangeSequences(account).local >> 40;
+        return keystore.getChangeSequences(account).local >> 40;
     }
 
     function _nonce(address account) internal view returns (uint64) {
-        return accountConfiguration.getChangeSequences(account).local & accountConfiguration.SEQUENCE_MASK();
+        return keystore.getChangeSequences(account).local & keystore.SEQUENCE_MASK();
     }
 
-    // ── BUMP_EPOCH change type ──
+    // ── ChangeType.BumpEpoch change type ──
 
-    /// @notice A BUMP_EPOCH change advances the epoch, resets the nonce to 0, and emits EpochBumped.
+    /// @notice A ChangeType.BumpEpoch change advances the epoch, resets the nonce to 0, and emits EpochBumped.
     function test_bump_success_advancesEpochResetsNonce(uint256 ownerPk) public {
         ownerPk = _boundK1Pk(ownerPk);
         (address account,) = _createK1Account(ownerPk);
@@ -84,7 +74,7 @@ contract EpochTest is AccountConfigurationTest {
         assertEq(_nonce(account), 2);
 
         vm.expectEmit(true, false, false, true);
-        emit AccountConfiguration.EpochBumped(account, 1);
+        emit Keystore.EpochBumped(account, 1);
         _bump(account, ownerPk);
 
         assertEq(_epoch(account), 1); // epoch advanced
@@ -96,16 +86,16 @@ contract EpochTest is AccountConfigurationTest {
         ownerPk = _boundK1Pk(ownerPk);
         (address account,) = _createK1Account(ownerPk);
 
-        AccountConfiguration.ActorChange[] memory ch = new AccountConfiguration.ActorChange[](1);
+        Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](1);
         ch[0] = _bumpChange();
-        uint64 seq = accountConfiguration.getChangeSequences(account).local; // epoch 0, nonce 1
+        uint64 seq = keystore.getChangeSequences(account).local; // epoch 0, nonce 1
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, ch);
         bytes memory auth = _buildK1Auth(ownerPk, digest);
 
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
+        keystore.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
 
-        vm.expectRevert(AccountConfiguration.EpochMismatch.selector);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
+        vm.expectRevert(Keystore.EpochMismatch.selector);
+        keystore.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
     }
 
     /// @notice The epoch is never read at authentication: a live non-admin actor keeps authenticating across a bump.
@@ -119,17 +109,17 @@ contract EpochTest is AccountConfigurationTest {
         vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
 
         _authorizeScoped(account, ownerPk, actorId, Scopes.SENDER, 0);
-        (, uint16 scope,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        (, uint16 scope,) = keystore.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
         assertEq(scope, Scopes.SENDER);
 
         _bump(account, ownerPk);
 
         // Still live after the bump — no auth-time epoch check.
-        (, uint16 scopeAfter,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        (, uint16 scopeAfter,) = keystore.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
         assertEq(scopeAfter, Scopes.SENDER);
     }
 
-    /// @notice [REVOKE_ACTOR(x), BUMP_EPOCH] in one signed batch: x is revoked AND its install signature is
+    /// @notice [Revoke(x), ChangeType.BumpEpoch] in one signed batch: x is revoked AND its install signature is
     ///         permanently dead (a replay of the MAX-sentinel install bound to the old epoch fails EpochMismatch).
     function test_bump_atomicRevokeAndKillInstallSignature(uint256 ownerPk, uint256 actorPk, bytes32 hash) public {
         ownerPk = _boundK1Pk(ownerPk);
@@ -140,75 +130,75 @@ contract EpochTest is AccountConfigurationTest {
         vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
 
         // Install x via the MAX sentinel at epoch 0, keeping the reusable install signature to attempt a replay later.
-        AccountConfiguration.ActorChange[] memory install =
+        Keystore.ActorChange[] memory install =
             _scopedAuthorizeChange(actorId, Scopes.SENDER, uint48(block.timestamp + 365 days));
         uint64 maxSeq = _maxSentinelSeq(0);
         bytes32 installDigest = _computeActorChangeBatchDigest(account, uint64(block.chainid), maxSeq, install);
         bytes memory installAuth = _buildK1Auth(ownerPk, installDigest);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), maxSeq, install, installAuth);
+        keystore.applySignedActorChanges(account, uint64(block.chainid), maxSeq, install, installAuth);
 
-        (, uint16 scope,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        (, uint16 scope,) = keystore.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
         assertEq(scope, Scopes.SENDER);
 
         // Atomic [revoke(x), bump].
-        AccountConfiguration.ActorChange[] memory batch = new AccountConfiguration.ActorChange[](2);
-        batch[0] = AccountConfiguration.ActorChange({actorId: actorId, changeType: 0x02, data: ""});
+        Keystore.ActorChange[] memory batch = new Keystore.ActorChange[](2);
+        batch[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ChangeType.Revoke, data: ""});
         batch[1] = _bumpChange();
-        _applyAt(account, ownerPk, accountConfiguration.getChangeSequences(account).local, batch);
+        _applyAt(account, ownerPk, keystore.getChangeSequences(account).local, batch);
 
         // x is gone.
         assertEq(_epoch(account), 1);
-        vm.expectRevert(AccountConfiguration.AuthenticatorMismatch.selector);
-        accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        vm.expectRevert(Keystore.AuthenticatorMismatch.selector);
+        keystore.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
 
         // And x's original install signature can never re-install it: it binds the old epoch.
-        vm.expectRevert(AccountConfiguration.EpochMismatch.selector);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), maxSeq, install, installAuth);
+        vm.expectRevert(Keystore.EpochMismatch.selector);
+        keystore.applySignedActorChanges(account, uint64(block.chainid), maxSeq, install, installAuth);
     }
 
-    /// @notice BUMP_EPOCH rejects a non-empty data payload (InvalidBumpChange).
+    /// @notice ChangeType.BumpEpoch rejects a non-empty data payload (InvalidBumpChange).
     function test_bump_revert_nonEmptyData(uint256 ownerPk) public {
         ownerPk = _boundK1Pk(ownerPk);
         (address account,) = _createK1Account(ownerPk);
 
-        AccountConfiguration.ActorChange[] memory ch = new AccountConfiguration.ActorChange[](1);
-        ch[0] = AccountConfiguration.ActorChange({actorId: bytes32(0), changeType: 0x03, data: hex"00"});
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](1);
+        ch[0] = Keystore.ActorChange({actorId: bytes32(0), changeType: Keystore.ChangeType.BumpEpoch, data: hex"00"});
+        uint64 seq = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, ch);
         bytes memory auth = _buildK1Auth(ownerPk, digest);
 
-        vm.expectRevert(AccountConfiguration.InvalidBumpChange.selector);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
+        vm.expectRevert(Keystore.InvalidBumpChange.selector);
+        keystore.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
     }
 
-    /// @notice BUMP_EPOCH is local-channel only: a multichain (chainId 0) bump reverts InvalidBumpChange.
+    /// @notice ChangeType.BumpEpoch is local-channel only: a multichain (chainId 0) bump reverts InvalidBumpChange.
     function test_bump_revert_multichainChannel(uint256 ownerPk) public {
         ownerPk = _boundK1Pk(ownerPk);
         (address account,) = _createK1Account(ownerPk);
 
-        AccountConfiguration.ActorChange[] memory ch = new AccountConfiguration.ActorChange[](1);
+        Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](1);
         ch[0] = _bumpChange();
-        uint64 seq = accountConfiguration.getChangeSequences(account).multichain; // 0
+        uint64 seq = keystore.getChangeSequences(account).multichain; // 0
         bytes32 digest = _computeActorChangeBatchDigest(account, 0, seq, ch);
         bytes memory auth = _buildK1Auth(ownerPk, digest);
 
-        vm.expectRevert(AccountConfiguration.InvalidBumpChange.selector);
-        accountConfiguration.applySignedActorChanges(account, 0, seq, ch, auth);
+        vm.expectRevert(Keystore.InvalidBumpChange.selector);
+        keystore.applySignedActorChanges(account, 0, seq, ch, auth);
     }
 
-    /// @notice BUMP_EPOCH is not permitted on the unordered MAX-sentinel path (InvalidMaxSentinelChange).
+    /// @notice ChangeType.BumpEpoch is not permitted on the unordered MAX-sentinel path (InvalidMaxSentinelChange).
     function test_bump_revert_onMaxSentinel(uint256 ownerPk) public {
         ownerPk = _boundK1Pk(ownerPk);
         (address account,) = _createK1Account(ownerPk);
 
-        AccountConfiguration.ActorChange[] memory ch = new AccountConfiguration.ActorChange[](1);
+        Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](1);
         ch[0] = _bumpChange();
         uint64 seq = _maxSentinelSeq(0);
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, ch);
         bytes memory auth = _buildK1Auth(ownerPk, digest);
 
-        vm.expectRevert(AccountConfiguration.InvalidMaxSentinelChange.selector);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
+        vm.expectRevert(Keystore.InvalidMaxSentinelChange.selector);
+        keystore.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
     }
 
     /// @notice Only an admin (scope 0) may apply a batch containing a bump; a non-admin signer reverts.
@@ -222,14 +212,14 @@ contract EpochTest is AccountConfigurationTest {
 
         _authorizeScoped(account, ownerPk, actorId, Scopes.SENDER, 0);
 
-        AccountConfiguration.ActorChange[] memory ch = new AccountConfiguration.ActorChange[](1);
+        Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](1);
         ch[0] = _bumpChange();
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        uint64 seq = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, ch);
         bytes memory auth = _buildK1Auth(actorPk, digest);
 
-        vm.expectRevert(AccountConfiguration.UnauthorizedActorChange.selector);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
+        vm.expectRevert(Keystore.UnauthorizedActorChange.selector);
+        keystore.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
     }
 
     /// @notice A bump rides the ordered channel, so it obeys the lock: it is rejected while the account is locked.
@@ -238,16 +228,16 @@ contract EpochTest is AccountConfigurationTest {
         (address account,) = _createK1Account(ownerPk);
 
         _signedLock(ownerPk, account, 3600);
-        assertTrue(accountConfiguration.isLocked(account));
+        assertTrue(keystore.isLocked(account));
 
-        AccountConfiguration.ActorChange[] memory ch = new AccountConfiguration.ActorChange[](1);
+        Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](1);
         ch[0] = _bumpChange();
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        uint64 seq = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, ch);
         bytes memory auth = _buildK1Auth(ownerPk, digest);
 
-        vm.expectRevert(AccountConfiguration.AccountIsLocked.selector);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
+        vm.expectRevert(Keystore.AccountIsLocked.selector);
+        keystore.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
     }
 
     /// @notice A bump reverts EpochExhausted once the local epoch is already at type(uint24).max.
@@ -259,21 +249,21 @@ contract EpochTest is AccountConfigurationTest {
         // 4th declared mapping (slot 3); the whole AccountState struct packs into one slot, with localSequence at
         // bits [64:128).
         bytes32 slot = keccak256(abi.encode(account, uint256(3)));
-        uint256 packed = uint256(vm.load(address(accountConfiguration), slot));
-        uint64 nonce = uint64(packed >> 64) & accountConfiguration.SEQUENCE_MASK();
+        uint256 packed = uint256(vm.load(address(keystore), slot));
+        uint64 nonce = uint64(packed >> 64) & keystore.SEQUENCE_MASK();
         uint64 newLocal = (uint64(type(uint24).max) << 40) | nonce;
         packed = (packed & ~(uint256(type(uint64).max) << 64)) | (uint256(newLocal) << 64);
-        vm.store(address(accountConfiguration), slot, bytes32(packed));
+        vm.store(address(keystore), slot, bytes32(packed));
         assertEq(_epoch(account), type(uint24).max);
 
-        AccountConfiguration.ActorChange[] memory ch = new AccountConfiguration.ActorChange[](1);
+        Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](1);
         ch[0] = _bumpChange();
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        uint64 seq = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, ch);
         bytes memory auth = _buildK1Auth(ownerPk, digest);
 
-        vm.expectRevert(AccountConfiguration.EpochExhausted.selector);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
+        vm.expectRevert(Keystore.EpochExhausted.selector);
+        keystore.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
     }
 
     // ── Sequenced-path epoch binding ──
@@ -285,15 +275,15 @@ contract EpochTest is AccountConfigurationTest {
         vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
 
         // Pre-sign a sequenced change at epoch 0, nonce 1, then bump before relaying it.
-        AccountConfiguration.ActorChange[] memory ch = _scopedAuthorizeChange(actorId, Scopes.SENDER, 0);
-        uint64 staleSeq = accountConfiguration.getChangeSequences(account).local; // epoch 0, nonce 1
+        Keystore.ActorChange[] memory ch = _scopedAuthorizeChange(actorId, Scopes.SENDER, 0);
+        uint64 staleSeq = keystore.getChangeSequences(account).local; // epoch 0, nonce 1
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), staleSeq, ch);
         bytes memory auth = _buildK1Auth(ownerPk, digest);
 
         _bump(account, ownerPk);
 
-        vm.expectRevert(AccountConfiguration.EpochMismatch.selector);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), staleSeq, ch, auth);
+        vm.expectRevert(Keystore.EpochMismatch.selector);
+        keystore.applySignedActorChanges(account, uint64(block.chainid), staleSeq, ch, auth);
     }
 
     // ── MAX-sentinel install channel ──
@@ -310,12 +300,12 @@ contract EpochTest is AccountConfigurationTest {
         vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
 
         uint64 nonceBefore = _nonce(account);
-        AccountConfiguration.ActorChange[] memory ch =
+        Keystore.ActorChange[] memory ch =
             _scopedAuthorizeChange(actorId, Scopes.SENDER, uint48(block.timestamp + 1 days));
         _applyAt(account, ownerPk, _maxSentinelSeq(0), ch);
         assertEq(_nonce(account), nonceBefore); // non-consuming
 
-        (, uint16 scope,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        (, uint16 scope,) = keystore.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
         assertEq(scope, Scopes.SENDER);
     }
 
@@ -335,13 +325,13 @@ contract EpochTest is AccountConfigurationTest {
             _scopedAuthorizeChange(actorId, Scopes.SENDER, uint48(block.timestamp + 1 days))
         );
 
-        AccountConfiguration.ActorChange[] memory ch =
+        Keystore.ActorChange[] memory ch =
             _scopedAuthorizeChange(actorId, Scopes.SENDER, uint48(block.timestamp + 2 days));
         uint64 seq = _maxSentinelSeq(0);
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, ch);
         bytes memory auth = _buildK1Auth(ownerPk, digest);
-        vm.expectRevert(AccountConfiguration.InvalidMaxSentinelChange.selector);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
+        vm.expectRevert(Keystore.InvalidMaxSentinelChange.selector);
+        keystore.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
     }
 
     /// @notice The MAX sentinel rejects an admin (scope 0) actor: it is a non-admin-only install channel.
@@ -350,13 +340,12 @@ contract EpochTest is AccountConfigurationTest {
         (address account, bytes32 ownerId) = _createK1Account(ownerPk);
         vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
 
-        AccountConfiguration.ActorChange[] memory ch =
-            _scopedAuthorizeChange(actorId, 0, uint48(block.timestamp + 1 days));
+        Keystore.ActorChange[] memory ch = _scopedAuthorizeChange(actorId, 0, uint48(block.timestamp + 1 days));
         uint64 seq = _maxSentinelSeq(0);
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, ch);
         bytes memory auth = _buildK1Auth(ownerPk, digest);
-        vm.expectRevert(AccountConfiguration.InvalidMaxSentinelChange.selector);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
+        vm.expectRevert(Keystore.InvalidMaxSentinelChange.selector);
+        keystore.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
     }
 
     /// @notice The MAX sentinel rejects a non-expiring actor (expiry == 0): durable revocation must stay independent
@@ -366,12 +355,12 @@ contract EpochTest is AccountConfigurationTest {
         (address account, bytes32 ownerId) = _createK1Account(ownerPk);
         vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
 
-        AccountConfiguration.ActorChange[] memory ch = _scopedAuthorizeChange(actorId, Scopes.SENDER, 0);
+        Keystore.ActorChange[] memory ch = _scopedAuthorizeChange(actorId, Scopes.SENDER, 0);
         uint64 seq = _maxSentinelSeq(0);
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, ch);
         bytes memory auth = _buildK1Auth(ownerPk, digest);
-        vm.expectRevert(AccountConfiguration.InvalidMaxSentinelChange.selector);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
+        vm.expectRevert(Keystore.InvalidMaxSentinelChange.selector);
+        keystore.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
     }
 
     /// @notice The MAX sentinel rejects a revoke: it is an install-only channel.
@@ -385,13 +374,13 @@ contract EpochTest is AccountConfigurationTest {
 
         _authorizeScoped(account, ownerPk, actorId, Scopes.SENDER, 0);
 
-        AccountConfiguration.ActorChange[] memory ch = new AccountConfiguration.ActorChange[](1);
-        ch[0] = AccountConfiguration.ActorChange({actorId: actorId, changeType: 0x02, data: ""});
+        Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](1);
+        ch[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ChangeType.Revoke, data: ""});
         uint64 seq = _maxSentinelSeq(0);
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, ch);
         bytes memory auth = _buildK1Auth(ownerPk, digest);
-        vm.expectRevert(AccountConfiguration.InvalidMaxSentinelChange.selector);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
+        vm.expectRevert(Keystore.InvalidMaxSentinelChange.selector);
+        keystore.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
     }
 
     /// @notice A MAX-sentinel install signature bound to the old epoch dies after a bump (EpochMismatch), while the
@@ -405,7 +394,7 @@ contract EpochTest is AccountConfigurationTest {
         vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
 
         // Pre-sign a MAX install at epoch 0 but do not relay it yet.
-        AccountConfiguration.ActorChange[] memory ch =
+        Keystore.ActorChange[] memory ch =
             _scopedAuthorizeChange(actorId, Scopes.SENDER, uint48(block.timestamp + 1 days));
         uint64 seq = _maxSentinelSeq(0);
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, ch);
@@ -414,7 +403,7 @@ contract EpochTest is AccountConfigurationTest {
         _bump(account, ownerPk);
 
         // The pre-signed install now binds a stale epoch.
-        vm.expectRevert(AccountConfiguration.EpochMismatch.selector);
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
+        vm.expectRevert(Keystore.EpochMismatch.selector);
+        keystore.applySignedActorChanges(account, uint64(block.chainid), seq, ch, auth);
     }
 }

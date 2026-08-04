@@ -8,7 +8,7 @@ import {Math} from "openzeppelin/utils/math/Math.sol";
 import {P256} from "openzeppelin/utils/cryptography/P256.sol";
 import {WebAuthn} from "openzeppelin/utils/cryptography/WebAuthn.sol";
 
-import {AccountConfiguration} from "../../src/AccountConfiguration.sol";
+import {Keystore} from "../../src/Keystore.sol";
 import {Scopes} from "../../src/libraries/Scopes.sol";
 import {DefaultAccount} from "../../src/accounts/DefaultAccount.sol";
 import {DelegateAuthenticator} from "../../src/authenticators/DelegateAuthenticator.sol";
@@ -16,8 +16,8 @@ import {IAuthenticator} from "../../src/interfaces/IAuthenticator.sol";
 import {P256Authenticator} from "../../src/authenticators/P256Authenticator.sol";
 import {WebAuthnAuthenticator} from "../../src/authenticators/WebAuthnAuthenticator.sol";
 
-contract AccountConfigurationTest is Test {
-    AccountConfiguration public accountConfiguration;
+contract KeystoreTest is Test {
+    Keystore public keystore;
     // The single canonical secp256k1 authenticator (internal ecrecover). Not a deployed contract — it's the
     // K1_AUTHENTICATOR sentinel (address(1)); k1 auth blobs are K1_AUTHENTICATOR(20) || r‖s‖v.
     address public k1Authenticator;
@@ -36,31 +36,28 @@ contract AccountConfigurationTest is Test {
         "ActorChange(uint8 changeType,bytes32 actorId,bytes data)"
     );
 
-    bytes32 constant ACTORCHANGE_TYPEHASH = keccak256("ActorChange(uint8 changeType,bytes32 actorId,bytes data)");
+    bytes32 constant ACTOR_CHANGE_TYPEHASH = keccak256("ActorChange(uint8 changeType,bytes32 actorId,bytes data)");
 
     bytes32 constant LOCK_CHANGE_TYPEHASH =
         keccak256("SignedLockChange(address account,uint256 chainId,uint8 op,uint16 unlockDelay,uint64 sequence)");
 
-    uint8 constant LOCK_OP = 0x01;
-    uint8 constant UNLOCK_OP = 0x02;
-
     function setUp() public virtual {
-        accountConfiguration = new AccountConfiguration();
-        k1Authenticator = accountConfiguration.K1_AUTHENTICATOR();
+        keystore = new Keystore();
+        k1Authenticator = keystore.K1_AUTHENTICATOR();
         p256Authenticator = IAuthenticator(new P256Authenticator());
         webAuthnAuthenticator = IAuthenticator(new WebAuthnAuthenticator());
-        delegateAuthenticator = IAuthenticator(new DelegateAuthenticator(address(accountConfiguration)));
-        defaultAccountImplementation = address(new DefaultAccount(address(accountConfiguration)));
+        delegateAuthenticator = IAuthenticator(new DelegateAuthenticator(address(keystore)));
+        defaultAccountImplementation = address(new DefaultAccount(address(keystore)));
     }
 
     /// @dev Existence check mirroring the (now-internal) actor liveness predicate: an actor is authorized when a
     ///      stored config entry exists (authenticator != 0), which {getActorConfig} also reports for a live inline
     ///      k1 self. Does not check expiry. Replaces the removed public `isActor` for tests.
     function _isActor(address account, bytes32 actorId) internal view returns (bool) {
-        return accountConfiguration.getActorConfig(account, actorId).authenticator != address(0);
+        return keystore.getActorConfig(account, actorId).authenticator != address(0);
     }
 
-    /// @dev Account-level ERC-1271 check. verifySignature moved off AccountConfiguration onto the account contract;
+    /// @dev Account-level ERC-1271 check. verifySignature moved off Keystore onto the account contract;
     ///      `account` must be a deployed DefaultAccount (as created by the helpers here). Returns true on the magic
     ///      value. Replaces the removed registry-level `verifySignature` for tests.
     function _isValidSig(address account, bytes32 hash, bytes memory auth) internal view returns (bool) {
@@ -79,26 +76,26 @@ contract AccountConfigurationTest is Test {
         address signer = vm.addr(pk);
         actorId = bytes32(bytes20(signer));
 
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](1);
-        actors[0] = AccountConfiguration.InitialActor({
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
+        actors[0] = Keystore.InitialActor({
             actorId: actorId, authenticator: address(k1Authenticator), scope: 0, policyData: ""
         });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        account = accountConfiguration.createAccount(bytes32(0), bytecode, actors);
+        account = keystore.createAccount(bytes32(0), bytecode, actors);
     }
 
     function _createK1AccountWithSalt(uint256 pk, bytes32 salt) internal returns (address account, bytes32 actorId) {
         address signer = vm.addr(pk);
         actorId = bytes32(bytes20(signer));
 
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](1);
-        actors[0] = AccountConfiguration.InitialActor({
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
+        actors[0] = Keystore.InitialActor({
             actorId: actorId, authenticator: address(k1Authenticator), scope: 0, policyData: ""
         });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        account = accountConfiguration.createAccount(salt, bytecode, actors);
+        account = keystore.createAccount(salt, bytecode, actors);
     }
 
     // ── K1 signature helpers ──
@@ -120,13 +117,13 @@ contract AccountConfigurationTest is Test {
         address account,
         uint256 chainId,
         uint64 sequence,
-        AccountConfiguration.ActorChange[] memory actorChanges
+        Keystore.ActorChange[] memory actorChanges
     ) internal pure returns (bytes32) {
         bytes32[] memory actorChangeHash = new bytes32[](actorChanges.length);
         for (uint256 i; i < actorChanges.length; i++) {
             actorChangeHash[i] = keccak256(
                 abi.encode(
-                    ACTORCHANGE_TYPEHASH,
+                    ACTOR_CHANGE_TYPEHASH,
                     actorChanges[i].changeType,
                     actorChanges[i].actorId,
                     keccak256(actorChanges[i].data)
@@ -144,17 +141,17 @@ contract AccountConfigurationTest is Test {
     ///      chainId 0, otherwise the local packed epoch|nonce). Every existing test signs its digest over that same
     ///      current sequence, so this preserves the pre-epoch call semantics (including replay: a stale `auth`
     ///      recomputes against the advanced sequence and fails). New epoch/MAX-sentinel tests that need a specific
-    ///      sequence call {AccountConfiguration.applySignedActorChanges} directly with an explicit sequence.
+    ///      sequence call {Keystore.applySignedActorChanges} directly with an explicit sequence.
     function _applyActorChanges(
         address account,
         uint256 chainId,
-        AccountConfiguration.ActorChange[] memory changes,
+        Keystore.ActorChange[] memory changes,
         bytes memory auth
     ) internal {
         uint64 sequence = chainId == 0
-            ? accountConfiguration.getChangeSequences(account).multichain
-            : accountConfiguration.getChangeSequences(account).local;
-        accountConfiguration.applySignedActorChanges(account, chainId, sequence, changes, auth);
+            ? keystore.getChangeSequences(account).multichain
+            : keystore.getChangeSequences(account).local;
+        keystore.applySignedActorChanges(account, chainId, sequence, changes, auth);
     }
 
     // ── Signed lock-change helpers ──
@@ -163,36 +160,38 @@ contract AccountConfigurationTest is Test {
     // These helpers drive it for an account controlled by `pk` — either the account's inline default-EOA self (an
     // uninitialized EOA at vm.addr(pk)) or a k1 admin actor whose actorId is bytes32(bytes20(vm.addr(pk))).
 
-    function _computeLockChangeDigest(address account, uint256 chainId, uint8 op, uint16 unlockDelay, uint64 sequence)
-        internal
-        pure
-        returns (bytes32)
-    {
+    function _computeLockChangeDigest(
+        address account,
+        uint256 chainId,
+        Keystore.LockOp op,
+        uint16 unlockDelay,
+        uint64 sequence
+    ) internal pure returns (bytes32) {
         return keccak256(abi.encode(LOCK_CHANGE_TYPEHASH, account, chainId, op, unlockDelay, sequence));
     }
 
-    /// @dev Admin auth blob for a lock op (op = 1) at the account's current local sequence.
+    /// @dev Admin auth blob for a lock op (LockOp.Lock) at the account's current local sequence.
     function _lockAuth(uint256 pk, address account, uint16 unlockDelay) internal view returns (bytes memory) {
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
-        bytes32 digest = _computeLockChangeDigest(account, block.chainid, LOCK_OP, unlockDelay, seq);
+        uint64 seq = keystore.getChangeSequences(account).local;
+        bytes32 digest = _computeLockChangeDigest(account, block.chainid, Keystore.LockOp.Lock, unlockDelay, seq);
         return _buildK1Auth(pk, digest);
     }
 
-    /// @dev Admin auth blob for an unlock op (op = 2) at the account's current local sequence.
+    /// @dev Admin auth blob for an unlock op (LockOp.Unlock) at the account's current local sequence.
     function _unlockAuth(uint256 pk, address account) internal view returns (bytes memory) {
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
-        bytes32 digest = _computeLockChangeDigest(account, block.chainid, UNLOCK_OP, 0, seq);
+        uint64 seq = keystore.getChangeSequences(account).local;
+        bytes32 digest = _computeLockChangeDigest(account, block.chainid, Keystore.LockOp.Unlock, 0, seq);
         return _buildK1Auth(pk, digest);
     }
 
-    /// @dev Relay a signed lock op (op = 1) authorized by `pk`.
+    /// @dev Relay a signed lock op (LockOp.Lock) authorized by `pk`.
     function _signedLock(uint256 pk, address account, uint16 unlockDelay) internal {
-        accountConfiguration.applySignedLockChanges(account, LOCK_OP, unlockDelay, _lockAuth(pk, account, unlockDelay));
+        keystore.applySignedLockChanges(account, Keystore.LockOp.Lock, unlockDelay, _lockAuth(pk, account, unlockDelay));
     }
 
-    /// @dev Relay a signed unlock op (op = 2) authorized by `pk`.
+    /// @dev Relay a signed unlock op (LockOp.Unlock) authorized by `pk`.
     function _signedUnlock(uint256 pk, address account) internal {
-        accountConfiguration.applySignedLockChanges(account, UNLOCK_OP, 0, _unlockAuth(pk, account));
+        keystore.applySignedLockChanges(account, Keystore.LockOp.Unlock, 0, _unlockAuth(pk, account));
     }
 
     // ── Fuzzed key bounding ──

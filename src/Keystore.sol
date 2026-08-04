@@ -4,13 +4,13 @@ pragma solidity 0.8.36;
 import {IAuthenticator} from "./interfaces/IAuthenticator.sol";
 import {Scopes} from "./libraries/Scopes.sol";
 
-/// @notice Account Configuration system contract for EIP-8130.
+/// @notice Keystore system contract for EIP-8130.
 ///         Manages actor authorization, account creation, change sequencing, and account lock. This contract is
-///         also the canonical reference for the EIP-8130 Account Configuration ABI: its public structs, events,
-///         and function signatures are the spec surface, and there is no separate interface file to keep in sync.
+///         also the canonical reference for the EIP-8130 Keystore ABI: its public structs, enums, events, and
+///         function signatures are the spec surface, and there is no separate interface file to keep in sync.
 ///
 /// @author Coinbase
-contract AccountConfiguration {
+contract Keystore {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // STRUCTS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -29,7 +29,7 @@ contract AccountConfiguration {
     ///         `actor_config` slot layout: authenticator(20) ‖ expiry(6) ‖ scope(2) ‖ reserved(4).
     /// @dev `scope` occupies the last populated bytes so a future scope widening consumes reserved space and shifts
     ///      nothing. There is no per-actor epoch stamp: the local-channel epoch guards install/change *signatures* at
-    ///      the apply path (see {applySignedActorChanges}/{BUMP_EPOCH}), not live actors at authentication.
+    ///      the apply path (see {applySignedActorChanges} / ChangeType.BumpEpoch), not live actors at authentication.
     struct ActorConfig {
         address authenticator;
         uint48 expiry; // Unix seconds; 0 = no expiry. Actor invalid once block.timestamp > expiry
@@ -56,8 +56,8 @@ contract AccountConfiguration {
 
     /// @notice A single authorize/revoke/bump operation within a signed batch.
     struct ActorChange {
-        uint8 changeType; // 0x01 = authorizeActor, 0x02 = revokeActor, 0x03 = bumpEpoch
-        bytes32 actorId; // ignored for bumpEpoch
+        ChangeType changeType; // Authorize, Revoke, or BumpEpoch (Invalid is rejected)
+        bytes32 actorId; // ignored for BumpEpoch
         bytes data; // operation-specific: ActorConfig || policyData for authorize, empty for revoke/bumpEpoch
     }
 
@@ -90,6 +90,30 @@ contract AccountConfiguration {
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+    // ENUMS
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+
+    /// @notice The operation carried by an {ActorChange} within an {applySignedActorChanges} batch. Encoded on the wire
+    ///         as its uint8 ordinal, so the values are normative: Authorize = 1, Revoke = 2, BumpEpoch = 3. `Invalid`
+    ///         (0) is the zero default and is always rejected (UnknownChangeType), so an unset/zeroed change never
+    ///         silently authorizes.
+    enum ChangeType {
+        Invalid, // 0 – rejected
+        Authorize, // 1 – authorize (upsert) an actor
+        Revoke, // 2 – revoke an actor
+        BumpEpoch // 3 – advance the local-channel epoch (data/actorId MUST be empty)
+    }
+
+    /// @notice The operation carried by {applySignedLockChanges}. Encoded on the wire as its uint8 ordinal, so the
+    ///         values are normative: Lock = 1, Unlock = 2. `Invalid` (0) is the zero default and is always rejected
+    ///         (UnknownLockOp).
+    enum LockOp {
+        Invalid, // 0 – rejected
+        Lock, // 1 – hard-lock the account
+        Unlock // 2 – initiate the unlock of a hard-locked account
+    }
+
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // CONSTANTS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
@@ -101,7 +125,7 @@ contract AccountConfiguration {
     ///
     /// @dev NOT compliant with EIP-712, to mitigate eth_signTypedData phishing. Bound to the current chainId so an
     ///      import signature cannot be replayed on another chain. Initial actors are hashed structurally via
-    ///      ACTOR_TYPEHASH / ACTORCONFIG_TYPEHASH below.
+    ///      ACTOR_TYPEHASH / ACTOR_CONFIG_TYPEHASH below.
     bytes32 public constant ACTOR_INITIALIZATION_TYPEHASH = keccak256(
         "ActorInitialization(bytes32 salt,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"
     );
@@ -112,7 +136,7 @@ contract AccountConfiguration {
     );
 
     /// @notice Typehash used to structurally hash an Actor's ActorConfig within an import digest.
-    bytes32 public constant ACTORCONFIG_TYPEHASH =
+    bytes32 public constant ACTOR_CONFIG_TYPEHASH =
         keccak256("ActorConfig(address authenticator,uint48 expiry,uint16 scope)");
 
     /// @notice Typehash binding a signed actor-change batch to its account, chainId, and sequence.
@@ -124,7 +148,7 @@ contract AccountConfiguration {
     );
 
     /// @notice Typehash used to structurally hash each ActorChange within a SignedActorChanges batch.
-    bytes32 public constant ACTORCHANGE_TYPEHASH =
+    bytes32 public constant ACTOR_CHANGE_TYPEHASH =
         keccak256("ActorChange(uint8 changeType,bytes32 actorId,bytes data)");
 
     /// @notice Typehash binding a signed lock-state change to its account, chainId, op, unlock delay, and sequence.
@@ -133,32 +157,6 @@ contract AccountConfiguration {
     ///      digest always binds the current chainId (there is no multichain lock).
     bytes32 public constant LOCK_CHANGE_TYPEHASH =
         keccak256("SignedLockChange(address account,uint256 chainId,uint8 op,uint16 unlockDelay,uint64 sequence)");
-
-    // ----------------------------------------------------------------------------------------------------------------
-    // ACTOR CHANGE TYPES
-    // ----------------------------------------------------------------------------------------------------------------
-
-    /// @notice Authorize an actor to the account
-    uint8 public constant AUTHORIZE_ACTOR = 0x01;
-
-    /// @notice Revoke an actor from the account
-    uint8 public constant REVOKE_ACTOR = 0x02;
-
-    /// @notice Advance the account's local-channel epoch within a sequenced batch. `actorId`/`data` MUST be empty.
-    ///         Local channel only; not permitted on the unordered MAX-sentinel path. Enables an atomic
-    ///         [REVOKE_ACTOR(x), BUMP_EPOCH] batch that revokes x AND permanently kills x's install signature (and
-    ///         every other pending change/install bound to the old epoch) in one signature. See {applySignedActorChanges}.
-    uint8 public constant BUMP_EPOCH = 0x03;
-
-    // ----------------------------------------------------------------------------------------------------------------
-    // LOCK CHANGE OPS
-    // ----------------------------------------------------------------------------------------------------------------
-
-    /// @notice applySignedLockChanges op that hard-locks the account.
-    uint8 public constant LOCK_OP = 0x01;
-
-    /// @notice applySignedLockChanges op that initiates the unlock of a hard-locked account.
-    uint8 public constant UNLOCK_OP = 0x02;
 
     // ----------------------------------------------------------------------------------------------------------------
     // LOCAL CHANNEL: EPOCH | NONCE PACKING
@@ -285,7 +283,7 @@ contract AccountConfiguration {
     /// @param unlocksAt The timestamp at which the account will unlock.
     event AccountUnlockInitiated(address indexed account, uint48 unlocksAt);
 
-    /// @notice Emitted when an account's local-channel epoch is advanced (via a BUMP_EPOCH change), invalidating every
+    /// @notice Emitted when an account's local-channel epoch is advanced (via a ChangeType.BumpEpoch change), invalidating every
     ///         pending local signed change/install bound to the old epoch. Live actors are unaffected — this cancels
     ///         signatures, not agents. Wallets should treat it as a signal to re-prompt for any change they still want.
     ///
@@ -325,7 +323,7 @@ contract AccountConfiguration {
     ///         FLAG_UNLOCK_INITIATED clear) — i.e. never locked, or an unlock was already initiated.
     error NotLocked();
 
-    /// @notice applySignedLockChanges carried an unrecognized op (neither LOCK_OP nor UNLOCK_OP).
+    /// @notice applySignedLockChanges carried an unrecognized op (neither LockOp.Lock nor LockOp.Unlock).
     error UnknownLockOp();
 
     /// @notice An unlock op (op = 2) carried a non-zero unlock delay (unlock delay is set only by the lock op).
@@ -366,7 +364,7 @@ contract AccountConfiguration {
     /// @notice The local-channel epoch is already at type(uint24).max and cannot be advanced further.
     error EpochExhausted();
 
-    /// @notice A BUMP_EPOCH change was invalid: it carried non-empty data, or was on the multichain channel
+    /// @notice A ChangeType.BumpEpoch change was invalid: it carried non-empty data, or was on the multichain channel
     ///         (chainId 0), where the epoch does not live.
     error InvalidBumpChange();
 
@@ -485,7 +483,7 @@ contract AccountConfiguration {
         emit AccountCreated(account, userSalt, keccak256(bytecode));
     }
 
-    /// @notice Imports an existing account (which must have bytecode) into AccountConfiguration management via an
+    /// @notice Imports an existing account (which must have bytecode) into Keystore management via an
     ///         ERC-1271 signature over a typed import digest. The implicit default-EOA key is disabled after import.
     ///
     /// @dev Uses a custom (non-EIP-712) digest to partially mitigate eth_signTypedData phishing.
@@ -543,15 +541,15 @@ contract AccountConfiguration {
     ///          epoch|nonce MUST equal the current word; the nonce is consumed (carry-guarded so the ordered space
     ///          never collides with the MAX sentinel).
     ///        - local, MAX sentinel nonce (`_nonceOf(sequence) == SEQUENCE_MASK`): the epoch MUST equal the current
-    ///          epoch; nothing is consumed. Restricted to AUTHORIZE_ACTOR, non-admin (scope != 0), expiring
+    ///          epoch; nothing is consumed. Restricted to ChangeType.Authorize, non-admin (scope != 0), expiring
     ///          (expiry != 0), insert-only actors — an unordered channel for installing agent-key fleets.
     ///      The epoch is purely a replay guard for install/change *signatures*, checked here at the apply path (the
     ///      `_accountState` slot is already loaded by onlyUnlocked): a batch binds the epoch in its digest, so a
-    ///      BUMP_EPOCH change permanently invalidates every other pending local change/install bound to the old
-    ///      epoch. It never touches live actors (no per-actor stamp, no authentication-time check), so a bump cancels
-    ///      pending signatures, not agents.
-    /// @dev A BUMP_EPOCH change (local channel, empty data, never on the MAX path) advances the epoch and resets the
-    ///      nonce to 0. Batching [REVOKE_ACTOR(x), BUMP_EPOCH] atomically revokes x and kills its install signature.
+    ///      ChangeType.BumpEpoch change permanently invalidates every other pending local change/install bound to the
+    ///      old epoch. It never touches live actors (no per-actor stamp, no authentication-time check), so a bump
+    ///      cancels pending signatures, not agents.
+    /// @dev A ChangeType.BumpEpoch change (local channel, empty data, never on the MAX path) advances the epoch and
+    ///      resets the nonce to 0. Batching [Revoke(x), BumpEpoch] atomically revokes x and kills its install signature.
     /// @dev Reverts with AccountIsLocked when the account is locked.
     /// @dev Reverts with InvalidChainId when `chainId` is neither 0 (multichain) nor the current chain.
     /// @dev Reverts with InvalidSequence, EpochMismatch, or SequenceExhausted when `sequence` does not match the
@@ -561,8 +559,8 @@ contract AccountConfiguration {
     /// @dev Reverts with UnauthorizedActorChange when the authenticated actor is not unrestricted (scope != 0).
     /// @dev Reverts with InvalidMaxSentinelChange when a MAX-sentinel batch carries a non-authorize change, or an
     ///      admin/non-expiring/overwriting actor.
-    /// @dev Reverts with InvalidBumpChange when a BUMP_EPOCH change carries data or is on the multichain channel, or
-    ///      EpochExhausted when the epoch is already at its maximum.
+    /// @dev Reverts with InvalidBumpChange when a ChangeType.BumpEpoch change carries data or is on the multichain
+    ///      channel, or EpochExhausted when the epoch is already at its maximum.
     /// @dev Reverts with UnknownChangeType when a change carries an unrecognized changeType.
     /// @dev Reverts with InvalidAuthenticator or InvalidPolicyData on a malformed authorize.
     /// @dev Reverts with UnknownActor when revoking an actor that is not authorized.
@@ -594,17 +592,17 @@ contract AccountConfiguration {
 
         // Apply actorChanges
         for (uint256 i; i < actorChanges.length; i++) {
-            uint8 changeType = actorChanges[i].changeType;
-            if (changeType == AUTHORIZE_ACTOR) {
+            ChangeType changeType = actorChanges[i].changeType;
+            if (changeType == ChangeType.Authorize) {
                 (ActorConfig memory newActorConfig, bytes memory policyData) =
                     abi.decode(actorChanges[i].data, (ActorConfig, bytes));
                 if (isMaxSentinel) _requireMaxSentinelAuthorize(account, actorChanges[i].actorId, newActorConfig);
                 _authorizeActor(account, actorChanges[i].actorId, newActorConfig, policyData);
-            } else if (changeType == REVOKE_ACTOR) {
+            } else if (changeType == ChangeType.Revoke) {
                 // The MAX sentinel is an install-only channel; revokes must use the ordered/multichain path.
                 if (isMaxSentinel) revert InvalidMaxSentinelChange();
                 _revokeActor(account, actorChanges[i].actorId);
-            } else if (changeType == BUMP_EPOCH) {
+            } else if (changeType == ChangeType.BumpEpoch) {
                 // The MAX sentinel is authorize-only; a bump must ride the ordered channel so it is itself
                 // single-use (its batch binds the pre-bump epoch and can never replay).
                 if (isMaxSentinel) revert InvalidMaxSentinelChange();
@@ -681,9 +679,9 @@ contract AccountConfiguration {
     ///      stay coherent on the same counter). Because both entry points share this counter, a pre-signed local
     ///      actor change and a lock op contend for the same sequence: whichever is relayed first consumes it and
     ///      invalidates the other until it is re-signed at the next sequence.
-    /// @dev op = LOCK_OP (1): only from the unlocked state (reverts AccountIsLocked if currently locked). Sets
+    /// @dev op = LockOp.Lock (1): only from the unlocked state (reverts AccountIsLocked if currently locked). Sets
     ///      FLAG_LOCKED and stores `unlockDelay` in `lockUnion`. Emits AccountLocked.
-    /// @dev op = UNLOCK_OP (2): only from the hard-locked state with no pending unlock (reverts NotLocked
+    /// @dev op = LockOp.Unlock (2): only from the hard-locked state with no pending unlock (reverts NotLocked
     ///      otherwise); `unlockDelay` MUST be 0. Sets FLAG_UNLOCK_INITIATED and overwrites `lockUnion` with
     ///      unlocksAt = block.timestamp + storedDelay. Emits AccountUnlockInitiated.
     /// @dev Reverts with InvalidAuthLength, InvalidSignature, AuthenticationFailed, AuthenticatorMismatch,
@@ -693,14 +691,14 @@ contract AccountConfiguration {
     /// @dev Reverts with AccountIsLocked when a lock op targets an already-locked account.
     /// @dev Reverts with InvalidUnlockDelay when an unlock op carries a non-zero unlock delay.
     /// @dev Reverts with NotLocked when an unlock op targets an account that is not hard-locked.
-    /// @dev Reverts with UnknownLockOp when `op` is neither LOCK_OP nor UNLOCK_OP.
+    /// @dev Reverts with UnknownLockOp when `op` is neither LockOp.Lock nor LockOp.Unlock.
     ///
     /// @param account The account whose lock state is changed.
-    /// @param op The lock operation: LOCK_OP (1) to hard-lock, UNLOCK_OP (2) to initiate an unlock.
+    /// @param op The lock operation: LockOp.Lock (1) to hard-lock, LockOp.Unlock (2) to initiate an unlock.
     /// @param unlockDelay Delay in seconds before the account unlocks after an unlock is initiated (lock op only,
     ///        max uint16, ~18 hours); MUST be 0 for the unlock op.
     /// @param auth Authenticator(20) || authenticator-specific data authenticating an unrestricted actor.
-    function applySignedLockChanges(address account, uint8 op, uint16 unlockDelay, bytes calldata auth) external {
+    function applySignedLockChanges(address account, LockOp op, uint16 unlockDelay, bytes calldata auth) external {
         // Local channel only: bind the digest to the current chain and consume the local sequence. Lock is an
         // ordered, consuming op: it hashes the current packed epoch|nonce word and increments the nonce (leaving the
         // epoch bits untouched). The carry guard keeps the ordered nonce clear of the MAX sentinel (and prevents any
@@ -717,7 +715,7 @@ contract AccountConfiguration {
 
         AccountState storage config = _accountState[account];
 
-        if (op == LOCK_OP) {
+        if (op == LockOp.Lock) {
             // Lock only from the unlocked state; lazily clear any elapsed unlock (also clears LOCKED) first.
             if (_checkAndClearLock(account)) revert AccountIsLocked();
             // Require non-zero unlock delay.
@@ -727,7 +725,7 @@ contract AccountConfiguration {
             config.flags |= FLAG_LOCKED;
             config.lockUnion = unlockDelay;
             emit AccountLocked(account, unlockDelay);
-        } else if (op == UNLOCK_OP) {
+        } else if (op == LockOp.Unlock) {
             // The unlock op never sets the delay; it consumes the delay stored by the lock op.
             if (unlockDelay != 0) revert InvalidUnlockDelay();
             // Require the account is hard-locked (LOCKED set) with no unlock already initiated (UNLOCK_INITIATED clear).
@@ -1236,7 +1234,7 @@ contract AccountConfiguration {
             // here. policyData is hashed via keccak256 into the Actor struct hash. The typehash structure matches the
             // importAccount payload.
             bytes32 configHash = keccak256(
-                abi.encode(ACTORCONFIG_TYPEHASH, initialActors[i].authenticator, uint48(0), initialActors[i].scope)
+                abi.encode(ACTOR_CONFIG_TYPEHASH, initialActors[i].authenticator, uint48(0), initialActors[i].scope)
             );
             actorHashes[i] = keccak256(
                 abi.encode(ACTOR_TYPEHASH, initialActors[i].actorId, configHash, keccak256(initialActors[i].policyData))
@@ -1268,7 +1266,7 @@ contract AccountConfiguration {
         for (uint256 i; i < actorChanges.length; i++) {
             actorChangeHashes[i] = keccak256(
                 abi.encode(
-                    ACTORCHANGE_TYPEHASH,
+                    ACTOR_CHANGE_TYPEHASH,
                     actorChanges[i].changeType,
                     actorChanges[i].actorId,
                     keccak256(actorChanges[i].data)
@@ -1294,7 +1292,7 @@ contract AccountConfiguration {
     function _computeSignedLockChangesDigest(
         address account,
         uint256 chainId,
-        uint8 op,
+        LockOp op,
         uint16 unlockDelay,
         uint64 sequence
     ) internal pure returns (bytes32) {

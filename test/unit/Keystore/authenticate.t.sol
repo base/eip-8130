@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
-import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
+import {Keystore} from "../../../src/Keystore.sol";
+import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
-/// @notice Fuzzed, branch-complete suite for the authentication paths of AccountConfiguration:
+/// @notice Fuzzed, branch-complete suite for the authentication paths of Keystore:
 ///         authenticateActor -> _authenticate -> {_authenticateK1, IAuthenticator} -> _recoverSigner, plus the
 ///         isValidSignature / getActorConfig / getPolicy views that read the same actor resolution.
 ///
@@ -18,7 +18,7 @@ import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 ///
 ///         The authentication functions are `view` and emit no events, so there are no event assertions here;
 ///         events (ActorAuthorized / ActorRevoked) belong to the applyKeyChange suite that drives the config writes.
-contract AuthenticateTest is AccountConfigurationTest {
+contract AuthenticateTest is KeystoreTest {
     uint8 constant SCOPE_SENDER = 0x01;
     uint8 constant SCOPE_POLICY = 0x02;
     uint8 constant SCOPE_NONCE = 0x04;
@@ -45,8 +45,8 @@ contract AuthenticateTest is AccountConfigurationTest {
             auth[i] = bytes1(uint8(uint256(keccak256(abi.encode(fillSeed, i)))));
         }
 
-        vm.expectRevert(AccountConfiguration.InvalidAuthLength.selector);
-        accountConfiguration.authenticateActor(account, hash, auth);
+        vm.expectRevert(Keystore.InvalidAuthLength.selector);
+        keystore.authenticateActor(account, hash, auth);
     }
 
     // ── 2. AuthenticationFailed: non-K1 IAuthenticator returns bytes32(0) ──
@@ -64,8 +64,8 @@ contract AuthenticateTest is AccountConfigurationTest {
         uint256 pk = _boundP256Pk(pkSeed);
         bytes memory auth = abi.encodePacked(address(p256Authenticator), _p256SignData(pk, hash));
 
-        vm.expectRevert(AccountConfiguration.AuthenticationFailed.selector);
-        accountConfiguration.authenticateActor(account, wrongHash, auth);
+        vm.expectRevert(Keystore.AuthenticationFailed.selector);
+        keystore.authenticateActor(account, wrongHash, auth);
     }
 
     /// @notice A valid WebAuthn assertion presented against a different hash also resolves actorId 0 and reverts.
@@ -80,8 +80,8 @@ contract AuthenticateTest is AccountConfigurationTest {
         uint256 pk = _boundP256Pk(pkSeed);
         bytes memory auth = abi.encodePacked(address(webAuthnAuthenticator), _webauthnSignData(pk, hash));
 
-        vm.expectRevert(AccountConfiguration.AuthenticationFailed.selector);
-        accountConfiguration.authenticateActor(account, wrongHash, auth);
+        vm.expectRevert(Keystore.AuthenticationFailed.selector);
+        keystore.authenticateActor(account, wrongHash, auth);
     }
 
     // ── 3. AuthenticatorMismatch: stored actor authenticator != presented ──
@@ -101,8 +101,8 @@ contract AuthenticateTest is AccountConfigurationTest {
         // A CREATE2 account can never equal a recoverable EOA, so the stranger takes the non-self K1 actor branch.
         vm.assume(vm.addr(strangerPk) != account);
 
-        vm.expectRevert(AccountConfiguration.AuthenticatorMismatch.selector);
-        accountConfiguration.authenticateActor(account, hash, _buildK1Auth(strangerPk, hash));
+        vm.expectRevert(Keystore.AuthenticatorMismatch.selector);
+        keystore.authenticateActor(account, hash, _buildK1Auth(strangerPk, hash));
     }
 
     /// @notice A valid P-256 signature for a key that was never authorized on the account mismatches.
@@ -115,8 +115,8 @@ contract AuthenticateTest is AccountConfigurationTest {
         uint256 pk = _boundP256Pk(pkSeed);
         bytes memory auth = abi.encodePacked(address(p256Authenticator), _p256SignData(pk, hash));
 
-        vm.expectRevert(AccountConfiguration.AuthenticatorMismatch.selector);
-        accountConfiguration.authenticateActor(account, hash, auth);
+        vm.expectRevert(Keystore.AuthenticatorMismatch.selector);
+        keystore.authenticateActor(account, hash, auth);
     }
 
     /// @notice A key registered under the P-256 authenticator, presented via the WebAuthn authenticator, mismatches.
@@ -136,8 +136,8 @@ contract AuthenticateTest is AccountConfigurationTest {
         // Present the same key through WebAuthn: actorId matches, presented authenticator does not.
         bytes memory auth = abi.encodePacked(address(webAuthnAuthenticator), _webauthnSignData(pk, hash));
 
-        vm.expectRevert(AccountConfiguration.AuthenticatorMismatch.selector);
-        accountConfiguration.authenticateActor(account, hash, auth);
+        vm.expectRevert(Keystore.AuthenticatorMismatch.selector);
+        keystore.authenticateActor(account, hash, auth);
     }
 
     /// @notice After a K1 actor is revoked its config is cleared, so re-presenting its signature mismatches.
@@ -156,8 +156,8 @@ contract AuthenticateTest is AccountConfigurationTest {
         _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), 0x00);
         _revokeActor(account, ownerPk, actorId);
 
-        vm.expectRevert(AccountConfiguration.AuthenticatorMismatch.selector);
-        accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        vm.expectRevert(Keystore.AuthenticatorMismatch.selector);
+        keystore.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
     }
 
     // ── 4. ActorExpired: inline self, non-self K1, and non-self non-K1 ──
@@ -179,8 +179,8 @@ contract AuthenticateTest is AccountConfigurationTest {
         _authorizeActorWithExpiry(eoa, eoaPk, selfActorId, address(k1Authenticator), expiry);
 
         vm.warp(uint256(expiry) + bound(warpSeed, 1, 1_000_000));
-        vm.expectRevert(AccountConfiguration.ActorExpired.selector);
-        accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        vm.expectRevert(Keystore.ActorExpired.selector);
+        keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
     }
 
     /// @notice A non-self K1 session actor expires and can no longer authenticate.
@@ -202,8 +202,8 @@ contract AuthenticateTest is AccountConfigurationTest {
         _authorizeActorWithExpiry(account, ownerPk, sessionActorId, address(k1Authenticator), expiry);
 
         vm.warp(uint256(expiry) + bound(warpSeed, 1, 1_000_000));
-        vm.expectRevert(AccountConfiguration.ActorExpired.selector);
-        accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
+        vm.expectRevert(Keystore.ActorExpired.selector);
+        keystore.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
     }
 
     /// @notice A non-self P-256 actor expires and can no longer authenticate.
@@ -225,8 +225,8 @@ contract AuthenticateTest is AccountConfigurationTest {
         vm.warp(uint256(expiry) + bound(warpSeed, 1, 1_000_000));
         bytes memory auth = abi.encodePacked(address(p256Authenticator), _p256SignData(pk, hash));
 
-        vm.expectRevert(AccountConfiguration.ActorExpired.selector);
-        accountConfiguration.authenticateActor(account, hash, auth);
+        vm.expectRevert(Keystore.ActorExpired.selector);
+        keystore.authenticateActor(account, hash, auth);
     }
 
     // ── 5. DefaultEoaRevoked: recovered == account with the revoke flag set ──
@@ -241,8 +241,8 @@ contract AuthenticateTest is AccountConfigurationTest {
         // The implicit self (unrestricted) signs a batch revoking its own self-actorId; auth precedes the revoke.
         _revokeActor(eoa, eoaPk, selfActorId);
 
-        vm.expectRevert(AccountConfiguration.DefaultEoaRevoked.selector);
-        accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        vm.expectRevert(Keystore.DefaultEoaRevoked.selector);
+        keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
     }
 
     /// @notice Authorizing the self-actorId to a non-K1 authenticator disables the inline K1 self (mutual exclusion).
@@ -257,8 +257,8 @@ contract AuthenticateTest is AccountConfigurationTest {
         // Implicit self authorizes itself to a non-K1 authenticator (P256), flipping the mutual-exclusion flag.
         _authorizeActorWithScope(eoa, eoaPk, selfActorId, address(p256Authenticator), 0x00);
 
-        vm.expectRevert(AccountConfiguration.DefaultEoaRevoked.selector);
-        accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        vm.expectRevert(Keystore.DefaultEoaRevoked.selector);
+        keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
     }
 
     // ── 6. InvalidSignature: _recoverSigner (length / high-s / v / zero recovery) ──
@@ -279,8 +279,8 @@ contract AuthenticateTest is AccountConfigurationTest {
         }
         bytes memory auth = abi.encodePacked(k1Authenticator, data);
 
-        vm.expectRevert(AccountConfiguration.InvalidSignature.selector);
-        accountConfiguration.authenticateActor(account, hash, auth);
+        vm.expectRevert(Keystore.InvalidSignature.selector);
+        keystore.authenticateActor(account, hash, auth);
     }
 
     /// @notice The high-s (EIP-2 malleable) twin of a canonical signature is rejected.
@@ -295,8 +295,8 @@ contract AuthenticateTest is AccountConfigurationTest {
         uint8 flippedV = v == 27 ? 28 : 27;
         bytes memory auth = abi.encodePacked(k1Authenticator, r, highS, flippedV);
 
-        vm.expectRevert(AccountConfiguration.InvalidSignature.selector);
-        accountConfiguration.authenticateActor(eoa, hash, auth);
+        vm.expectRevert(Keystore.InvalidSignature.selector);
+        keystore.authenticateActor(eoa, hash, auth);
     }
 
     /// @notice A recovery id outside {27, 28} is rejected even with a canonical low-s signature.
@@ -309,8 +309,8 @@ contract AuthenticateTest is AccountConfigurationTest {
         (, bytes32 r, bytes32 s) = vm.sign(eoaPk, hash);
         bytes memory auth = abi.encodePacked(k1Authenticator, r, s, vSeed);
 
-        vm.expectRevert(AccountConfiguration.InvalidSignature.selector);
-        accountConfiguration.authenticateActor(eoa, hash, auth);
+        vm.expectRevert(Keystore.InvalidSignature.selector);
+        keystore.authenticateActor(eoa, hash, auth);
     }
 
     /// @notice A signature that ecrecovers to address(0) (r == 0) is rejected as a zero recovery.
@@ -322,8 +322,8 @@ contract AuthenticateTest is AccountConfigurationTest {
         uint256 s = bound(sSeed, 1, (SECP256K1_ORDER - 1) / 2); // canonical low-s so only the r == 0 guard bites
         bytes memory auth = abi.encodePacked(k1Authenticator, bytes32(0), bytes32(s), uint8(27));
 
-        vm.expectRevert(AccountConfiguration.InvalidSignature.selector);
-        accountConfiguration.authenticateActor(account, hash, auth);
+        vm.expectRevert(Keystore.InvalidSignature.selector);
+        keystore.authenticateActor(account, hash, auth);
     }
 
     // ── Unknown authenticator: a selector with no deployed code cannot resolve an actor ──
@@ -341,7 +341,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         bytes memory auth = abi.encodePacked(authenticator, data);
 
         vm.expectRevert();
-        accountConfiguration.authenticateActor(account, hash, auth);
+        keystore.authenticateActor(account, hash, auth);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -354,8 +354,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
 
-        (, uint16 scope, address policyTarget) =
-            accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (, uint16 scope, address policyTarget) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
 
         assertEq(scope, uint8(0x00));
         assertEq(policyTarget, address(0));
@@ -374,7 +373,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         vm.assume(vm.addr(actorPk) != account);
         _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(vm.addr(actorPk))), address(k1Authenticator), 0x00);
 
-        (, uint16 scope,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        (, uint16 scope,) = keystore.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
         assertEq(scope, uint8(0x00));
     }
 
@@ -392,7 +391,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         _authorizeActorWithScope(account, ownerPk, _p256ActorId(pk), address(p256Authenticator), scope);
 
         bytes memory auth = abi.encodePacked(address(p256Authenticator), _p256SignData(pk, hash));
-        (, uint16 outScope,) = accountConfiguration.authenticateActor(account, hash, auth);
+        (, uint16 outScope,) = keystore.authenticateActor(account, hash, auth);
         assertEq(outScope, scope);
     }
 
@@ -412,7 +411,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         _authorizeActorWithScope(account, ownerPk, _p256ActorId(pk), address(webAuthnAuthenticator), scope);
 
         bytes memory auth = abi.encodePacked(address(webAuthnAuthenticator), _webauthnSignData(pk, hash));
-        (, uint16 outScope,) = accountConfiguration.authenticateActor(account, hash, auth);
+        (, uint16 outScope,) = keystore.authenticateActor(account, hash, auth);
         assertEq(outScope, scope);
     }
 
@@ -434,7 +433,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         vm.assume(vm.addr(actorPk) != account);
         _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(vm.addr(actorPk))), address(k1Authenticator), scope);
 
-        (, uint16 outScope,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        (, uint16 outScope,) = keystore.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
         assertEq(outScope, scope);
     }
 
@@ -451,7 +450,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         vm.assume(vm.addr(actorPk) != account);
         _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(vm.addr(actorPk))), address(k1Authenticator), 0x00);
 
-        (, uint16 scope,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        (, uint16 scope,) = keystore.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
         assertEq(scope, uint8(0x00));
     }
 
@@ -472,7 +471,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         _authorizeActorWithExpiry(account, ownerPk, bytes32(bytes20(vm.addr(sessionPk))), address(k1Authenticator), 0);
 
         vm.warp(block.timestamp + bound(warpSeed, 1, 3650 days));
-        (, uint16 scope,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
+        (, uint16 scope,) = keystore.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
         assertEq(scope, uint8(0x00));
     }
 
@@ -496,7 +495,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         );
 
         vm.warp(expiry);
-        (, uint16 scope,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
+        (, uint16 scope,) = keystore.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
         assertEq(scope, uint8(0x00));
     }
 
@@ -524,7 +523,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         _authorizeGatedActor(account, ownerPk, sessionActorId, scope, manager, commitment);
 
         (, uint16 outScope, address outTarget) =
-            accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
+            keystore.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
 
         assertEq(outScope, scope);
         assertEq(outTarget, manager);
@@ -536,8 +535,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
 
-        (, uint16 scope, address policyTarget) =
-            accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (, uint16 scope, address policyTarget) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
 
         assertEq(scope, uint8(0x00));
         assertEq(policyTarget, address(0));
@@ -554,7 +552,7 @@ contract AuthenticateTest is AccountConfigurationTest {
 
         _authorizeActorWithScope(eoa, eoaPk, selfActorId, address(k1Authenticator), scope);
 
-        (, uint16 outScope,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (, uint16 outScope,) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(outScope, scope);
     }
 
@@ -570,7 +568,7 @@ contract AuthenticateTest is AccountConfigurationTest {
 
         _implicitAuthorizeActor(eoa, eoaPk, bytes32(bytes20(vm.addr(bobPk))), address(k1Authenticator));
 
-        (, uint16 scope,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(bobPk, hash));
+        (, uint16 scope,) = keystore.authenticateActor(eoa, hash, _buildK1Auth(bobPk, hash));
         assertEq(scope, uint8(0x00));
     }
 
@@ -587,8 +585,8 @@ contract AuthenticateTest is AccountConfigurationTest {
         vm.assume(accountA != accountB);
 
         bytes memory auth = _buildK1Auth(ownerPk, hash);
-        (, uint16 scopeA,) = accountConfiguration.authenticateActor(accountA, hash, auth);
-        (, uint16 scopeB,) = accountConfiguration.authenticateActor(accountB, hash, auth);
+        (, uint16 scopeA,) = keystore.authenticateActor(accountA, hash, auth);
+        (, uint16 scopeB,) = keystore.authenticateActor(accountB, hash, auth);
         assertEq(scopeA, uint8(0x00));
         assertEq(scopeB, uint8(0x00));
     }
@@ -605,7 +603,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
 
-        (bytes32 actorId,,) = accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (bytes32 actorId,,) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(actorId, bytes32(bytes20(eoa)));
     }
 
@@ -622,7 +620,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         bytes32 expectedActorId = bytes32(bytes20(vm.addr(actorPk)));
         _authorizeActorWithScope(account, ownerPk, expectedActorId, address(k1Authenticator), 0x00);
 
-        (bytes32 actorId,,) = accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        (bytes32 actorId,,) = keystore.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
         assertEq(actorId, expectedActorId);
     }
 
@@ -638,7 +636,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         _authorizeActorWithScope(account, ownerPk, expectedActorId, address(p256Authenticator), 0x00);
 
         bytes memory auth = abi.encodePacked(address(p256Authenticator), _p256SignData(pk, hash));
-        (bytes32 actorId,,) = accountConfiguration.authenticateActor(account, hash, auth);
+        (bytes32 actorId,,) = keystore.authenticateActor(account, hash, auth);
         assertEq(actorId, expectedActorId);
     }
 
@@ -654,7 +652,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         _authorizeActorWithScope(account, ownerPk, expectedActorId, address(webAuthnAuthenticator), 0x00);
 
         bytes memory auth = abi.encodePacked(address(webAuthnAuthenticator), _webauthnSignData(pk, hash));
-        (bytes32 actorId,,) = accountConfiguration.authenticateActor(account, hash, auth);
+        (bytes32 actorId,,) = keystore.authenticateActor(account, hash, auth);
         assertEq(actorId, expectedActorId);
     }
 
@@ -675,8 +673,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         bytes32 expectedActorId = bytes32(bytes20(vm.addr(actorPk)));
         _authorizeActorWithScope(account, ownerPk, expectedActorId, address(k1Authenticator), scope);
 
-        (bytes32 actorId, uint16 outScope,) =
-            accountConfiguration.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        (bytes32 actorId, uint16 outScope,) = keystore.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
         assertEq(actorId, expectedActorId);
         assertEq(outScope, scope);
     }
@@ -694,8 +691,7 @@ contract AuthenticateTest is AccountConfigurationTest {
 
         _authorizeActorWithScope(eoa, eoaPk, selfActorId, address(k1Authenticator), scope);
 
-        (bytes32 actorId, uint16 outScope,) =
-            accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (bytes32 actorId, uint16 outScope,) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(actorId, selfActorId);
         assertEq(outScope, scope);
     }
@@ -726,7 +722,7 @@ contract AuthenticateTest is AccountConfigurationTest {
 
         bool expected = scope == 0 || (scope & SCOPE_SENDER != 0);
         // isValidSignature applies the account-scoped EIP-7739 wrap.
-        bytes memory auth = _buildK1Auth(actorPk, accountConfiguration.replaySafeHash(account, hash));
+        bytes memory auth = _buildK1Auth(actorPk, keystore.replaySafeHash(account, hash));
         assertEq(_isValidSig(account, hash, auth), expected);
     }
 
@@ -747,7 +743,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         vm.assume(vm.addr(actorPk) != account);
         bytes32 actorId = bytes32(bytes20(vm.addr(actorPk)));
         // isValidSignature applies the account-scoped EIP-7739 wrap; replaySafeHash(account, hash) is scope-independent.
-        bytes memory auth = _buildK1Auth(actorPk, accountConfiguration.replaySafeHash(account, hash));
+        bytes memory auth = _buildK1Auth(actorPk, keystore.replaySafeHash(account, hash));
 
         _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), SCOPE_SENDER);
         assertTrue(_isValidSig(account, hash, auth));
@@ -848,7 +844,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
         _authorizeGatedActor(account, ownerPk, sessionActorId, scope, manager, commitment);
 
-        (address outTarget, bytes32 outCommitment) = accountConfiguration.getPolicy(account, sessionActorId);
+        (address outTarget, bytes32 outCommitment) = keystore.getPolicy(account, sessionActorId);
         assertEq(outTarget, manager);
         assertEq(outCommitment, commitment);
     }
@@ -865,7 +861,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         bytes32 actorId = bytes32(bytes20(vm.addr(actorPk)));
         _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), 0x00);
 
-        (address target, bytes32 commitment) = accountConfiguration.getPolicy(account, actorId);
+        (address target, bytes32 commitment) = keystore.getPolicy(account, actorId);
         assertEq(target, address(0));
         assertEq(commitment, bytes32(0));
     }
@@ -876,7 +872,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         (address account, bytes32 actorId) = _createK1Account(ownerPk);
 
-        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, actorId);
+        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, actorId);
         assertEq(cfg.authenticator, address(k1Authenticator));
         assertEq(cfg.scope, uint8(0x00));
     }
@@ -889,7 +885,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         vm.assume(unknownActorId != actorId);
         vm.assume(unknownActorId != bytes32(bytes20(account)));
 
-        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, unknownActorId);
+        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, unknownActorId);
         assertEq(cfg.authenticator, address(0));
         assertEq(cfg.scope, uint8(0x00));
     }
@@ -908,13 +904,13 @@ contract AuthenticateTest is AccountConfigurationTest {
         _authorizeActorWithExpiry(account, ownerPk, actorId, address(k1Authenticator), expiry);
 
         // Live before expiry.
-        AccountConfiguration.ActorConfig memory live = accountConfiguration.getActorConfig(account, actorId);
+        Keystore.ActorConfig memory live = keystore.getActorConfig(account, actorId);
         assertEq(live.authenticator, address(k1Authenticator));
         assertEq(live.expiry, expiry);
 
         // Past expiry -> empty, indistinguishable from an unknown actor.
         vm.warp(uint256(expiry) + 1);
-        AccountConfiguration.ActorConfig memory dead = accountConfiguration.getActorConfig(account, actorId);
+        Keystore.ActorConfig memory dead = keystore.getActorConfig(account, actorId);
         assertEq(dead.authenticator, address(0));
         assertEq(dead.expiry, uint48(0));
         assertEq(dead.scope, uint16(0));
@@ -929,14 +925,14 @@ contract AuthenticateTest is AccountConfigurationTest {
 
         // Re-enable the inline self (scope 0) with an expiry.
         uint48 expiry = uint48(block.timestamp + 1 days);
-        _authorizeActorWithExpiry(account, ownerPk, selfId, accountConfiguration.K1_AUTHENTICATOR(), expiry);
+        _authorizeActorWithExpiry(account, ownerPk, selfId, keystore.K1_AUTHENTICATOR(), expiry);
 
-        AccountConfiguration.ActorConfig memory live = accountConfiguration.getActorConfig(account, selfId);
-        assertEq(live.authenticator, accountConfiguration.K1_AUTHENTICATOR());
+        Keystore.ActorConfig memory live = keystore.getActorConfig(account, selfId);
+        assertEq(live.authenticator, keystore.K1_AUTHENTICATOR());
         assertEq(live.expiry, expiry);
 
         vm.warp(uint256(expiry) + 1);
-        AccountConfiguration.ActorConfig memory dead = accountConfiguration.getActorConfig(account, selfId);
+        Keystore.ActorConfig memory dead = keystore.getActorConfig(account, selfId);
         assertEq(dead.authenticator, address(0));
         assertEq(dead.expiry, uint48(0));
         assertEq(dead.scope, uint16(0));
@@ -956,7 +952,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         _authorizeActorWithExpiry(account, ownerPk, actorId, address(k1Authenticator), expiry);
 
         vm.warp(expiry); // exactly at expiry: block.timestamp > expiry is false
-        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, actorId);
+        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, actorId);
         assertEq(cfg.authenticator, address(k1Authenticator));
         assertEq(cfg.expiry, expiry);
     }
@@ -1003,16 +999,14 @@ contract AuthenticateTest is AccountConfigurationTest {
         address authenticator,
         uint8 scope
     ) internal {
-        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
-        changes[0] = AccountConfiguration.ActorChange({
+        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
+        changes[0] = Keystore.ActorChange({
             actorId: newActorId,
-            changeType: 0x01,
-            data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes("")
-            )
+            changeType: Keystore.ChangeType.Authorize,
+            data: abi.encode(Keystore.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes(""))
         });
 
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        uint64 seq = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         _applyActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
     }
@@ -1025,16 +1019,16 @@ contract AuthenticateTest is AccountConfigurationTest {
         address authenticator,
         uint48 expiry
     ) internal {
-        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
-        changes[0] = AccountConfiguration.ActorChange({
+        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
+        changes[0] = Keystore.ActorChange({
             actorId: newActorId,
-            changeType: 0x01,
+            changeType: Keystore.ChangeType.Authorize,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: 0x00, expiry: expiry}), bytes("")
+                Keystore.ActorConfig({authenticator: authenticator, scope: 0x00, expiry: expiry}), bytes("")
             )
         });
 
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        uint64 seq = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         _applyActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
     }
@@ -1046,10 +1040,10 @@ contract AuthenticateTest is AccountConfigurationTest {
 
     /// @dev Revoke `actorId` from `account`, signed by `pk`.
     function _revokeActor(address account, uint256 pk, bytes32 actorId) internal {
-        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
-        changes[0] = AccountConfiguration.ActorChange({actorId: actorId, changeType: 0x02, data: ""});
+        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
+        changes[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ChangeType.Revoke, data: ""});
 
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        uint64 seq = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         _applyActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
     }
@@ -1064,17 +1058,17 @@ contract AuthenticateTest is AccountConfigurationTest {
         address policyManager,
         bytes32 commitment
     ) internal {
-        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
-        changes[0] = AccountConfiguration.ActorChange({
+        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
+        changes[0] = Keystore.ActorChange({
             actorId: newActorId,
-            changeType: 0x01,
+            changeType: Keystore.ChangeType.Authorize,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0}),
+                Keystore.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0}),
                 abi.encodePacked(policyManager, commitment)
             )
         });
 
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        uint64 seq = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         _applyActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(ownerPk, digest));
     }

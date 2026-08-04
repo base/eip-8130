@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
+import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice EIP-7739 (PersonalSign) rehashing for account-level ERC-1271 (DefaultAccount.isValidSignature), built on
-///         the account-scoped digest AccountConfiguration.replaySafeHash.
+///         the account-scoped digest Keystore.replaySafeHash.
 ///
-/// @dev ERC-1271 verification lives on the account contract (AccountConfiguration is scope-agnostic and no longer
+/// @dev ERC-1271 verification lives on the account contract (Keystore is scope-agnostic and no longer
 ///      exposes verifySignature). Because the account authenticates against replaySafeHash(account, hash) — an
 ///      EIP-712 digest with verifyingContract = account — a signature is bound to a single account, so a signature
 ///      made for one account cannot be replayed onto another account that shares the same owner key.
-contract AccountConfigurationERC7739Test is AccountConfigurationTest {
+contract KeystoreERC7739Test is KeystoreTest {
     uint256 constant OWNER_PK = 0xA11CE;
 
     /// @dev isValidSignature rehashes: a signature over the RAW app hash is rejected; the signer must sign the
@@ -24,7 +24,7 @@ contract AccountConfigurationERC7739Test is AccountConfigurationTest {
             "raw-hash signature must be rejected now that isValidSignature rehashes"
         );
 
-        bytes32 signable = accountConfiguration.replaySafeHash(account, appHash);
+        bytes32 signable = keystore.replaySafeHash(account, appHash);
         assertTrue(
             _isValidSig(account, appHash, _buildK1Auth(OWNER_PK, signable)),
             "account-scoped (replaySafeHash) signature must validate"
@@ -39,7 +39,7 @@ contract AccountConfigurationERC7739Test is AccountConfigurationTest {
         assertTrue(accountA != accountB, "accounts must differ");
 
         bytes32 appHash = keccak256("sign in to dapp");
-        bytes memory sigForA = _buildK1Auth(OWNER_PK, accountConfiguration.replaySafeHash(accountA, appHash));
+        bytes memory sigForA = _buildK1Auth(OWNER_PK, keystore.replaySafeHash(accountA, appHash));
 
         assertTrue(_isValidSig(accountA, appHash, sigForA), "valid on the intended account");
         assertFalse(
@@ -55,8 +55,7 @@ contract AccountConfigurationERC7739Test is AccountConfigurationTest {
         bytes32 appHash = keccak256("msg");
 
         assertTrue(
-            accountConfiguration.replaySafeHash(accountA, appHash)
-                != accountConfiguration.replaySafeHash(accountB, appHash),
+            keystore.replaySafeHash(accountA, appHash) != keystore.replaySafeHash(accountB, appHash),
             "digests must differ by account"
         );
     }
@@ -65,7 +64,7 @@ contract AccountConfigurationERC7739Test is AccountConfigurationTest {
     function test_isValidSignature_rejectsNonOwner() public {
         (address account,) = _createK1AccountWithSalt(OWNER_PK, bytes32(uint256(1)));
         bytes32 appHash = keccak256("hello world");
-        bytes32 signable = accountConfiguration.replaySafeHash(account, appHash);
+        bytes32 signable = keystore.replaySafeHash(account, appHash);
 
         assertFalse(
             _isValidSig(account, appHash, _buildK1Auth(0xBEEF, signable)), "a non-owner signature must be rejected"
