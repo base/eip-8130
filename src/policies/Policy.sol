@@ -13,7 +13,7 @@ import {PolicyManager} from "./PolicyManager.sol";
 ///
 ///      Config delivery: the manager always forwards `policyConfig` to {onExecute} (it MAY be empty). Callers
 ///      supply the full {PolicyManager.PolicyBinding} at execute; the manager recomputes the commitment and
-///      compares it to the live signed commitment in AccountConfiguration. That single check authenticates
+///      compares it to the live signed commitment in Keystore. That single check authenticates
 ///      config, validity window, and owning account — so policies MUST NOT store a config hash. There is no
 ///      separate install step; config validation belongs in {onExecute} (or a helper it calls).
 ///

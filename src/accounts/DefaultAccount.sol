@@ -3,7 +3,8 @@ pragma solidity 0.8.36;
 
 import {Receiver} from "solady/accounts/Receiver.sol";
 
-import {AccountConfiguration} from "../AccountConfiguration.sol";
+import {Keystore} from "../Keystore.sol";
+import {AccountDomain} from "../libraries/AccountDomain.sol";
 import {Scopes} from "../libraries/Scopes.sol";
 
 /// @notice A single call in an execution batch.
@@ -24,12 +25,12 @@ address constant TRUSTED_EXECUTOR = address(uint160(uint256(keccak256("trustedEx
 
 /// @notice Canonical model of the EIP-8130 default account: the behavior every EOA exhibits by default on an
 ///         EIP-8130 chain, expressed in Solidity. It handles batched execution and ERC-1271 signature validation,
-///         and defers all authorization to the AccountConfiguration system contract.
+///         and defers all authorization to the Keystore system contract.
 ///
 ///         Caller authorization:
 ///           - address(this) is always authorized (hardcoded), covering 8130 self-call batches
 ///           - Trusted executors (PolicyManagers, relayers, EntryPoints) are registered as actors with
-///             TRUSTED_EXECUTOR as the authenticator in AccountConfiguration
+///             TRUSTED_EXECUTOR as the authenticator in Keystore
 ///
 /// @dev Not a deployment target. This describes the default EOA behavior applied natively on an EIP-8130 chain; it
 ///      is intentionally minimal and is NOT ERC-4337 compatible. An account that wants smart-account features (for
@@ -41,24 +42,12 @@ address constant TRUSTED_EXECUTOR = address(uint160(uint256(keccak256("trustedEx
 ///
 /// @author Coinbase
 contract DefaultAccount is Receiver {
-    /// @notice The AccountConfiguration system contract that owns this account's authorization state.
-    AccountConfiguration public immutable ACCOUNT_CONFIGURATION;
+    /// @notice The Keystore system contract that owns this account's authorization state.
+    Keystore public immutable KEYSTORE;
 
     /// @dev ERC-1271 magic return value for a valid signature (`isValidSignature(bytes32,bytes)` selector).
     bytes4 private constant ERC1271_MAGIC = 0x1626ba7e;
     bytes4 private constant ERC1271_FAIL = 0xFFFFFFFF;
-
-    /// @dev EIP-712 domain typehash.
-    bytes32 private constant _EIP712_DOMAIN_TYPEHASH =
-        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
-
-    /// @dev keccak256("PersonalSign(bytes prefixed)").
-    bytes32 private constant _PERSONAL_SIGN_TYPEHASH =
-        0x983e65e5148e570cd828ead231ee759a8d7958721a768f93bc4483ba005c32de;
-
-    /// @dev Account ERC-1271 domain name/version, fixed for all accounts.
-    bytes32 private constant _ACCOUNT_DOMAIN_NAME_HASH = keccak256("EIP8130Account");
-    bytes32 private constant _ACCOUNT_DOMAIN_VERSION_HASH = keccak256("1");
 
     /// @notice The caller is neither the account itself nor a registered TRUSTED_EXECUTOR actor.
     error UnauthorizedCaller();
@@ -66,10 +55,10 @@ contract DefaultAccount is Receiver {
     /// @notice An inner call in the executed batch reverted.
     error CallFailed();
 
-    /// @notice Deploys the account implementation bound to an AccountConfiguration instance.
-    /// @param accountConfiguration Address of the AccountConfiguration system contract.
-    constructor(address accountConfiguration) {
-        ACCOUNT_CONFIGURATION = AccountConfiguration(accountConfiguration);
+    /// @notice Deploys the account implementation bound to an Keystore instance.
+    /// @param keystore Address of the Keystore system contract.
+    constructor(address keystore) {
+        KEYSTORE = Keystore(keystore);
     }
 
     // ══════════════════════════════════════════════
@@ -94,7 +83,7 @@ contract DefaultAccount is Receiver {
     //  ERC-1271
     // ══════════════════════════════════════════════
 
-    /// @notice Validates an ERC-1271 signature via AccountConfiguration; requires the verified actor to be
+    /// @notice Validates an ERC-1271 signature via Keystore; requires the verified actor to be
     ///         operational (the unrestricted admin, scope == 0x00, or a SENDER actor without POLICY). Never reverts.
     ///
     /// @dev Authenticates against the account-scoped digest {replaySafeHash}, not the raw `hash`, so a signature is
@@ -111,11 +100,8 @@ contract DefaultAccount is Receiver {
     /// @return The ERC-1271 magic value 0x1626ba7e if valid, otherwise 0xffffffff.
     function isValidSignature(bytes32 hash, bytes calldata signature) external view virtual returns (bytes4) {
         bytes32 digest = replaySafeHash(hash);
-        try ACCOUNT_CONFIGURATION.authenticateActor(address(this), digest, signature) returns (
-            bytes32, uint16 scope, address
-        ) {
-            bool operational = scope == 0 || ((scope & Scopes.SENDER != 0) && (scope & Scopes.POLICY == 0));
-            return operational ? ERC1271_MAGIC : ERC1271_FAIL;
+        try KEYSTORE.authenticateActor(address(this), digest, signature) returns (bytes32, uint16 scope, address) {
+            return Scopes.isOperational(scope) ? ERC1271_MAGIC : ERC1271_FAIL;
         } catch {
             return ERC1271_FAIL;
         }
@@ -130,8 +116,7 @@ contract DefaultAccount is Receiver {
     ///
     /// @return The digest to sign.
     function replaySafeHash(bytes32 hash) public view returns (bytes32) {
-        bytes32 structHash = keccak256(abi.encode(_PERSONAL_SIGN_TYPEHASH, hash));
-        return keccak256(abi.encodePacked(hex"1901", _accountDomainSeparator(), structHash));
+        return AccountDomain.replaySafeHash(address(this), hash);
     }
 
     // ══════════════════════════════════════════════
@@ -162,24 +147,8 @@ contract DefaultAccount is Receiver {
     ///      authorization surfaces aligned.
     function _isAuthorizedCaller(address caller) internal view virtual returns (bool) {
         if (caller == address(this)) return true;
-        AccountConfiguration.ActorConfig memory config =
-            ACCOUNT_CONFIGURATION.getActorConfig(address(this), bytes32(bytes20(caller)));
+        Keystore.ActorConfig memory config = KEYSTORE.getActorConfig(address(this), bytes32(bytes20(caller)));
         if (config.authenticator != TRUSTED_EXECUTOR) return false;
-        uint16 scope = config.scope;
-        return scope == 0 || ((scope & Scopes.SENDER != 0) && (scope & Scopes.POLICY == 0));
-    }
-
-    /// @dev EIP-712 domain separator for this account's ERC-1271 domain (verifyingContract = this account, current
-    ///      chainId).
-    function _accountDomainSeparator() internal view returns (bytes32) {
-        return keccak256(
-            abi.encode(
-                _EIP712_DOMAIN_TYPEHASH,
-                _ACCOUNT_DOMAIN_NAME_HASH,
-                _ACCOUNT_DOMAIN_VERSION_HASH,
-                block.chainid,
-                address(this)
-            )
-        );
+        return Scopes.isOperational(config.scope);
     }
 }

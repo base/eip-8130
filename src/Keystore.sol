@@ -4,13 +4,13 @@ pragma solidity 0.8.36;
 import {IAuthenticator} from "./interfaces/IAuthenticator.sol";
 import {Scopes} from "./libraries/Scopes.sol";
 
-/// @notice Account Configuration system contract for EIP-8130.
+/// @notice Keystore system contract for EIP-8130.
 ///         Manages actor authorization, account creation, change sequencing, and account lock. This contract is
-///         also the canonical reference for the EIP-8130 Account Configuration ABI: its public structs, events,
+///         also the canonical reference for the EIP-8130 Keystore ABI: its public structs, events,
 ///         and function signatures are the spec surface, and there is no separate interface file to keep in sync.
 ///
 /// @author Coinbase
-contract AccountConfiguration {
+contract Keystore {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // STRUCTS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -49,7 +49,7 @@ contract AccountConfiguration {
 
     /// @notice A single authorize/revoke operation within a signed batch.
     struct ActorChange {
-        uint8 changeType; // 0x01 = authorizeActor, 0x02 = revokeActor
+        ChangeType changeType; // Authorize = upsert an actor, Revoke = remove an actor
         bytes32 actorId;
         bytes data; // operation-specific: ActorConfig || policyData for authorize, empty for revoke
     }
@@ -94,7 +94,7 @@ contract AccountConfiguration {
     ///
     /// @dev NOT compliant with EIP-712, to mitigate eth_signTypedData phishing. Bound to the current chainId so an
     ///      import signature cannot be replayed on another chain. Initial actors are hashed structurally via
-    ///      ACTOR_TYPEHASH / ACTORCONFIG_TYPEHASH below.
+    ///      ACTOR_TYPEHASH / ACTOR_CONFIG_TYPEHASH below.
     bytes32 public constant ACTOR_INITIALIZATION_TYPEHASH = keccak256(
         "ActorInitialization(bytes32 salt,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"
     );
@@ -105,7 +105,7 @@ contract AccountConfiguration {
     );
 
     /// @notice Typehash used to structurally hash an Actor's ActorConfig within an import digest.
-    bytes32 public constant ACTORCONFIG_TYPEHASH =
+    bytes32 public constant ACTOR_CONFIG_TYPEHASH =
         keccak256("ActorConfig(address authenticator,uint48 expiry,uint16 scope)");
 
     /// @notice Typehash binding a signed actor-change batch to its account, chainId, and sequence.
@@ -117,7 +117,7 @@ contract AccountConfiguration {
     );
 
     /// @notice Typehash used to structurally hash each ActorChange within a SignedActorChanges batch.
-    bytes32 public constant ACTORCHANGE_TYPEHASH =
+    bytes32 public constant ACTOR_CHANGE_TYPEHASH =
         keccak256("ActorChange(uint8 changeType,bytes32 actorId,bytes data)");
 
     /// @notice Typehash binding a signed lock-state change to its account, chainId, op, unlock delay, and sequence.
@@ -128,24 +128,27 @@ contract AccountConfiguration {
         keccak256("SignedLockChange(address account,uint256 chainId,uint8 op,uint16 unlockDelay,uint64 sequence)");
 
     // ----------------------------------------------------------------------------------------------------------------
-    // ACTOR CHANGE TYPES
+    // ACTOR CHANGE / LOCK OPERATIONS
     // ----------------------------------------------------------------------------------------------------------------
 
-    /// @notice Authorize an actor to the account
-    uint8 public constant AUTHORIZE_ACTOR = 0x01;
+    /// @notice The operation an {ActorChange} performs. The zero value is a rejected sentinel: a change must name a
+    ///         real operation, so a decoded `Invalid` (or any out-of-range value, which panics on ABI-decode) is
+    ///         rejected. Wire values are preserved (Authorize = 1, Revoke = 2); the ActorChange type string still
+    ///         encodes `uint8 changeType`, so signed digests are unaffected.
+    enum ChangeType {
+        Invalid, // 0 – rejected
+        Authorize, // 1 – authorize (upsert) an actor
+        Revoke // 2 – revoke an actor
+    }
 
-    /// @notice Revoke an actor from the account
-    uint8 public constant REVOKE_ACTOR = 0x02;
-
-    // ----------------------------------------------------------------------------------------------------------------
-    // LOCK CHANGE OPS
-    // ----------------------------------------------------------------------------------------------------------------
-
-    /// @notice applySignedLockChanges op that hard-locks the account.
-    uint8 public constant LOCK_OP = 0x01;
-
-    /// @notice applySignedLockChanges op that initiates the unlock of a hard-locked account.
-    uint8 public constant UNLOCK_OP = 0x02;
+    /// @notice The operation an {applySignedLockChanges} call performs. The zero value is a rejected sentinel; wire
+    ///         values are preserved (Lock = 1, Unlock = 2); the SignedLockChange type string still encodes
+    ///         `uint8 op`, so signed digests are unaffected.
+    enum LockOp {
+        Invalid, // 0 – rejected
+        Lock, // 1 – hard-lock the account
+        Unlock // 2 – initiate the unlock of a hard-locked account
+    }
 
     // ----------------------------------------------------------------------------------------------------------------
     // ACTOR SCOPE
@@ -278,7 +281,7 @@ contract AccountConfiguration {
     ///         FLAG_UNLOCK_INITIATED clear) — i.e. never locked, or an unlock was already initiated.
     error NotLocked();
 
-    /// @notice applySignedLockChanges carried an unrecognized op (neither LOCK_OP nor UNLOCK_OP).
+    /// @notice applySignedLockChanges carried an unrecognized op (neither LockOp.Lock nor LockOp.Unlock).
     error UnknownLockOp();
 
     /// @notice An unlock op (op = 2) carried a non-zero unlock delay (unlock delay is set only by the lock op).
@@ -418,7 +421,7 @@ contract AccountConfiguration {
         emit AccountCreated(account, userSalt, keccak256(bytecode));
     }
 
-    /// @notice Imports an existing account (which must have bytecode) into AccountConfiguration management via an
+    /// @notice Imports an existing account (which must have bytecode) into Keystore management via an
     ///         ERC-1271 signature over a typed import digest. The implicit default-EOA key is disabled after import.
     ///
     /// @dev Uses a custom (non-EIP-712) digest to partially mitigate eth_signTypedData phishing.
@@ -505,11 +508,11 @@ contract AccountConfiguration {
 
         // Apply actorChanges
         for (uint256 i; i < actorChanges.length; i++) {
-            if (actorChanges[i].changeType == AUTHORIZE_ACTOR) {
+            if (actorChanges[i].changeType == ChangeType.Authorize) {
                 (ActorConfig memory newActorConfig, bytes memory policyData) =
                     abi.decode(actorChanges[i].data, (ActorConfig, bytes));
                 _authorizeActor(account, actorChanges[i].actorId, newActorConfig, policyData);
-            } else if (actorChanges[i].changeType == REVOKE_ACTOR) {
+            } else if (actorChanges[i].changeType == ChangeType.Revoke) {
                 _revokeActor(account, actorChanges[i].actorId);
             } else {
                 revert UnknownChangeType();
@@ -531,9 +534,9 @@ contract AccountConfiguration {
     ///      stay coherent on the same counter). Because both entry points share this counter, a pre-signed local
     ///      actor change and a lock op contend for the same sequence: whichever is relayed first consumes it and
     ///      invalidates the other until it is re-signed at the next sequence.
-    /// @dev op = LOCK_OP (1): only from the unlocked state (reverts AccountIsLocked if currently locked). Sets
+    /// @dev op = LockOp.Lock: only from the unlocked state (reverts AccountIsLocked if currently locked). Sets
     ///      FLAG_LOCKED and stores `unlockDelay` in `lockUnion`. Emits AccountLocked.
-    /// @dev op = UNLOCK_OP (2): only from the hard-locked state with no pending unlock (reverts NotLocked
+    /// @dev op = LockOp.Unlock: only from the hard-locked state with no pending unlock (reverts NotLocked
     ///      otherwise); `unlockDelay` MUST be 0. Sets FLAG_UNLOCK_INITIATED and overwrites `lockUnion` with
     ///      unlocksAt = block.timestamp + storedDelay. Emits AccountUnlockInitiated.
     /// @dev Reverts with InvalidAuthLength, InvalidSignature, AuthenticationFailed, AuthenticatorMismatch,
@@ -543,14 +546,14 @@ contract AccountConfiguration {
     /// @dev Reverts with AccountIsLocked when a lock op targets an already-locked account.
     /// @dev Reverts with InvalidUnlockDelay when an unlock op carries a non-zero unlock delay.
     /// @dev Reverts with NotLocked when an unlock op targets an account that is not hard-locked.
-    /// @dev Reverts with UnknownLockOp when `op` is neither LOCK_OP nor UNLOCK_OP.
+    /// @dev Reverts with UnknownLockOp when `op` is neither LockOp.Lock nor LockOp.Unlock.
     ///
     /// @param account The account whose lock state is changed.
-    /// @param op The lock operation: LOCK_OP (1) to hard-lock, UNLOCK_OP (2) to initiate an unlock.
+    /// @param op The lock operation: LockOp.Lock to hard-lock, LockOp.Unlock to initiate an unlock.
     /// @param unlockDelay Delay in seconds before the account unlocks after an unlock is initiated (lock op only,
     ///        max uint16, ~18 hours); MUST be 0 for the unlock op.
     /// @param auth Authenticator(20) || authenticator-specific data authenticating an unrestricted actor.
-    function applySignedLockChanges(address account, uint8 op, uint16 unlockDelay, bytes calldata auth) external {
+    function applySignedLockChanges(address account, LockOp op, uint16 unlockDelay, bytes calldata auth) external {
         // Local channel only: bind the digest to the current chain and consume the local sequence (post-increment,
         // hashing the pre-increment value — identical to applySignedActorChanges so both paths share one counter).
         uint64 sequence = _accountState[account].localSequence++;
@@ -563,7 +566,7 @@ contract AccountConfiguration {
 
         AccountState storage config = _accountState[account];
 
-        if (op == LOCK_OP) {
+        if (op == LockOp.Lock) {
             // Lock only from the unlocked state; lazily clear any elapsed unlock (also clears LOCKED) first.
             if (_checkAndClearLock(account)) revert AccountIsLocked();
             // Require non-zero unlock delay.
@@ -573,7 +576,7 @@ contract AccountConfiguration {
             config.flags |= FLAG_LOCKED;
             config.lockUnion = unlockDelay;
             emit AccountLocked(account, unlockDelay);
-        } else if (op == UNLOCK_OP) {
+        } else if (op == LockOp.Unlock) {
             // The unlock op never sets the delay; it consumes the delay stored by the lock op.
             if (unlockDelay != 0) revert InvalidUnlockDelay();
             // Require the account is hard-locked (LOCKED set) with no unlock already initiated (UNLOCK_INITIATED clear).
@@ -1048,7 +1051,7 @@ contract AccountConfiguration {
             // accepted here. policyData is hashed via keccak256 into the Actor struct hash. The typehash structure
             // matches the importAccount signature payload in EIP-8130.
             bytes32 configHash = keccak256(
-                abi.encode(ACTORCONFIG_TYPEHASH, initialActors[i].authenticator, uint48(0), initialActors[i].scope)
+                abi.encode(ACTOR_CONFIG_TYPEHASH, initialActors[i].authenticator, uint48(0), initialActors[i].scope)
             );
             actorHashes[i] = keccak256(
                 abi.encode(ACTOR_TYPEHASH, initialActors[i].actorId, configHash, keccak256(initialActors[i].policyData))
@@ -1080,7 +1083,7 @@ contract AccountConfiguration {
         for (uint256 i; i < actorChanges.length; i++) {
             actorChangeHashes[i] = keccak256(
                 abi.encode(
-                    ACTORCHANGE_TYPEHASH,
+                    ACTOR_CHANGE_TYPEHASH,
                     actorChanges[i].changeType,
                     actorChanges[i].actorId,
                     keccak256(actorChanges[i].data)
@@ -1106,7 +1109,7 @@ contract AccountConfiguration {
     function _computeSignedLockChangesDigest(
         address account,
         uint256 chainId,
-        uint8 op,
+        LockOp op,
         uint16 unlockDelay,
         uint64 sequence
     ) internal pure returns (bytes32) {

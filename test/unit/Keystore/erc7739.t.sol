@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
+import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice EIP-7739 (PersonalSign) rehashing for account-level ERC-1271 (DefaultAccount.isValidSignature), built on
 ///         the account-scoped digest DefaultAccount.replaySafeHash.
 ///
-/// @dev ERC-1271 verification and the account-scoped digest both live on the account contract (AccountConfiguration is
+/// @dev ERC-1271 verification and the account-scoped digest both live on the account contract (Keystore is
 ///      scope-agnostic and exposes neither verifySignature nor replaySafeHash). Because the account authenticates
 ///      against replaySafeHash(hash) — an EIP-712 digest with verifyingContract = account — a signature is bound to a
 ///      single account, so a signature made for one account cannot be replayed onto another account that shares the
 ///      same owner key.
-contract AccountConfigurationERC7739Test is AccountConfigurationTest {
+contract KeystoreERC7739Test is KeystoreTest {
     uint256 constant OWNER_PK = 0xA11CE;
 
     /// @dev isValidSignature rehashes: a signature over the RAW app hash is rejected; the signer must sign the

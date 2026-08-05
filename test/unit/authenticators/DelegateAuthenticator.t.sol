@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
+import {Keystore} from "../../../src/Keystore.sol";
 import {DelegateAuthenticator} from "../../../src/authenticators/DelegateAuthenticator.sol";
-import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
+import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice Fuzzed, branch-complete test suite for DelegateAuthenticator.authenticate.
 ///
@@ -18,13 +18,12 @@ import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 ///         0x00). This admin-only requirement is enforced independently of verifySignature (via authenticateActor
 ///         + an explicit scope == 0 check): verifySignature is now operational (a SENDER-without-POLICY key can
 ///         sign), but such a key must NOT be able to vouch as a delegate, so a non-admin nested actor reverts.
-contract DelegateAuthenticatorTest is AccountConfigurationTest {
+contract DelegateAuthenticatorTest is KeystoreTest {
     uint8 constant SCOPE_SENDER = 0x01;
     uint8 constant SCOPE_POLICY = 0x02;
     uint8 constant SCOPE_NONCE = 0x04;
     uint8 constant SCOPE_SELF_PAYER = 0x08;
     uint8 constant SCOPE_SPONSOR_PAYER = 0x10;
-    uint8 constant AUTHORIZE_ACTOR = 0x01;
 
     // ── Guard 1: require(data.length >= 40) ──
 
@@ -190,17 +189,19 @@ contract DelegateAuthenticatorTest is AccountConfigurationTest {
     /// @dev Authorizes a new K1 actor (`newPk`) with `scope` on `account`, signed by the unrestricted
     ///      owner (`ownerPk`) via applySignedActorChanges on the local chain.
     function _authorizeScopedK1Actor(address account, uint256 ownerPk, uint256 newPk, uint8 scope) internal {
-        AccountConfiguration.ActorConfig memory config =
-            AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0});
+        Keystore.ActorConfig memory config =
+            Keystore.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0});
 
-        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
-        changes[0] = AccountConfiguration.ActorChange({
-            changeType: AUTHORIZE_ACTOR, actorId: bytes32(bytes20(vm.addr(newPk))), data: abi.encode(config, bytes(""))
+        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
+        changes[0] = Keystore.ActorChange({
+            changeType: Keystore.ChangeType.Authorize,
+            actorId: bytes32(bytes20(vm.addr(newPk))),
+            data: abi.encode(config, bytes(""))
         });
 
         uint64 chainId = uint64(block.chainid);
-        uint64 sequence = accountConfiguration.getChangeSequences(account).local;
+        uint64 sequence = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, chainId, sequence, changes);
-        accountConfiguration.applySignedActorChanges(account, chainId, changes, _buildK1Auth(ownerPk, digest));
+        keystore.applySignedActorChanges(account, chainId, changes, _buildK1Auth(ownerPk, digest));
     }
 }

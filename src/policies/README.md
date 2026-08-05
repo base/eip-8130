@@ -1,21 +1,21 @@
-# Example Policies (EIP-8130 actor policies)
+# Policies (EIP-8130 actor policies)
 
-Reference, **unaudited** example of a policy manager for EIP-8130 restricted actors.
+Reference implementation of a policy manager for EIP-8130 restricted actors.
 
-In EIP-8130, a restricted actor (e.g. a session key) is configured with `scope & SCOPE_POLICY != 0`, which stores a
-`policy_manager` address and an opaque `policy_commitment` in the Account Configuration contract. The protocol
-gate forces every call that actor makes to land on that single manager. These contracts are an example of what
-that manager can be: one that enforces application-specific limits and then drives the account. `SCOPE_POLICY`
-(`0x02`) may be combined with other scope bits (e.g. `SCOPE_POLICY | SCOPE_SELF_PAYER`) — `AccountConfiguration` does
+In EIP-8130, a restricted actor (e.g. a session key) is configured with `scope & Scopes.POLICY != 0`, which stores a
+`policy_manager` address and an opaque `policy_commitment` in the Keystore contract. The protocol
+gate forces every call that actor makes to land on that single manager. These contracts are a reference implementation
+of what that manager can be: one that enforces application-specific limits and then drives the account. `Scopes.POLICY`
+(`0x02`) may be combined with other scope bits (e.g. `Scopes.POLICY | Scopes.SELF_PAYER`) — `Keystore` does
 not reject scope combinations; use-time exclusivity between policy gating and an actor's other capabilities is
 protocol-side, not enforced by this contract.
 
 ## Flow
 
-1. **Authorize + commit.** The account authorizes the session key with `scope = SCOPE_POLICY`,
+1. **Authorize + commit.** The account authorizes the session key with `scope = Scopes.POLICY`,
    `policy_manager = PolicyManager`, and `policy_commitment = keccak256` of an account-authorized
-   [`PolicyBinding`](./PolicyManager.sol). The Account Configuration contract exposes this via
-   [`getPolicy(account, actorId)`](../../AccountConfiguration.sol). That signed actor change *is* the
+   [`PolicyBinding`](./PolicyManager.sol). The Keystore contract exposes this via
+   [`getPolicy(account, actorId)`](../../Keystore.sol). That signed actor change *is* the
    authorization — there is no separate install step on the manager.
 2. **Use.** When the session key transacts, the protocol gate resolves the key's allowed target
    (`policy_manager(account, actorId)`) and reverts any call whose `call.to` isn't that address before dispatch, so
@@ -41,7 +41,7 @@ session key ──(8130 gate: only PolicyManager)──▶ PolicyManager.execute
 
 | Contract | Role |
 |----------|------|
-| `PolicyManager` | Stateless manager: `execute(binding, …)` / `executeFor(binding, …)` / `executeForMany(bindings[], …)` re-authenticate the full binding against the live signed commitment in AccountConfiguration, then run policy → account call → `onPostExecute`. |
+| `PolicyManager` | Stateless manager: `execute(binding, …)` / `executeFor(binding, …)` / `executeForMany(bindings[], …)` re-authenticate the full binding against the live signed commitment in Keystore, then run policy → account call → `onPostExecute`. |
 | `Policy` | Base hook: `onExecute` → `(accountCallData, postCallData)` + `onPostExecute` (default no-op). |
 | `SessionPolicy` | Unified "session key" policy: target / selector / recipient / spend limits enforced by linear scan over calldata config. Stores only spend usage. Validates config shape at execute. |
 | `RecurringAllowance` | Periodic-allowance accounting library (ported from base/account-policies); used by `SessionPolicy` for spend accounting. |
@@ -104,7 +104,7 @@ reverts `ExceededAllowance`, a third MyApp selector reverts `SelectorNotAllowed`
 `TargetNotAllowed`. Two choices to note: modeling "full token access" as *any selector* also permits `approve` /
 `transferFrom` on that token (use a single `transfer` rule to restrict to transfers); and USDC is pinned to
 `transfer` precisely so the cap is airtight. End-to-end test:
-[`test_workedExample_fullTokenAccess_monthlyUsdc_appSelectors`](../../../test/unit/examples/SessionPolicy.t.sol).
+[`test_workedExample_fullTokenAccess_monthlyUsdc_appSelectors`](../../../test/unit/policies/SessionPolicy.t.sol).
 
 ### External callers (subscriptions)
 
@@ -132,16 +132,16 @@ then `executeFor` — so the account never needs to send a transaction. The acco
 
 ```solidity
 // actorId = bytes20(provider). The provider never signs an 8130 tx; it acts by being msg.sender.
-AccountConfiguration.ActorConfig({
+Keystore.ActorConfig({
     authenticator: EXTERNAL_POLICY_AUTHENTICATOR, // recognized actor; NO direct executeBatch; not 8130-usable
-    scope:         0x02,                          // SCOPE_POLICY — gated initiation only (MAY also OR SCOPE_SELF_PAYER
+    scope:         0x02,                          // Scopes.POLICY — gated initiation only (MAY also OR Scopes.SELF_PAYER
                                                   //   for self-pay; SHOULD NOT combine with SENDER — POLICY gates
                                                   //   regardless, so SENDER adds no authority the protocol will honor)
     expiry:        0
 });
 ```
 
-`SCOPE_NONCE` (`0x04`) is a separate, orthogonal scope bit: it permits a restricted actor to use sequenced
+`Scopes.NONCE` (`0x04`) is a separate, orthogonal scope bit: it permits a restricted actor to use sequenced
 `nonce_key`s. This contract stores the bit verbatim and never interprets it — nonce semantics are entirely
 protocol-side — so it isn't part of the policy flow above and is only mentioned here for completeness.
 
@@ -150,7 +150,7 @@ Critically, the provider must **not** be registered with `TRUSTED_EXECUTOR` — 
 is a no-code sentinel: the actor is recognized (non-zero authenticator) but can neither drive the account directly
 nor authenticate an 8130 transaction. Give the provider its **own salt** so its commitment — and therefore its
 spend budget — is isolated from any session keys on the account. End-to-end tests:
-[`ExternalPolicyCaller.t.sol`](../../../test/unit/examples/ExternalPolicyCaller.t.sol).
+[`ExternalPolicyCaller.t.sol`](../../../test/unit/policies/ExternalPolicyCaller.t.sol).
 
 > Out of scope for this reference: signature-based replacement and uninstall. See
 > [base/account-policies](https://github.com/base/account-policies) for a fuller policy framework.

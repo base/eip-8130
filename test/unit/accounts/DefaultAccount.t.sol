@@ -2,8 +2,8 @@
 pragma solidity ^0.8.30;
 
 import {DefaultAccount, Call} from "../../../src/accounts/DefaultAccount.sol";
-import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
-import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
+import {Keystore} from "../../../src/Keystore.sol";
+import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @dev Minimal call target: a payable state setter and an unconditional reverter, used to exercise both the
 ///      success and failure legs of the low-level call inside executeBatch.
@@ -19,7 +19,7 @@ contract MockTarget {
     }
 }
 
-contract DefaultAccountTest is AccountConfigurationTest {
+contract DefaultAccountTest is KeystoreTest {
     uint256 constant ACTOR_PK = 100;
 
     // ERC-1271 magic values returned by isValidSignature.
@@ -61,20 +61,18 @@ contract DefaultAccountTest is AccountConfigurationTest {
         address authenticator,
         uint8 scope
     ) internal {
-        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
-        changes[0] = AccountConfiguration.ActorChange({
+        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
+        changes[0] = Keystore.ActorChange({
             actorId: newActorId,
-            changeType: 0x01,
-            data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes("")
-            )
+            changeType: Keystore.ChangeType.Authorize,
+            data: abi.encode(Keystore.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes(""))
         });
 
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        uint64 seq = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         bytes memory auth = _buildK1Auth(pk, digest);
 
-        accountConfiguration.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
+        keystore.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
     }
 
     // ══════════════════════════════════════════════
