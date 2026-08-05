@@ -52,6 +52,20 @@ contract AccountConfigurationTest is Test {
         defaultAccountImplementation = address(new DefaultAccount(address(accountConfiguration)));
     }
 
+    /// @dev Existence check mirroring the (now-internal) actor liveness predicate: an actor is authorized when a
+    ///      stored config entry exists (authenticator != 0), which {getActorConfig} also reports for a live inline
+    ///      k1 self. Does not check expiry. Replaces the removed public `isActor` for tests.
+    function _isActor(address account, bytes32 actorId) internal view returns (bool) {
+        return accountConfiguration.getActorConfig(account, actorId).authenticator != address(0);
+    }
+
+    /// @dev Account-level ERC-1271 check. verifySignature moved off AccountConfiguration onto the account contract;
+    ///      `account` must be a deployed DefaultAccount (as created by the helpers here). Returns true on the magic
+    ///      value. Replaces the removed registry-level `verifySignature` for tests.
+    function _isValidSig(address account, bytes32 hash, bytes memory auth) internal view returns (bool) {
+        return DefaultAccount(payable(account)).isValidSignature(hash, auth) == bytes4(0x1626ba7e);
+    }
+
     // ── Bytecode helpers ──
 
     function _computeERC1167Bytecode(address implementation) internal pure returns (bytes memory) {

@@ -159,23 +159,12 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
         _revokeProvider(a2);
         address a3 = _optIn(bytes32(uint256(3)), 100e6, MONTH);
 
-        (PolicyManager.PolicyBinding memory b1,) = _binding(a1, 1, 100e6, MONTH);
-        (PolicyManager.PolicyBinding memory b2,) = _binding(a2, 2, 100e6, MONTH);
-        (PolicyManager.PolicyBinding memory b3,) = _binding(a3, 3, 100e6, MONTH);
-        PolicyManager.PolicyBinding[] memory bindings = new PolicyManager.PolicyBinding[](3);
-        bindings[0] = b1;
-        bindings[1] = b2;
-        bindings[2] = b3;
-        bytes[] memory data = new bytes[](3);
-        data[0] = _pull(10e6);
-        data[1] = _pull(10e6);
-        data[2] = _pull(20e6);
+        (PolicyManager.PolicyBinding[] memory bindings, bytes[] memory data) = _threePulls(a1, a2, a3);
 
         vm.expectEmit(true, true, true, false);
         emit PolicyManager.ExecutionSkipped(a2, address(policy), bytes32(bytes20(provider)));
 
-        vm.prank(provider);
-        bool[] memory results = manager.executeForMany(bindings, data);
+        bool[] memory results = _runBatch(bindings, data);
 
         assertTrue(results[0]);
         assertFalse(results[1]);
@@ -231,6 +220,34 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
 
     // ── Helpers ──
 
+    /// @dev Builds the (bindings, data) pair for the three-subscriber best-effort batch. Extracted so the batch
+    ///      test does not hold every intermediate binding live across the executeForMany ABI-encode (via-IR stack).
+    function _threePulls(address a1, address a2, address a3)
+        internal
+        view
+        returns (PolicyManager.PolicyBinding[] memory bindings, bytes[] memory data)
+    {
+        bindings = new PolicyManager.PolicyBinding[](3);
+        (bindings[0],) = _binding(a1, 1, 100e6, MONTH);
+        (bindings[1],) = _binding(a2, 2, 100e6, MONTH);
+        (bindings[2],) = _binding(a3, 3, 100e6, MONTH);
+        data = new bytes[](3);
+        data[0] = _pull(10e6);
+        data[1] = _pull(10e6);
+        data[2] = _pull(20e6);
+    }
+
+    /// @dev Drives executeForMany from a minimal-local-count frame. The ABI-encode of `bindings` (an array of
+    ///      structs carrying dynamic `policyConfig`) is deep under via-IR, so isolating it here keeps it within the
+    ///      stack limit regardless of the caller's live locals.
+    function _runBatch(PolicyManager.PolicyBinding[] memory bindings, bytes[] memory data)
+        internal
+        returns (bool[] memory)
+    {
+        vm.prank(provider);
+        return manager.executeForMany(bindings, data);
+    }
+
     function _pull(uint256 amount) internal view returns (bytes memory) {
         return abi.encode(
             SessionPolicy.Action({
@@ -239,15 +256,21 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
         );
     }
 
-    /// @dev SessionPolicy config: `transfer` only on `token`, with a USDC-style recurring spend limit.
+    /// @dev SessionPolicy config: `transfer` only on `token`, with a USDC-style recurring spend limit. The struct
+    ///      build is split from the abi.encode so the deeply-nested encoder (Config → CallScope[] → SelectorRule[]
+    ///      → address[]) runs in its own minimal-local frame, staying within the via-IR stack limit.
     function _config(uint256 limit, uint40 period) internal view returns (bytes memory) {
+        return abi.encode(_sessionConfig(limit, period));
+    }
+
+    function _sessionConfig(uint256 limit, uint40 period) internal view returns (SessionPolicy.Config memory) {
         SessionPolicy.TokenLimit[] memory limits = new SessionPolicy.TokenLimit[](1);
         limits[0] = SessionPolicy.TokenLimit({token: address(token), limit: limit, period: period});
         SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](1);
         rules[0] = SessionPolicy.SelectorRule({selector: ExtMockERC20.transfer.selector, recipients: new address[](0)});
         SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
         scopes[0] = SessionPolicy.CallScope({target: address(token), selectorRules: rules});
-        return abi.encode(SessionPolicy.Config({tokenLimits: limits, callScopes: scopes}));
+        return SessionPolicy.Config({tokenLimits: limits, callScopes: scopes});
     }
 
     function _binding(address account, uint256 salt, uint256 limit, uint40 period)

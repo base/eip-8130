@@ -46,8 +46,12 @@ contract DefaultAccount is Receiver {
     /// @dev Local mirrors of {AccountConfiguration.SCOPE_SENDER} / {AccountConfiguration.SCOPE_POLICY}: a contract's
     ///      public constants are not accessible via its type, and reading the getters would add external calls to the
     ///      execution hot path. Kept in sync with AccountConfiguration.
-    uint8 private constant SCOPE_SENDER = 0x01;
-    uint8 private constant SCOPE_POLICY = 0x02;
+    uint16 private constant SCOPE_SENDER = 0x0001;
+    uint16 private constant SCOPE_POLICY = 0x0002;
+
+    /// @dev ERC-1271 magic return value for a valid signature (`isValidSignature(bytes32,bytes)` selector).
+    bytes4 private constant ERC1271_MAGIC = 0x1626ba7e;
+    bytes4 private constant ERC1271_FAIL = 0xFFFFFFFF;
 
     /// @notice The caller is neither the account itself nor a registered TRUSTED_EXECUTOR actor.
     error UnauthorizedCaller();
@@ -86,15 +90,28 @@ contract DefaultAccount is Receiver {
     /// @notice Validates an ERC-1271 signature via AccountConfiguration; requires the verified actor to be
     ///         operational (the unrestricted admin, scope == 0x00, or a SENDER actor without POLICY). Never reverts.
     ///
+    /// @dev Authenticates against the account-scoped digest {AccountConfiguration.replaySafeHash}, not the raw
+    ///      `hash`, so a signature is bound to this account (EIP-7739 PersonalSign) and cannot replay onto another
+    ///      account sharing the same key. `authenticateActor` reverts on any failure, so it is called externally and
+    ///      the revert is caught. Signing is not a scope grant: it is authorized for any operational actor — the
+    ///      admin, or a SENDER actor not gated by a policy — because it only encodes authority such an actor already
+    ///      holds via calls. A POLICY-bearing actor is never operational and cannot sign (a signature would act off
+    ///      its policy gate). This mirrors the operational-actor rule in {_isAuthorizedCaller}.
+    ///
     /// @param hash The digest to authenticate.
     /// @param signature Auth data in `authenticator || data` format.
     ///
     /// @return The ERC-1271 magic value 0x1626ba7e if valid, otherwise 0xffffffff.
     function isValidSignature(bytes32 hash, bytes calldata signature) external view virtual returns (bytes4) {
-        return
-            ACCOUNT_CONFIGURATION.verifySignature(address(this), hash, signature)
-                ? bytes4(0x1626ba7e)
-                : bytes4(0xFFFFFFFF);
+        bytes32 digest = ACCOUNT_CONFIGURATION.replaySafeHash(address(this), hash);
+        try ACCOUNT_CONFIGURATION.authenticateActor(address(this), digest, signature) returns (
+            bytes32, uint16 scope, address
+        ) {
+            bool operational = scope == 0 || ((scope & SCOPE_SENDER != 0) && (scope & SCOPE_POLICY == 0));
+            return operational ? ERC1271_MAGIC : ERC1271_FAIL;
+        } catch {
+            return ERC1271_FAIL;
+        }
     }
 
     // ══════════════════════════════════════════════
@@ -114,20 +131,21 @@ contract DefaultAccount is Receiver {
     //  INTERNALS
     // ══════════════════════════════════════════════
 
-    /// @dev Authorized if `caller` is the account itself, or holds the TRUSTED_EXECUTOR authenticator with an
-    ///      unexpired config AND operational (sender) authority. Expiry: 0 means none; a non-zero expiry is enforced
-    ///      so a user-set expiry is honored on the execution path. Scope: driving execution requires sender
-    ///      authority — the unrestricted admin (scope == 0x00) or an actor with SCOPE_SENDER that is not gated by a
-    ///      policy (SCOPE_POLICY unset). A POLICY-gated actor must route every call through its manager, so granting
-    ///      it direct executeBatch would bypass that gate; fail closed. This mirrors the operational-actor definition
-    ///      in AccountConfiguration.verifySignature, keeping the execution and signing authorization surfaces aligned.
+    /// @dev Authorized if `caller` is the account itself, or holds the TRUSTED_EXECUTOR authenticator AND operational
+    ///      (sender) authority. Expiry is enforced by getActorConfig, which returns the empty config (zero
+    ///      authenticator) for an expired actor — so an expired caller fails the TRUSTED_EXECUTOR check below, and a
+    ///      user-set expiry is honored on the execution path without a separate comparison here. Scope: driving
+    ///      execution requires sender authority — the unrestricted admin (scope == 0x00) or an actor with
+    ///      SCOPE_SENDER that is not gated by a policy (SCOPE_POLICY unset). A POLICY-gated actor must route every
+    ///      call through its manager, so granting it direct executeBatch would bypass that gate; fail closed. This
+    ///      mirrors the operational-actor definition in {isValidSignature}, keeping the execution and signing
+    ///      authorization surfaces aligned.
     function _isAuthorizedCaller(address caller) internal view virtual returns (bool) {
         if (caller == address(this)) return true;
         AccountConfiguration.ActorConfig memory config =
             ACCOUNT_CONFIGURATION.getActorConfig(address(this), bytes32(bytes20(caller)));
         if (config.authenticator != TRUSTED_EXECUTOR) return false;
-        if (config.expiry != 0 && block.timestamp > config.expiry) return false;
-        uint8 scope = config.scope;
+        uint16 scope = config.scope;
         return scope == 0 || ((scope & SCOPE_SENDER != 0) && (scope & SCOPE_POLICY == 0));
     }
 }

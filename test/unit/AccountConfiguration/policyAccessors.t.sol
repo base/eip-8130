@@ -19,6 +19,11 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
     uint8 internal constant AUTHORIZE_ACTOR = 0x01;
     uint8 internal constant REVOKE_ACTOR = 0x02;
 
+    uint16 internal constant SCOPE_POLICY = 0x0002;
+    uint16 internal constant SCOPE_NONCE = 0x0004;
+    uint16 internal constant SCOPE_SELF_PAYER = 0x0008;
+    uint16 internal constant SCOPE_SPONSOR_PAYER = 0x0010;
+
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // getPolicy — explicit (non-self) actor home  (stored.authenticator != 0)
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -36,7 +41,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         (address account,) = _createK1Account(rootPk);
         actorId = _boundExplicitActorId(account, rootPk, actorId);
 
-        uint8 scope = _boundGatedScope(scopeSeed);
+        uint16 scope = _boundGatedScope(scopeSeed);
         address manager = _boundNonZeroAddress(managerSeed);
         bytes32 commitment = _boundNonZeroWord(commitmentSeed);
 
@@ -83,7 +88,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         address eoa = vm.addr(eoaPk);
         bytes32 selfActorId = bytes32(bytes20(eoa));
 
-        uint8 scope = _boundGatedScope(scopeSeed);
+        uint16 scope = _boundGatedScope(scopeSeed);
         address manager = _boundNonZeroAddress(managerSeed);
         bytes32 commitment = _boundNonZeroWord(commitmentSeed);
 
@@ -348,7 +353,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         (address account,) = _createK1Account(rootPk);
         actorId = _boundExplicitActorId(account, rootPk, actorId);
 
-        uint8 scope = _boundGatedScope(scopeSeed);
+        uint16 scope = _boundGatedScope(scopeSeed);
         address manager = _boundNonZeroAddress(managerSeed);
         bytes32 commitment = _boundNonZeroWord(commitmentSeed);
         address newManager = _boundNonZeroAddress(newManagerSeed);
@@ -373,13 +378,13 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         (address account,) = _createK1Account(rootPk);
         actorId = _boundExplicitActorId(account, rootPk, actorId);
 
-        _authorizePolicyActor(account, rootPk, actorId, accountConfiguration.SCOPE_POLICY(), address(0), bytes32(0));
+        _authorizePolicyActor(account, rootPk, actorId, SCOPE_POLICY, address(0), bytes32(0));
 
         // Slots are zero, yet the actor is gated by the SCOPE_POLICY bit.
         assertEq(accountConfiguration.getPolicyManager(account, actorId), address(0));
         assertEq(accountConfiguration.getPolicyCommitment(account, actorId), bytes32(0));
         AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, actorId);
-        assertTrue(cfg.scope & accountConfiguration.SCOPE_POLICY() != 0);
+        assertTrue(cfg.scope & SCOPE_POLICY != 0);
     }
 
     /// @notice This contract does not reject scope combinations: an actor may carry SCOPE_POLICY alongside any
@@ -394,17 +399,12 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         address manager = _boundNonZeroAddress(managerSeed);
         bytes32 commitment = _boundNonZeroWord(commitmentSeed);
 
-        uint8[4] memory otherScopes = [
-            uint8(0),
-            accountConfiguration.SCOPE_SELF_PAYER(),
-            accountConfiguration.SCOPE_SPONSOR_PAYER(),
-            accountConfiguration.SCOPE_NONCE()
-        ];
+        uint16[4] memory otherScopes = [uint16(0), SCOPE_SELF_PAYER, SCOPE_SPONSOR_PAYER, SCOPE_NONCE];
         for (uint256 i; i < otherScopes.length; i++) {
             // Policy actors are keyed by actorId only; no signing key is needed, so a distinct address-shaped id
             // avoids the vm.addr curve-order bound on an unbounded rootPk + i.
             bytes32 actorId = bytes32(bytes20(address(uint160(1000 + i))));
-            uint8 scope = otherScopes[i] | accountConfiguration.SCOPE_POLICY();
+            uint16 scope = otherScopes[i] | SCOPE_POLICY;
             _authorizePolicyActor(account, rootPk, actorId, scope, manager, commitment);
 
             assertEq(accountConfiguration.getPolicyManager(account, actorId), manager);
@@ -433,7 +433,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         actorB = _boundExplicitActorId(account, rootPk, actorB);
         vm.assume(actorA != actorB);
 
-        uint8 scope = _boundGatedScope(scopeSeed);
+        uint16 scope = _boundGatedScope(scopeSeed);
         address managerA = _boundNonZeroAddress(managerSeedA);
         bytes32 commitmentA = _boundNonZeroWord(commitmentSeedA);
         address managerB = _boundNonZeroAddress(managerSeedB);
@@ -471,7 +471,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         vm.assume(sharedActorId != bytes32(bytes20(accountA)));
         vm.assume(sharedActorId != bytes32(bytes20(accountB)));
 
-        uint8 scope = _boundGatedScope(scopeSeed);
+        uint16 scope = _boundGatedScope(scopeSeed);
         address managerA = _boundNonZeroAddress(managerSeedA);
         bytes32 commitmentA = _boundNonZeroWord(commitmentSeedA);
         address managerB = _boundNonZeroAddress(managerSeedB);
@@ -515,9 +515,9 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
             account, rootPk, sessionActorId, _boundGatedScope(scopeSeed), manager, _boundNonZeroWord(commitmentSeed)
         );
 
-        (, uint8 outScope, address policyTarget) =
+        (, uint16 outScope, address policyTarget) =
             accountConfiguration.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
-        assertTrue(outScope & accountConfiguration.SCOPE_POLICY() != 0);
+        assertTrue(outScope & SCOPE_POLICY != 0);
         assertEq(policyTarget, manager);
         assertEq(policyTarget, accountConfiguration.getPolicyManager(account, sessionActorId));
     }
@@ -568,7 +568,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
 
-        (, uint8 outScope, address policyTarget) =
+        (, uint16 outScope, address policyTarget) =
             accountConfiguration.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(outScope, uint8(0x00));
         assertEq(policyTarget, address(0));
@@ -579,8 +579,8 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     /// @dev A policy-bearing actor's scope: always carries SCOPE_POLICY, with arbitrary other bits mixed in.
-    function _boundGatedScope(uint8 seed) internal view returns (uint8) {
-        return uint8(seed) | accountConfiguration.SCOPE_POLICY();
+    function _boundGatedScope(uint8 seed) internal view returns (uint16) {
+        return uint8(seed) | SCOPE_POLICY;
     }
 
     /// @dev A non-zero policy manager address (so a written slot is distinguishable from an unwritten one).
@@ -642,7 +642,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
         address account,
         uint256 rootPk,
         bytes32 actorId,
-        uint8 scope,
+        uint16 scope,
         address policyManager,
         bytes32 commitment
     ) internal {
@@ -669,7 +669,7 @@ contract PolicyAccessorsTest is AccountConfigurationTest {
     function _authorizeInlineSelfWithPolicy(
         address eoa,
         uint256 eoaPk,
-        uint8 scope,
+        uint16 scope,
         address policyManager,
         bytes32 commitment
     ) internal {

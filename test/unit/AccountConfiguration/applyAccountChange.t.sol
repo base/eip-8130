@@ -11,6 +11,8 @@ import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 ///         (scope 0 admin), and anyone (here the test) relays. Tests that must drive an onlyUnlocked-guarded config
 ///         path (applySignedActorChanges) create a real k1 account so the authenticated actor can change actors.
 contract AccountLockTest is AccountConfigurationTest {
+    uint16 internal constant SCOPE_SENDER = 0x0001;
+
     // ── Local fuzz-bound helpers ──
 
     /// @dev Keep a fuzzed account out of the zero address, the system contract, and the forge-std cheatcode /
@@ -41,7 +43,7 @@ contract AccountLockTest is AccountConfigurationTest {
 
     /// @dev Authorize a k1 actor (actorId = bytes32(bytes20(newSigner))) with `scope` on `account`, signed by the
     ///      account's admin owner `ownerPk`.
-    function _authorizeK1ActorWithScope(address account, uint256 ownerPk, address newSigner, uint8 scope) internal {
+    function _authorizeK1ActorWithScope(address account, uint256 ownerPk, address newSigner, uint16 scope) internal {
         AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
         changes[0] = AccountConfiguration.ActorChange({
             changeType: 0x01,
@@ -76,7 +78,7 @@ contract AccountLockTest is AccountConfigurationTest {
         address scopedSigner = vm.addr(scopedPk);
         vm.assume(scopedSigner != account);
 
-        _authorizeK1ActorWithScope(account, ownerPk, scopedSigner, accountConfiguration.SCOPE_SENDER());
+        _authorizeK1ActorWithScope(account, ownerPk, scopedSigner, SCOPE_SENDER);
 
         bytes memory auth = _lockAuth(scopedPk, account, delay);
         vm.expectRevert(AccountConfiguration.UnauthorizedLockChange.selector);
@@ -488,7 +490,7 @@ contract AccountLockTest is AccountConfigurationTest {
 
         accountConfiguration.applySignedActorChanges(account, chainId, changes, auth);
 
-        assertTrue(accountConfiguration.isActor(account, newActorId));
+        assertTrue(_isActor(account, newActorId));
         // The onlyUnlocked prelude cleared the stale unlock timestamp back to 0.
         (,, uint40 unlocksAt,) = accountConfiguration.getLockStatus(account);
         assertEq(unlocksAt, 0);

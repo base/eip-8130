@@ -20,11 +20,12 @@ contract AccountConfiguration {
         uint64 local; // chain_id == block.chainid; starts at 1 once initialized (created/imported), 0 = uninitialized
     }
 
-    /// @notice An actor's authorization: authenticator, scope, and expiry.
+    /// @notice An actor's authorization: authenticator, expiry, and scope. Field order matches the normative
+    ///         `actor_config` slot layout: authenticator(20) ‖ expiry(6) ‖ scope(2) ‖ reserved(4).
     struct ActorConfig {
         address authenticator;
-        uint8 scope;
         uint48 expiry; // Unix seconds; 0 = no expiry. Actor invalid once block.timestamp > expiry
+        uint16 scope;
     }
 
     /// @notice Initial actor for account creation and import. Carries its scope and, when scope & SCOPE_POLICY is
@@ -33,7 +34,7 @@ contract AccountConfiguration {
     struct InitialActor {
         bytes32 actorId;
         address authenticator;
-        uint8 scope; // 0x00 = unrestricted admin
+        uint16 scope; // 0x00 = unrestricted admin
         bytes policyData; // empty unless scope & SCOPE_POLICY; then manager(20) || commitment(32)
     }
 
@@ -56,8 +57,8 @@ contract AccountConfiguration {
     ///
     /// @dev Packed into a single storage slot; the field layout is normative (nodes read the raw slot for mempool
     ///      rate-limit tiering, see the EIP's Account Lock section). Field order and widths match the spec's
-    ///      account-state table: multichainSequence, localSequence, flags, lockUnion, defaultEOAScope,
-    ///      defaultEOAExpiry, then 3 reserved bytes that MUST stay zero.
+    ///      account-state table: multichainSequence, localSequence, flags, lockUnion, defaultEOAExpiry,
+    ///      defaultEOAScope, then 2 reserved bytes that MUST stay zero.
     ///      localSequence > 0 doubles as the account initialized flag.
     ///      `flags` is a bitfield: bit 0 (FLAG_REVOKE_DEFAULT_EOA) disables the k1 self key; bit 1 (FLAG_LOCKED)
     ///      freezes actor configuration; bit 2 (FLAG_UNLOCK_INITIATED) selects how `lockUnion` is interpreted.
@@ -75,9 +76,9 @@ contract AccountConfiguration {
         uint64 localSequence; // 8 bytes – also serves as initialized flag
         uint8 flags; // 1 byte – bitfield: bit 0 REVOKE_DEFAULT_EOA, bit 1 LOCKED, bit 2 UNLOCK_INITIATED
         uint40 lockUnion; // 5 bytes – union: unlockDelay while UNLOCK_INITIATED clear, else unlocksAt (timestamp)
-        uint8 defaultEOAScope; // 1 byte – inline self k1 scope (0 = full owner)
         uint48 defaultEOAExpiry; // 6 bytes – inline self k1 expiry (Unix seconds; 0 = no expiry)
-        // 3 bytes reserved (remaining slot bytes); MUST stay zero.
+        uint16 defaultEOAScope; // 2 bytes – inline self k1 scope (0 = full owner)
+        // 2 bytes reserved (remaining slot bytes); MUST stay zero.
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -94,17 +95,17 @@ contract AccountConfiguration {
     ///      import signature cannot be replayed on another chain. Initial actors are hashed structurally via
     ///      ACTOR_TYPEHASH / ACTORCONFIG_TYPEHASH below.
     bytes32 public constant ACTOR_INITIALIZATION_TYPEHASH = keccak256(
-        "ActorInitialization(bytes32 salt,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint8 scope,uint48 expiry)"
+        "ActorInitialization(bytes32 salt,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"
     );
 
     /// @notice Typehash used to structurally hash each Actor within an ActorInitialization import digest.
     bytes32 public constant ACTOR_TYPEHASH = keccak256(
-        "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint8 scope,uint48 expiry)"
+        "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"
     );
 
     /// @notice Typehash used to structurally hash an Actor's ActorConfig within an import digest.
     bytes32 public constant ACTORCONFIG_TYPEHASH =
-        keccak256("ActorConfig(address authenticator,uint8 scope,uint48 expiry)");
+        keccak256("ActorConfig(address authenticator,uint48 expiry,uint16 scope)");
 
     /// @notice Typehash binding a signed actor-change batch to its account, chainId, and sequence.
     ///
@@ -150,31 +151,30 @@ contract AccountConfiguration {
     // ----------------------------------------------------------------------------------------------------------------
 
     /// @notice Actor can initiate transactions with account as sender
-    uint8 public constant SCOPE_SENDER = 0x01;
+    uint16 public constant SCOPE_SENDER = 0x0001;
 
     /// @notice Actor is gated to a policy: every call it makes must land on the resolved manager (this contract
     ///         stores manager + commitment; the protocol enforces that the actor's calls only ever reach that
     ///         target). This contract does not reject scope combinations (e.g. SCOPE_POLICY | SCOPE_SELF_PAYER) — any
     ///         use-time exclusivity between SCOPE_POLICY and the account's other capabilities is protocol-side, not
     ///         enforced here.
-    uint8 public constant SCOPE_POLICY = 0x02;
+    uint16 public constant SCOPE_POLICY = 0x0002;
 
     /// @notice Permits a restricted (non-admin) actor to use sequenced `nonce_key`s for sender-context transactions;
     ///         without it a restricted actor may use only the nonce-free key (NONCE_KEY_MAX), while admin actors are
     ///         unconstrained. This contract stores the scope bit verbatim and does not interpret it — nonce semantics
     ///         are enforced entirely protocol-side.
-    uint8 public constant SCOPE_NONCE = 0x04;
+    uint16 public constant SCOPE_NONCE = 0x0004;
 
     /// @notice Actor can self-pay gas for the account's own operations (payer == sender).
-    uint8 public constant SCOPE_SELF_PAYER = 0x08;
+    uint16 public constant SCOPE_SELF_PAYER = 0x0008;
 
     /// @notice Actor can sponsor gas on behalf of a different sender (payer != sender).
-    uint8 public constant SCOPE_SPONSOR_PAYER = 0x10;
+    uint16 public constant SCOPE_SPONSOR_PAYER = 0x0010;
 
-    // ERC-1271 signing rides on operational authority (admin scope == 0x00, or a SENDER actor without POLICY);
-    // it is not its own scope bit. See verifySignature.
-
-    // 0x20, 0x40, 0x80 are spare (unused).
+    // ERC-1271 signing rides on operational authority (admin scope == 0x00, or a SENDER actor without POLICY); it is
+    // not its own scope bit. This contract does not reject scope combinations — any use-time exclusivity is
+    // protocol-side. 0x0020..0x8000 (bits 5–15) are spare (unused).
 
     /// @notice The single secp256k1 authenticator. The default EOA and every k1 actor share this one identity; the
     ///         actor config alone distinguishes a full-owner EOA from a scoped key. Signed with a K1_AUTHENTICATOR
@@ -223,7 +223,7 @@ contract AccountConfiguration {
     /// @param account The account whose actor was authorized.
     /// @param actorId The authorized actor's identifier.
     /// @param actorData Tightly packed authorization surface, mirroring the wire packing:
-    ///        authenticator(20) || scope(1) || expiry(6) || reserved(5 zero bytes) = 32 bytes, and, only when
+    ///        authenticator(20) || expiry(6) || scope(2) || reserved(4 zero bytes) = 32 bytes, and, only when
     ///        scope & SCOPE_POLICY != 0, followed by the resolved policy gate manager(20) || commitment(32). So the
     ///        payload is 32 bytes for an ungated actor and 84 bytes for a policy-gated one.
     event ActorAuthorized(address indexed account, bytes32 indexed actorId, bytes actorData);
@@ -516,7 +516,7 @@ contract AccountConfiguration {
 
         // Compute digest and authenticate
         bytes32 digest = _computeSignedActorChangesDigest(account, chainId, sequence, actorChanges);
-        (, uint8 scope,) = authenticateActor(account, digest, auth);
+        (, uint16 scope,) = authenticateActor(account, digest, auth);
 
         // Only an unrestricted actor (scope 0) may change actors; there is no elevated "admin" scope bit.
         if (scope != 0) revert UnauthorizedActorChange();
@@ -574,7 +574,7 @@ contract AccountConfiguration {
         uint64 sequence = _accountState[account].localSequence++;
 
         bytes32 digest = _computeSignedLockChangesDigest(account, block.chainid, op, unlockDelay, sequence);
-        (, uint8 scope,) = authenticateActor(account, digest, auth);
+        (, uint16 scope,) = authenticateActor(account, digest, auth);
 
         // Only an unrestricted actor (scope 0) may change the lock; there is no elevated "admin" scope bit.
         if (scope != 0) revert UnauthorizedLockChange();
@@ -612,42 +612,12 @@ contract AccountConfiguration {
     // VIEW FUNCTIONS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice Validates an account signature in `authenticator(20) || data` format; never reverts.
-    ///
-    /// @dev ERC-1271-style boolean check: returns false on any failure (invalid signature, unknown/revoked actor,
-    ///      actorId not bound to the presented authenticator, or a non-operational actor). authenticateActor
-    ///      reverts on failure, so it is called externally and the revert is caught.
-    ///
-    /// @param account The account the signature is validated against.
-    /// @param hash The raw digest; authenticated as replaySafeHash(account, hash).
-    /// @param signature Authenticator(20) || authenticator-specific data.
-    ///
-    /// @return verified True if the signature is valid and the resolved actor is operational (admin, or a SENDER
-    ///         actor that does not carry POLICY).
-    function verifySignature(address account, bytes32 hash, bytes calldata signature)
-        external
-        view
-        returns (bool verified)
-    {
-        // Authenticate against the account-scoped digest (see {replaySafeHash}), not the raw hash.
-        try this.authenticateActor(account, replaySafeHash(account, hash), signature) returns (
-            bytes32, uint8 scope, address
-        ) {
-            // ERC-1271 signing is authorized for any operational actor: the admin (scope == 0x00), or a SENDER actor
-            // that is not gated by a policy (SCOPE_SENDER set AND SCOPE_POLICY unset). Signing is an encoding of
-            // authority a SENDER actor already holds via calls, not a separate grant, so it needs no dedicated scope
-            // bit. A POLICY-bearing actor is not operational and cannot sign: a signature acts outside its policy
-            // gate, so honoring one would let it act off its gate.
-            return scope == 0 || ((scope & SCOPE_SENDER != 0) && (scope & SCOPE_POLICY == 0));
-        } catch {
-            return false;
-        }
-    }
-
-    // Account-scoped ERC-1271: signatures are authenticated against replaySafeHash(account, hash), an EIP-712
-    // digest with verifyingContract = account, binding a 1271 signature to a single account. This is the EIP-7739
-    // PersonalSign digest; TypedDataSign is not implemented. The registry's own signed messages (actor changes,
-    // import, lock) bind context in-struct and do not use this domain.
+    // Account-scoped ERC-1271: this contract owns only the account-scoped digest ({replaySafeHash}) — an EIP-712
+    // PersonalSign digest with verifyingContract = account, binding a 1271 signature to a single account (EIP-7739;
+    // TypedDataSign is not implemented). The actual ERC-1271 verification (authenticate + operational-actor check)
+    // lives on the account contract (see DefaultAccount.isValidSignature), keeping this contract scope-agnostic;
+    // it is not a grant, so it needs no scope bit. The registry's own signed messages (actor changes, import,
+    // lock) bind context in-struct and do not use this domain.
 
     /// @dev EIP-712 domain typehash.
     bytes32 private constant _EIP712_DOMAIN_TYPEHASH =
@@ -661,8 +631,9 @@ contract AccountConfiguration {
     bytes32 private constant _ACCOUNT_DOMAIN_NAME_HASH = keccak256("EIP8130Account");
     bytes32 private constant _ACCOUNT_DOMAIN_VERSION_HASH = keccak256("1");
 
-    /// @notice Account-scoped digest to sign for `hash` to be accepted by {verifySignature}: `hash` wrapped in an
-    ///         EIP-712 domain with verifyingContract = `account` and the current chainId.
+    /// @notice Account-scoped digest to sign for `hash` to be accepted by an account's ERC-1271 check (e.g.
+    ///         {DefaultAccount.isValidSignature}): `hash` wrapped in an EIP-712 domain with verifyingContract =
+    ///         `account` and the current chainId.
     /// @param account Account the signature is bound to.
     /// @param hash Raw message digest.
     /// @return The digest to sign.
@@ -707,7 +678,7 @@ contract AccountConfiguration {
     function authenticateActor(address account, bytes32 hash, bytes calldata auth)
         public
         view
-        returns (bytes32 actorId, uint8 scope, address policyTarget)
+        returns (bytes32 actorId, uint16 scope, address policyTarget)
     {
         if (auth.length < 20) revert InvalidAuthLength();
         return _authenticate(account, hash, address(bytes20(auth[:20])), auth[20:]);
@@ -735,47 +706,47 @@ contract AccountConfiguration {
     // STORAGE VIEWS
     // ----------------------------------------------------------------------------------------------------------------
 
-    /// @notice Returns whether `actorId` is currently authorized on `account` (a stored actor entry exists, or the
-    ///         inline k1 self is enabled).
-    ///
-    /// @dev Does NOT check expiry: an expired-but-not-revoked actor still returns true. This is intentional —
-    ///      _revokeActor relies on it to revoke expired actors — so callers needing liveness must check expiry too.
-    ///
-    /// @param account The account to check.
-    /// @param actorId The actor identifier to check.
-    ///
-    /// @return True if the actor is authorized (possibly expired).
-    function isActor(address account, bytes32 actorId) public view returns (bool) {
-        // A populated _actorConfig entry is always live: any non-self actor, or a non-k1 self authenticator.
-        if (_actorConfig[actorId][account].authenticator >= K1_AUTHENTICATOR) return true;
-        // No _actorConfig entry: the self-actorId's k1 key lives inline in AccountState, live unless the flag is set.
-        if (actorId == bytes32(bytes20(account))) return !_isDefaultEoaRevoked(account);
-        return false;
-    }
-
-    /// @notice Resolves the effective ActorConfig for `actorId` on `account`.
+    /// @notice Resolves the effective ActorConfig for `actorId` on `account`, or the all-zero (empty) config when the
+    ///         actor is not live.
     ///
     /// @dev With a populated _actorConfig entry, returns it verbatim (any non-self actor, or a non-k1 self). For the
     ///      self-actorId without such an entry, the k1 self lives inline in AccountState: a live one (flag unset)
     ///      reports as a native ecrecover owner carrying its inline scope/expiry (all-zero = full owner); a
     ///      disabled one, or any unknown actor, reports as the all-zero (empty) config, keeping live-vs-disabled
     ///      unambiguous without a sentinel.
+    /// @dev An *expired* actor (non-zero expiry with block.timestamp > expiry) resolves to the empty config, exactly
+    ///      as if it had never been authorized — matching authentication (which reverts ActorExpired) so liveness has
+    ///      one meaning across the read and hot paths. This makes the view a pure function of (raw storage,
+    ///      block.timestamp): an expired slot carries no live authority, so it can be reclaimed/pruned without
+    ///      changing any observable answer, and the whole accessor can migrate to a precompile that reads the raw
+    ///      account/actor storage and applies the same expiry rule.
     ///
     /// @param account The account to read.
     /// @param actorId The actor identifier to resolve.
     ///
-    /// @return The resolved actor configuration, or the all-zero config if the actor is not live.
+    /// @return The resolved actor configuration, or the all-zero config if the actor is not live (unknown, disabled,
+    ///         or expired).
     function getActorConfig(address account, bytes32 actorId) external view returns (ActorConfig memory) {
         ActorConfig memory config = _actorConfig[actorId][account];
-        // Non-zero authenticator = a stored entry. Uses the same `>= K1_AUTHENTICATOR` namespace idiom as isActor:
+        // Non-zero authenticator = a stored entry. Uses the same `>= K1_AUTHENTICATOR` namespace idiom as _isActor:
         // every stored authenticator is K1_AUTHENTICATOR (0x1) or a contract, so this is equivalent to != address(0).
-        if (config.authenticator >= K1_AUTHENTICATOR) return config;
+        if (config.authenticator >= K1_AUTHENTICATOR) {
+            // An expired stored actor reports as empty (as if never authorized), never its stale config.
+            if (_isExpired(config.expiry)) return _emptyActorConfig();
+            return config;
+        }
         if (actorId == bytes32(bytes20(account)) && !_isDefaultEoaRevoked(account)) {
             AccountState storage st = _accountState[account];
+            if (_isExpired(st.defaultEOAExpiry)) return _emptyActorConfig();
             return
                 ActorConfig({authenticator: K1_AUTHENTICATOR, scope: st.defaultEOAScope, expiry: st.defaultEOAExpiry});
         }
         return config;
+    }
+
+    /// @dev The all-zero ActorConfig returned for a non-live actor (unknown, disabled, or expired).
+    function _emptyActorConfig() private pure returns (ActorConfig memory) {
+        return ActorConfig({authenticator: address(0), expiry: 0, scope: 0});
     }
 
     /// @notice Resolves an actor's policy gate target (manager) and signed commitment.
@@ -1006,7 +977,7 @@ contract AccountConfiguration {
     }
 
     /// @dev Emit ActorAuthorized with a tightly packed payload. The base packs to 32 bytes
-    ///      (authenticator(20) || scope(1) || expiry(6) || reserved(5 zero bytes)); the policy gate
+    ///      (authenticator(20) || expiry(6) || scope(2) || reserved(4 zero bytes)); the policy gate
     ///      (manager(20) || commitment(32), 52 bytes) is appended only when scope & SCOPE_POLICY != 0.
     function _emitActorAuthorized(
         address account,
@@ -1016,8 +987,8 @@ contract AccountConfiguration {
         bytes32 commitment
     ) private {
         bytes memory actorData = (config.scope & SCOPE_POLICY != 0)
-            ? abi.encodePacked(config.authenticator, config.scope, config.expiry, bytes5(0), manager, commitment)
-            : abi.encodePacked(config.authenticator, config.scope, config.expiry, bytes5(0));
+            ? abi.encodePacked(config.authenticator, config.expiry, config.scope, bytes4(0), manager, commitment)
+            : abi.encodePacked(config.authenticator, config.expiry, config.scope, bytes4(0));
         emit ActorAuthorized(account, actorId, actorData);
     }
 
@@ -1026,7 +997,7 @@ contract AccountConfiguration {
     ///      commitment), written verbatim. Neither field need be non-zero: a zero commitment is a valid "no
     ///      params" and a zero manager gates the actor to address(0). Only a length mismatch reverts. The protocol
     ///      does not interpret the commitment value; self-enforcement is expressed as manager == account.
-    function _slicePolicy(uint8 scope, bytes memory policyData)
+    function _slicePolicy(uint16 scope, bytes memory policyData)
         internal
         pure
         returns (address manager, bytes32 commitment)
@@ -1042,11 +1013,23 @@ contract AccountConfiguration {
         }
     }
 
+    /// @dev Returns whether `actorId` is currently authorized on `account` (a stored actor entry exists, or the
+    ///      inline k1 self is enabled). Does NOT check expiry: an expired-but-not-revoked actor still returns true —
+    ///      intentional, since _revokeActor relies on it to revoke expired actors. Off-chain liveness checks should
+    ///      read {getActorConfig} (authenticator != 0) and enforce expiry themselves.
+    function _isActor(address account, bytes32 actorId) private view returns (bool) {
+        // A populated _actorConfig entry is always live: any non-self actor, or a non-k1 self authenticator.
+        if (_actorConfig[actorId][account].authenticator >= K1_AUTHENTICATOR) return true;
+        // No _actorConfig entry: the self-actorId's k1 key lives inline in AccountState, live unless the flag is set.
+        if (actorId == bytes32(bytes20(account))) return !_isDefaultEoaRevoked(account);
+        return false;
+    }
+
     /// @dev Revokes `actorId` from `account`, clearing its config and policy slots and emitting ActorRevoked. For the
     ///      self-actorId it also disables the inline k1 self (sets FLAG_REVOKE_DEFAULT_EOA and zeroes the inline
     ///      fields). Reverts with UnknownActor when the actor is not currently live.
     function _revokeActor(address account, bytes32 actorId) internal nonZeroAccount(account) {
-        if (!isActor(account, actorId)) revert UnknownActor();
+        if (!_isActor(account, actorId)) revert UnknownActor();
         delete _actorConfig[actorId][account];
         // Policy state is keyed by (account, actorId) and cleared exactly on revoke.
         delete _policyCommitment[actorId][account];
@@ -1086,7 +1069,7 @@ contract AccountConfiguration {
     }
 
     /// @dev Packed commitment over the initial actor set. Per-actor contribution is
-    ///      actorId (32) || authenticator (20) || scope (1) || policyData, where policyData is empty (POLICY unset)
+    ///      actorId (32) || authenticator (20) || scope (2) || policyData, where policyData is empty (POLICY unset)
     ///      or exactly 52 bytes (POLICY set), so the length is unambiguous. Expiry does not participate (always 0
     ///      for initial actors).
     function _computeActorsCommitment(InitialActor[] calldata initialActors) internal pure returns (bytes32) {
@@ -1117,7 +1100,7 @@ contract AccountConfiguration {
             // accepted here. policyData is hashed via keccak256 into the Actor struct hash. The typehash structure
             // matches the importAccount signature payload in EIP-8130.
             bytes32 configHash = keccak256(
-                abi.encode(ACTORCONFIG_TYPEHASH, initialActors[i].authenticator, initialActors[i].scope, uint48(0))
+                abi.encode(ACTORCONFIG_TYPEHASH, initialActors[i].authenticator, uint48(0), initialActors[i].scope)
             );
             actorHashes[i] = keccak256(
                 abi.encode(ACTOR_TYPEHASH, initialActors[i].actorId, configHash, keccak256(initialActors[i].policyData))
@@ -1193,14 +1176,14 @@ contract AccountConfiguration {
     function _authenticate(address account, bytes32 hash, address authenticator, bytes calldata data)
         internal
         view
-        returns (bytes32, uint8, address)
+        returns (bytes32, uint16, address)
     {
         if (authenticator == K1_AUTHENTICATOR) return _authenticateK1(account, hash, data);
 
         bytes32 actorId = IAuthenticator(authenticator).authenticate(hash, data);
         if (actorId == bytes32(0)) revert AuthenticationFailed();
 
-        (uint8 scope, address policyTarget) = _resolveExplicitActor(account, actorId, authenticator);
+        (uint16 scope, address policyTarget) = _resolveExplicitActor(account, actorId, authenticator);
         return (actorId, scope, policyTarget);
     }
 
@@ -1210,19 +1193,19 @@ contract AccountConfiguration {
     function _resolveExplicitActor(address account, bytes32 actorId, address expectedAuthenticator)
         private
         view
-        returns (uint8 scope, address policyTarget)
+        returns (uint16 scope, address policyTarget)
     {
         ActorConfig memory config = _actorConfig[actorId][account];
         if (config.authenticator != expectedAuthenticator) revert AuthenticatorMismatch();
         // Expiry is read from the same slot; an expired actor fails authentication. 0 = no expiry.
-        if (config.expiry != 0 && block.timestamp > config.expiry) revert ActorExpired();
+        if (_isExpired(config.expiry)) revert ActorExpired();
         scope = config.scope;
         policyTarget = _policyTargetFor(scope, actorId, account);
     }
 
     /// @dev Resolves the policy gate target for an actor: the policy manager for a policy-gated actor
     ///      (scope & SCOPE_POLICY != 0), or address(0) otherwise. Non-policy actors (incl. admin) skip the SLOAD.
-    function _policyTargetFor(uint8 scope, bytes32 actorId, address account) private view returns (address) {
+    function _policyTargetFor(uint16 scope, bytes32 actorId, address account) private view returns (address) {
         return (scope & SCOPE_POLICY != 0) ? _policyManager[actorId][account] : address(0);
     }
 
@@ -1237,7 +1220,7 @@ contract AccountConfiguration {
     function _authenticateK1(address account, bytes32 hash, bytes calldata data)
         internal
         view
-        returns (bytes32, uint8, address)
+        returns (bytes32, uint16, address)
     {
         address recovered = _recoverSigner(hash, data);
         if (recovered == address(0)) revert InvalidSignature();
@@ -1247,20 +1230,26 @@ contract AccountConfiguration {
             // inline scope/expiry govern (all-zero = full owner).
             AccountState storage st = _accountState[account];
             if (st.flags & FLAG_REVOKE_DEFAULT_EOA != 0) revert DefaultEoaRevoked();
-            if (st.defaultEOAExpiry != 0 && block.timestamp > st.defaultEOAExpiry) revert ActorExpired();
+            if (_isExpired(st.defaultEOAExpiry)) revert ActorExpired();
             bytes32 selfActorId = bytes32(bytes20(account));
-            uint8 selfScope = st.defaultEOAScope;
+            uint16 selfScope = st.defaultEOAScope;
             return (selfActorId, selfScope, _policyTargetFor(selfScope, selfActorId, account));
         }
 
         bytes32 actorId = bytes32(bytes20(recovered));
-        (uint8 scope, address policyTarget) = _resolveExplicitActor(account, actorId, K1_AUTHENTICATOR);
+        (uint16 scope, address policyTarget) = _resolveExplicitActor(account, actorId, K1_AUTHENTICATOR);
         return (actorId, scope, policyTarget);
     }
 
     /// @dev True if the account's default (implicit) EOA has been revoked via the AccountState flag.
     function _isDefaultEoaRevoked(address account) internal view returns (bool) {
         return _accountState[account].flags & FLAG_REVOKE_DEFAULT_EOA != 0;
+    }
+
+    /// @dev The single actor-expiry rule shared by authentication and {getActorConfig}: an actor is expired when it
+    ///      carries a non-zero `expiry` and the current block timestamp is past it. `expiry == 0` means no expiry.
+    function _isExpired(uint48 expiry) internal view returns (bool) {
+        return expiry != 0 && block.timestamp > expiry;
     }
 
     /// @dev Recovers the ECDSA signer from a 65-byte r‖s‖v signature over `hash`, enforcing EIP-2 (low-s only,
