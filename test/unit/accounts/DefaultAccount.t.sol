@@ -313,7 +313,7 @@ contract DefaultAccountTest is AccountConfigurationTest {
         _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(actor)), k1Authenticator, SCOPE_SENDER);
 
         // verifySignature applies the account-scoped EIP-7739 wrap, so sign the replaySafeHash digest.
-        bytes memory authData = _buildK1Auth(actorPk, accountConfiguration.replaySafeHash(account, hash));
+        bytes memory authData = _buildK1Auth(actorPk, _replaySafeHash(account, hash));
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, ERC1271_MAGIC);
@@ -347,7 +347,7 @@ contract DefaultAccountTest is AccountConfigurationTest {
         (address account,) = _createK1Account(pk);
 
         // verifySignature applies the account-scoped EIP-7739 wrap, so sign the replaySafeHash digest.
-        bytes memory authData = _buildK1Auth(pk, accountConfiguration.replaySafeHash(account, hash));
+        bytes memory authData = _buildK1Auth(pk, _replaySafeHash(account, hash));
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, ERC1271_MAGIC);

@@ -612,44 +612,10 @@ contract AccountConfiguration {
     // VIEW FUNCTIONS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    // Account-scoped ERC-1271: this contract owns only the account-scoped digest ({replaySafeHash}) — an EIP-712
-    // PersonalSign digest with verifyingContract = account, binding a 1271 signature to a single account (EIP-7739;
-    // TypedDataSign is not implemented). The actual ERC-1271 verification (authenticate + operational-actor check)
-    // lives on the account contract (see DefaultAccount.isValidSignature), keeping this contract scope-agnostic;
-    // it is not a grant, so it needs no scope bit. The registry's own signed messages (actor changes, import,
-    // lock) bind context in-struct and do not use this domain.
-
-    /// @dev EIP-712 domain typehash.
-    bytes32 private constant _EIP712_DOMAIN_TYPEHASH =
-        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
-
-    /// @dev keccak256("PersonalSign(bytes prefixed)").
-    bytes32 private constant _PERSONAL_SIGN_TYPEHASH =
-        0x983e65e5148e570cd828ead231ee759a8d7958721a768f93bc4483ba005c32de;
-
-    /// @dev Account ERC-1271 domain name/version, fixed for all accounts.
-    bytes32 private constant _ACCOUNT_DOMAIN_NAME_HASH = keccak256("EIP8130Account");
-    bytes32 private constant _ACCOUNT_DOMAIN_VERSION_HASH = keccak256("1");
-
-    /// @notice Account-scoped digest to sign for `hash` to be accepted by an account's ERC-1271 check (e.g.
-    ///         {DefaultAccount.isValidSignature}): `hash` wrapped in an EIP-712 domain with verifyingContract =
-    ///         `account` and the current chainId.
-    /// @param account Account the signature is bound to.
-    /// @param hash Raw message digest.
-    /// @return The digest to sign.
-    function replaySafeHash(address account, bytes32 hash) public view returns (bytes32) {
-        bytes32 structHash = keccak256(abi.encode(_PERSONAL_SIGN_TYPEHASH, hash));
-        return keccak256(abi.encodePacked(hex"1901", _accountDomainSeparator(account), structHash));
-    }
-
-    /// @dev EIP-712 domain separator for `account`'s ERC-1271 domain (verifyingContract = account, current chainId).
-    function _accountDomainSeparator(address account) internal view returns (bytes32) {
-        return keccak256(
-            abi.encode(
-                _EIP712_DOMAIN_TYPEHASH, _ACCOUNT_DOMAIN_NAME_HASH, _ACCOUNT_DOMAIN_VERSION_HASH, block.chainid, account
-            )
-        );
-    }
+    // Account-scoped ERC-1271: this contract is scope-agnostic and owns no account-scoped signing domain. The
+    // account-scoped digest ({DefaultAccount.replaySafeHash}) and the full ERC-1271 verification (authenticate +
+    // operational-actor check) live on the account contract (see DefaultAccount.isValidSignature). This registry's
+    // own signed messages (actor changes, import, lock) bind context in-struct and use their own typehashes.
 
     /// @notice Authenticates that an account approved `hash` using auth in `authenticator(20) || data` format,
     ///         returning the verified actor's identity and authorization surface so a consumer (e.g. an ERC-4337

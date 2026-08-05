@@ -528,7 +528,7 @@ contract ImportAccountTest is AccountConfigurationTest {
         bytes32 digest = _computeImportDigest(eoa, actors);
         // importAccount validates via the account's ERC-1271, which wraps: sign replaySafeHash(eoa, digest).
         accountConfiguration.importAccount(
-            eoa, uint64(block.chainid), actors, _buildK1Auth(eoaPk, accountConfiguration.replaySafeHash(eoa, digest))
+            eoa, uint64(block.chainid), actors, _buildK1Auth(eoaPk, _replaySafeHash(eoa, digest))
         );
 
         assertEq(accountConfiguration.getChangeSequences(eoa).local, 1);
@@ -560,7 +560,7 @@ contract ImportAccountTest is AccountConfigurationTest {
         bytes32 digest = _computeImportDigest(eoa, actors);
         // importAccount validates via the account's ERC-1271, which wraps: sign replaySafeHash(eoa, digest).
         accountConfiguration.importAccount(
-            eoa, uint64(block.chainid), actors, _buildK1Auth(eoaPk, accountConfiguration.replaySafeHash(eoa, digest))
+            eoa, uint64(block.chainid), actors, _buildK1Auth(eoaPk, _replaySafeHash(eoa, digest))
         );
 
         assertEq(accountConfiguration.getChangeSequences(eoa).local, 1);

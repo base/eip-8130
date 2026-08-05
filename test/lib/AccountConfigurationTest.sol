@@ -66,6 +66,12 @@ contract AccountConfigurationTest is Test {
         return DefaultAccount(payable(account)).isValidSignature(hash, auth) == bytes4(0x1626ba7e);
     }
 
+    /// @dev Account-scoped EIP-7739 digest. replaySafeHash moved off AccountConfiguration onto the account contract;
+    ///      `account` must be a deployed DefaultAccount (as created by the helpers here).
+    function _replaySafeHash(address account, bytes32 hash) internal view returns (bytes32) {
+        return DefaultAccount(payable(account)).replaySafeHash(hash);
+    }
+
     // ── Bytecode helpers ──
 
     function _computeERC1167Bytecode(address implementation) internal pure returns (bytes memory) {

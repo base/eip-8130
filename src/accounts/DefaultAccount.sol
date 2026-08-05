@@ -53,6 +53,18 @@ contract DefaultAccount is Receiver {
     bytes4 private constant ERC1271_MAGIC = 0x1626ba7e;
     bytes4 private constant ERC1271_FAIL = 0xFFFFFFFF;
 
+    /// @dev EIP-712 domain typehash.
+    bytes32 private constant _EIP712_DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+
+    /// @dev keccak256("PersonalSign(bytes prefixed)").
+    bytes32 private constant _PERSONAL_SIGN_TYPEHASH =
+        0x983e65e5148e570cd828ead231ee759a8d7958721a768f93bc4483ba005c32de;
+
+    /// @dev Account ERC-1271 domain name/version, fixed for all accounts.
+    bytes32 private constant _ACCOUNT_DOMAIN_NAME_HASH = keccak256("EIP8130Account");
+    bytes32 private constant _ACCOUNT_DOMAIN_VERSION_HASH = keccak256("1");
+
     /// @notice The caller is neither the account itself nor a registered TRUSTED_EXECUTOR actor.
     error UnauthorizedCaller();
 
@@ -90,20 +102,20 @@ contract DefaultAccount is Receiver {
     /// @notice Validates an ERC-1271 signature via AccountConfiguration; requires the verified actor to be
     ///         operational (the unrestricted admin, scope == 0x00, or a SENDER actor without POLICY). Never reverts.
     ///
-    /// @dev Authenticates against the account-scoped digest {AccountConfiguration.replaySafeHash}, not the raw
-    ///      `hash`, so a signature is bound to this account (EIP-7739 PersonalSign) and cannot replay onto another
-    ///      account sharing the same key. `authenticateActor` reverts on any failure, so it is called externally and
-    ///      the revert is caught. Signing is not a scope grant: it is authorized for any operational actor — the
-    ///      admin, or a SENDER actor not gated by a policy — because it only encodes authority such an actor already
-    ///      holds via calls. A POLICY-bearing actor is never operational and cannot sign (a signature would act off
-    ///      its policy gate). This mirrors the operational-actor rule in {_isAuthorizedCaller}.
+    /// @dev Authenticates against the account-scoped digest {replaySafeHash}, not the raw `hash`, so a signature is
+    ///      bound to this account (EIP-7739 PersonalSign) and cannot replay onto another account sharing the same key.
+    ///      `authenticateActor` reverts on any failure, so it is called externally and the revert is caught. Signing
+    ///      is not a scope grant: it is authorized for any operational actor — the admin, or a SENDER actor not gated
+    ///      by a policy — because it only encodes authority such an actor already holds via calls. A POLICY-bearing
+    ///      actor is never operational and cannot sign (a signature would act off its policy gate). This mirrors the
+    ///      operational-actor rule in {_isAuthorizedCaller}.
     ///
     /// @param hash The digest to authenticate.
     /// @param signature Auth data in `authenticator || data` format.
     ///
     /// @return The ERC-1271 magic value 0x1626ba7e if valid, otherwise 0xffffffff.
     function isValidSignature(bytes32 hash, bytes calldata signature) external view virtual returns (bytes4) {
-        bytes32 digest = ACCOUNT_CONFIGURATION.replaySafeHash(address(this), hash);
+        bytes32 digest = replaySafeHash(hash);
         try ACCOUNT_CONFIGURATION.authenticateActor(address(this), digest, signature) returns (
             bytes32, uint16 scope, address
         ) {
@@ -112,6 +124,19 @@ contract DefaultAccount is Receiver {
         } catch {
             return ERC1271_FAIL;
         }
+    }
+
+    /// @notice Account-scoped digest to sign for `hash` to be accepted by this account's ERC-1271 check
+    ///         ({isValidSignature}): `hash` wrapped in an EIP-712 domain with verifyingContract = this account and the
+    ///         current chainId (EIP-7739 PersonalSign; TypedDataSign is not implemented). This is not a grant, so it
+    ///         needs no scope bit.
+    ///
+    /// @param hash Raw message digest.
+    ///
+    /// @return The digest to sign.
+    function replaySafeHash(bytes32 hash) public view returns (bytes32) {
+        bytes32 structHash = keccak256(abi.encode(_PERSONAL_SIGN_TYPEHASH, hash));
+        return keccak256(abi.encodePacked(hex"1901", _accountDomainSeparator(), structHash));
     }
 
     // ══════════════════════════════════════════════
@@ -147,5 +172,19 @@ contract DefaultAccount is Receiver {
         if (config.authenticator != TRUSTED_EXECUTOR) return false;
         uint16 scope = config.scope;
         return scope == 0 || ((scope & SCOPE_SENDER != 0) && (scope & SCOPE_POLICY == 0));
+    }
+
+    /// @dev EIP-712 domain separator for this account's ERC-1271 domain (verifyingContract = this account, current
+    ///      chainId).
+    function _accountDomainSeparator() internal view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                _EIP712_DOMAIN_TYPEHASH,
+                _ACCOUNT_DOMAIN_NAME_HASH,
+                _ACCOUNT_DOMAIN_VERSION_HASH,
+                block.chainid,
+                address(this)
+            )
+        );
     }
 }
