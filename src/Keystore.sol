@@ -501,7 +501,7 @@ contract Keystore {
 
         // Compute digest and authenticate
         bytes32 digest = _computeSignedActorChangesDigest(account, chainId, sequence, actorChanges);
-        (, uint16 scope,) = authenticateActor(account, digest, auth);
+        (, uint16 scope) = authenticateActor(account, digest, auth);
 
         // Only an unrestricted actor (scope 0) may change actors; there is no elevated "admin" scope bit.
         if (scope != 0) revert UnauthorizedActorChange();
@@ -559,7 +559,7 @@ contract Keystore {
         uint64 sequence = _accountState[account].localSequence++;
 
         bytes32 digest = _computeSignedLockChangesDigest(account, block.chainid, op, unlockDelay, sequence);
-        (, uint16 scope,) = authenticateActor(account, digest, auth);
+        (, uint16 scope) = authenticateActor(account, digest, auth);
 
         // Only an unrestricted actor (scope 0) may change the lock; there is no elevated "admin" scope bit.
         if (scope != 0) revert UnauthorizedLockChange();
@@ -603,18 +603,17 @@ contract Keystore {
     // own signed messages (actor changes, import, lock) bind context in-struct and use their own typehashes.
 
     /// @notice Authenticates that an account approved `hash` using auth in `authenticator(20) || data` format,
-    ///         returning the verified actor's identity and authorization surface so a consumer (e.g. an ERC-4337
-    ///         account on a non-8130 chain) can decide authorization AND drive the policy flow from a single call,
-    ///         without re-deriving (or re-invoking the authenticator to recover) the actorId.
+    ///         returning the verified actor's identity and authorization surface (`actorId`, `scope`) — the two
+    ///         values that fall out of the authentication read — so a consumer (e.g. an ERC-4337 account on a
+    ///         non-8130 chain) can decide authorization without re-invoking the authenticator to recover the actorId.
     ///
     /// @dev `actorId` is the resolved actor identifier — the same value an 8130 chain surfaces via the tx-context
-    ///      precompile. It lets an off-8130 consumer read `getPolicyCommitment(account, actorId)` (an execution-time
-    ///      read) for a policy-gated actor, reaching parity with the native hot path.
+    ///      precompile. Policy resolution is orthogonal to authentication: a policy-gated actor's gate is read
+    ///      separately via `getPolicy` / `getPolicyManager` / `getPolicyCommitment` keyed by this `actorId`
+    ///      (execution-time reads), exactly as the native hot path and the PolicyManager already do.
     /// @dev `scope` is the actor's capability set, stored verbatim and never interpreted by this contract —
     ///      protocol-side semantics for bits like Scopes.NONCE live outside this contract. Consumers decide policy
-    ///      gating via `scope & Scopes.POLICY`, NOT via `policyTarget != 0`.
-    /// @dev `policyTarget` is the resolved policy manager, never the signed commitment (an execution-time read via
-    ///      getPolicy). It MAY be address(0) for a policy-gated actor deliberately gated to address(0).
+    ///      gating via `scope & Scopes.POLICY`.
     /// @dev Reverts with InvalidAuthLength when `auth` is shorter than 20 bytes.
     /// @dev Reverts with AuthenticationFailed, AuthenticatorMismatch, ActorExpired, DefaultEoaRevoked, or
     ///      InvalidSignature when the actor cannot be authenticated.
@@ -625,11 +624,10 @@ contract Keystore {
     ///
     /// @return actorId The identifier of the verified actor.
     /// @return scope The scope of the verified actor (0x00 = unrestricted).
-    /// @return policyTarget The actor's policy gate target (manager), or address(0).
     function authenticateActor(address account, bytes32 hash, bytes calldata auth)
         public
         view
-        returns (bytes32 actorId, uint16 scope, address policyTarget)
+        returns (bytes32 actorId, uint16 scope)
     {
         if (auth.length < 20) revert InvalidAuthLength();
         return _authenticate(account, hash, address(bytes20(auth[:20])), auth[20:]);
@@ -1127,37 +1125,30 @@ contract Keystore {
     function _authenticate(address account, bytes32 hash, address authenticator, bytes calldata data)
         internal
         view
-        returns (bytes32, uint16, address)
+        returns (bytes32, uint16)
     {
         if (authenticator == K1_AUTHENTICATOR) return _authenticateK1(account, hash, data);
 
         bytes32 actorId = IAuthenticator(authenticator).authenticate(hash, data);
         if (actorId == bytes32(0)) revert AuthenticationFailed();
 
-        (uint16 scope, address policyTarget) = _resolveExplicitActor(account, actorId, authenticator);
-        return (actorId, scope, policyTarget);
+        return (actorId, _resolveExplicitActor(account, actorId, authenticator));
     }
 
     /// @dev Resolves an explicit _actorConfig-homed actor: requires a matching authenticator and an unexpired entry,
-    ///      returning its scope and policy gate target. Shared by the non-k1 (_authenticate) and k1 other-actor
-    ///      (_authenticateK1) paths. Reverts with AuthenticatorMismatch or ActorExpired.
+    ///      returning its scope. Shared by the non-k1 (_authenticate) and k1 other-actor (_authenticateK1) paths.
+    ///      Reverts with AuthenticatorMismatch or ActorExpired. Policy resolution is intentionally excluded —
+    ///      authentication surfaces identity + authority only; the policy gate is a separate actorId-keyed read.
     function _resolveExplicitActor(address account, bytes32 actorId, address expectedAuthenticator)
         private
         view
-        returns (uint16 scope, address policyTarget)
+        returns (uint16 scope)
     {
         ActorConfig memory config = _actorConfig[actorId][account];
         if (config.authenticator != expectedAuthenticator) revert AuthenticatorMismatch();
         // Expiry is read from the same slot; an expired actor fails authentication. 0 = no expiry.
         if (_isExpired(config.expiry)) revert ActorExpired();
         scope = config.scope;
-        policyTarget = _policyTargetFor(scope, actorId, account);
-    }
-
-    /// @dev Resolves the policy gate target for an actor: the policy manager for a policy-gated actor
-    ///      (scope & Scopes.POLICY != 0), or address(0) otherwise. Non-policy actors (incl. admin) skip the SLOAD.
-    function _policyTargetFor(uint16 scope, bytes32 actorId, address account) private view returns (address) {
-        return (scope & Scopes.POLICY != 0) ? _policyManager[actorId][account] : address(0);
     }
 
     /// @dev The single secp256k1 ("K1") path. Recovers the signer (EIP-2 enforced), then resolves the actor:
@@ -1166,12 +1157,12 @@ contract Keystore {
     ///          owner; non-zero = a scoped self). A non-k1 self is unreachable here by construction (it requires
     ///          its own authenticator), and mutual exclusion keeps the flag set whenever one is live.
     ///        - otherwise the signer's actorId must carry an explicit K1 config in _actorConfig (any other k1 actor).
-    ///      Both the common self and other-actor paths cost a single SLOAD; the policy-manager slot is read only for a
-    ///      policy-gated actor (`scope & Scopes.POLICY != 0`), so non-policy authentications avoid the extra SLOAD.
+    ///      Both the common self and other-actor paths cost a single SLOAD; policy resolution is orthogonal and not
+    ///      performed here.
     function _authenticateK1(address account, bytes32 hash, bytes calldata data)
         internal
         view
-        returns (bytes32, uint16, address)
+        returns (bytes32, uint16)
     {
         address recovered = _recoverSigner(hash, data);
         if (recovered == address(0)) revert InvalidSignature();
@@ -1182,14 +1173,11 @@ contract Keystore {
             AccountState storage st = _accountState[account];
             if (st.flags & FLAG_REVOKE_DEFAULT_EOA != 0) revert DefaultEoaRevoked();
             if (_isExpired(st.defaultEOAExpiry)) revert ActorExpired();
-            bytes32 selfActorId = bytes32(bytes20(account));
-            uint16 selfScope = st.defaultEOAScope;
-            return (selfActorId, selfScope, _policyTargetFor(selfScope, selfActorId, account));
+            return (bytes32(bytes20(account)), st.defaultEOAScope);
         }
 
         bytes32 actorId = bytes32(bytes20(recovered));
-        (uint16 scope, address policyTarget) = _resolveExplicitActor(account, actorId, K1_AUTHENTICATOR);
-        return (actorId, scope, policyTarget);
+        return (actorId, _resolveExplicitActor(account, actorId, K1_AUTHENTICATOR));
     }
 
     /// @dev True if the account's default (implicit) EOA has been revoked via the AccountState flag.

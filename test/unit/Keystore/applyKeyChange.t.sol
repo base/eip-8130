@@ -286,7 +286,7 @@ contract ApplyConfigChangeActorTest is KeystoreTest {
         assertEq(cfg.authenticator, address(k1Authenticator));
         assertEq(cfg.scope, scope);
 
-        (, uint16 outScope,) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (, uint16 outScope) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(outScope, scope);
     }
 
@@ -377,7 +377,7 @@ contract ApplyConfigChangeActorTest is KeystoreTest {
         _authorizeActor(eoa, newPk, selfActorId, keystore.K1_AUTHENTICATOR());
         assertTrue(_isActor(eoa, selfActorId));
 
-        (, uint16 scope,) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (, uint16 scope) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(scope, 0);
     }
 
@@ -394,7 +394,7 @@ contract ApplyConfigChangeActorTest is KeystoreTest {
 
         // Phase 0: the default EOA is live and authenticates with its own k1 signature.
         assertTrue(_isActor(eoa, selfActorId));
-        (, uint16 scope0,) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (, uint16 scope0) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(scope0, 0);
 
         // Phase 1: in one batch signed by the EOA, add the device key as a full owner and revoke the default EOA.
@@ -408,7 +408,7 @@ contract ApplyConfigChangeActorTest is KeystoreTest {
         assertTrue(_isActor(eoa, deviceActorId));
         vm.expectRevert();
         keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
-        (, uint16 scope1,) = keystore.authenticateActor(eoa, hash, _buildK1Auth(devicePk, hash));
+        (, uint16 scope1) = keystore.authenticateActor(eoa, hash, _buildK1Auth(devicePk, hash));
         assertEq(scope1, 0);
 
         // Phase 2: the device key re-enables the K1 key by authorizing the self-actorId as a native k1 owner.
@@ -416,7 +416,7 @@ contract ApplyConfigChangeActorTest is KeystoreTest {
         _signApply(eoa, devicePk, reEnable);
 
         assertTrue(_isActor(eoa, selfActorId));
-        (, uint16 scope2,) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (, uint16 scope2) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(scope2, 0);
     }
 
@@ -719,7 +719,7 @@ contract ApplyConfigChangeActorTest is KeystoreTest {
         // Flip self → k1 owner: deletes the non-k1 config, restores inline k1 (flag cleared); k1 self lives again.
         _authorizeActor(eoa, adminPk, selfId, keystore.K1_AUTHENTICATOR());
         assertEq(keystore.getActorConfig(eoa, selfId).authenticator, keystore.K1_AUTHENTICATOR());
-        (, uint16 scope,) = keystore.authenticateActor(eoa, h, _buildK1Auth(eoaPk, h));
+        (, uint16 scope) = keystore.authenticateActor(eoa, h, _buildK1Auth(eoaPk, h));
         assertEq(scope, 0);
     }
 

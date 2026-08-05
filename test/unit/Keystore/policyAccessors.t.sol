@@ -9,7 +9,6 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 ///           - `getPolicy(account, actorId)`           — off-chain aggregate: (manager, commitment)
 ///           - `getPolicyCommitment(account, actorId)` — single-SLOAD hot-path read
 ///           - `getPolicyManager(account, actorId)`    — single-SLOAD hot-path read
-///           - policyTarget                            — surfaced as the third return of `authenticateActor`
 ///
 ///         All are `view`; there are no events to assert. Every test fuzzes its inputs (managers, commitments,
 ///         actorIds, keys, scopes). Gating is determined by the Scopes.POLICY bit, never by "slot non-zero": a
@@ -477,93 +476,6 @@ contract PolicyAccessorsTest is KeystoreTest {
         assertEq(keystore.getPolicyCommitment(accountA, sharedActorId), commitmentA);
         assertEq(keystore.getPolicyManager(accountB, sharedActorId), managerB);
         assertEq(keystore.getPolicyCommitment(accountB, sharedActorId), commitmentB);
-    }
-
-    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    // policyTarget — surfaced as the third return of authenticateActor
-    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    //
-    // authenticateActor returns the stored policy manager as its third value (address(0) when unwritten).
-
-    /// @notice A gated non-self actor authenticates; policyTarget resolves to the stored manager, equal to the
-    ///         granular getPolicyManager read.
-    function test_policyTarget_success_gatedExplicitActor_returnsManager(
-        uint256 rootSeed,
-        uint256 sessionSeed,
-        uint8 scopeSeed,
-        uint256 managerSeed,
-        uint256 commitmentSeed,
-        bytes32 hash
-    ) public {
-        uint256 rootPk = _boundK1Pk(rootSeed);
-        uint256 sessionPk = _boundK1Pk(sessionSeed);
-        vm.assume(vm.addr(rootPk) != vm.addr(sessionPk));
-
-        (address account,) = _createK1Account(rootPk);
-        vm.assume(vm.addr(sessionPk) != account); // stay off the inline-self path
-        bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
-
-        address manager = _boundNonZeroAddress(managerSeed);
-        _authorizePolicyActor(
-            account, rootPk, sessionActorId, _boundGatedScope(scopeSeed), manager, _boundNonZeroWord(commitmentSeed)
-        );
-
-        (, uint16 outScope, address policyTarget) =
-            keystore.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
-        assertTrue(outScope & Scopes.POLICY != 0);
-        assertEq(policyTarget, manager);
-        assertEq(policyTarget, keystore.getPolicyManager(account, sessionActorId));
-    }
-
-    /// @notice An ungated non-self actor authenticates; policyTarget is address(0) (no manager slot written).
-    function test_policyTarget_success_ungatedActor_returnsZero(uint256 rootSeed, uint256 sessionSeed, bytes32 hash)
-        public
-    {
-        uint256 rootPk = _boundK1Pk(rootSeed);
-        uint256 sessionPk = _boundK1Pk(sessionSeed);
-        vm.assume(vm.addr(rootPk) != vm.addr(sessionPk));
-
-        (address account,) = _createK1Account(rootPk);
-        vm.assume(vm.addr(sessionPk) != account);
-        bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
-
-        _authorizeUngatedActor(account, rootPk, sessionActorId, address(k1Authenticator));
-
-        (,, address policyTarget) = keystore.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
-        assertEq(policyTarget, address(0));
-    }
-
-    /// @notice A gated inline self authenticates; policyTarget resolves to the stored manager via the inline home.
-    function test_policyTarget_success_inlineSelfGated_returnsManager(
-        uint256 eoaSeed,
-        uint8 scopeSeed,
-        uint256 managerSeed,
-        uint256 commitmentSeed,
-        bytes32 hash
-    ) public {
-        uint256 eoaPk = _boundK1Pk(eoaSeed);
-        address eoa = vm.addr(eoaPk);
-        bytes32 selfActorId = bytes32(bytes20(eoa));
-
-        address manager = _boundNonZeroAddress(managerSeed);
-        _authorizeInlineSelfWithPolicy(
-            eoa, eoaPk, _boundGatedScope(scopeSeed), manager, _boundNonZeroWord(commitmentSeed)
-        );
-
-        (,, address policyTarget) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
-        assertEq(policyTarget, manager);
-        assertEq(policyTarget, keystore.getPolicyManager(eoa, selfActorId));
-    }
-
-    /// @notice A fresh EOA (implicit full owner, ungated) authenticates; policyTarget is address(0) over untouched
-    ///         state.
-    function test_policyTarget_success_inlineSelfFullOwner_returnsZero(uint256 eoaSeed, bytes32 hash) public view {
-        uint256 eoaPk = _boundK1Pk(eoaSeed);
-        address eoa = vm.addr(eoaPk);
-
-        (, uint16 outScope, address policyTarget) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
-        assertEq(outScope, uint8(0x00));
-        assertEq(policyTarget, address(0));
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡

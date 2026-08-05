@@ -58,7 +58,7 @@ contract DelegateAuthenticator is IAuthenticator {
         // an operational (e.g. SENDER) key can sign for its own account, yet it must NOT be able to vouch as a
         // delegate here. authenticateActor reverts on any auth failure and otherwise returns the resolved scope,
         // so we require scope == 0x00 explicitly.
-        try KEYSTORE.authenticateActor(delegate, hash, nestedAuth) returns (bytes32, uint16 nestedScope, address) {
+        try KEYSTORE.authenticateActor(delegate, hash, nestedAuth) returns (bytes32, uint16 nestedScope) {
             if (nestedScope != 0) revert InvalidNestedSignature();
         } catch {
             revert InvalidNestedSignature();

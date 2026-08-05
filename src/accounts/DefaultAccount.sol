@@ -100,7 +100,7 @@ contract DefaultAccount is Receiver {
     /// @return The ERC-1271 magic value 0x1626ba7e if valid, otherwise 0xffffffff.
     function isValidSignature(bytes32 hash, bytes calldata signature) external view virtual returns (bytes4) {
         bytes32 digest = replaySafeHash(hash);
-        try KEYSTORE.authenticateActor(address(this), digest, signature) returns (bytes32, uint16 scope, address) {
+        try KEYSTORE.authenticateActor(address(this), digest, signature) returns (bytes32, uint16 scope) {
             return Scopes.isOperational(scope) ? ERC1271_MAGIC : ERC1271_FAIL;
         } catch {
             return ERC1271_FAIL;
