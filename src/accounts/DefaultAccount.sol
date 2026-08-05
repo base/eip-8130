@@ -4,6 +4,7 @@ pragma solidity 0.8.36;
 import {Receiver} from "solady/accounts/Receiver.sol";
 
 import {AccountConfiguration} from "../AccountConfiguration.sol";
+import {Scopes} from "../libraries/Scopes.sol";
 
 /// @notice A single call in an execution batch.
 struct Call {
@@ -42,12 +43,6 @@ address constant TRUSTED_EXECUTOR = address(uint160(uint256(keccak256("trustedEx
 contract DefaultAccount is Receiver {
     /// @notice The AccountConfiguration system contract that owns this account's authorization state.
     AccountConfiguration public immutable ACCOUNT_CONFIGURATION;
-
-    /// @dev Local mirrors of {AccountConfiguration.SCOPE_SENDER} / {AccountConfiguration.SCOPE_POLICY}: a contract's
-    ///      public constants are not accessible via its type, and reading the getters would add external calls to the
-    ///      execution hot path. Kept in sync with AccountConfiguration.
-    uint16 private constant SCOPE_SENDER = 0x0001;
-    uint16 private constant SCOPE_POLICY = 0x0002;
 
     /// @dev ERC-1271 magic return value for a valid signature (`isValidSignature(bytes32,bytes)` selector).
     bytes4 private constant ERC1271_MAGIC = 0x1626ba7e;
@@ -119,7 +114,7 @@ contract DefaultAccount is Receiver {
         try ACCOUNT_CONFIGURATION.authenticateActor(address(this), digest, signature) returns (
             bytes32, uint16 scope, address
         ) {
-            bool operational = scope == 0 || ((scope & SCOPE_SENDER != 0) && (scope & SCOPE_POLICY == 0));
+            bool operational = scope == 0 || ((scope & Scopes.SENDER != 0) && (scope & Scopes.POLICY == 0));
             return operational ? ERC1271_MAGIC : ERC1271_FAIL;
         } catch {
             return ERC1271_FAIL;
@@ -161,7 +156,7 @@ contract DefaultAccount is Receiver {
     ///      authenticator) for an expired actor — so an expired caller fails the TRUSTED_EXECUTOR check below, and a
     ///      user-set expiry is honored on the execution path without a separate comparison here. Scope: driving
     ///      execution requires sender authority — the unrestricted admin (scope == 0x00) or an actor with
-    ///      SCOPE_SENDER that is not gated by a policy (SCOPE_POLICY unset). A POLICY-gated actor must route every
+    ///      Scopes.SENDER that is not gated by a policy (Scopes.POLICY unset). A POLICY-gated actor must route every
     ///      call through its manager, so granting it direct executeBatch would bypass that gate; fail closed. This
     ///      mirrors the operational-actor definition in {isValidSignature}, keeping the execution and signing
     ///      authorization surfaces aligned.
@@ -171,7 +166,7 @@ contract DefaultAccount is Receiver {
             ACCOUNT_CONFIGURATION.getActorConfig(address(this), bytes32(bytes20(caller)));
         if (config.authenticator != TRUSTED_EXECUTOR) return false;
         uint16 scope = config.scope;
-        return scope == 0 || ((scope & SCOPE_SENDER != 0) && (scope & SCOPE_POLICY == 0));
+        return scope == 0 || ((scope & Scopes.SENDER != 0) && (scope & Scopes.POLICY == 0));
     }
 
     /// @dev EIP-712 domain separator for this account's ERC-1271 domain (verifyingContract = this account, current

@@ -25,7 +25,7 @@ address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak2
 /// @dev Role in the EIP-8130 flow:
 ///      - The manager is registered as an execution-enabled actor on the account (an actor whose authenticator is
 ///        `TRUSTED_EXECUTOR`), so it may drive the account via `executeBatch`.
-///      - A restricted session-key actor is configured with `scope & SCOPE_POLICY != 0` and `policy_manager =
+///      - A restricted session-key actor is configured with `scope & Scopes.POLICY != 0` and `policy_manager =
 ///        address(this)`, so the protocol gate forces every call that actor makes to land on this manager.
 ///      - When the session key transacts, the protocol dispatches its call *as the account*, so `msg.sender`
 ///        here is the account itself. That is the authorization boundary: only a gated session-key transaction
@@ -39,7 +39,7 @@ address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak2
 ///        itself (`actorId == bytes20(msg.sender)`) and `account` comes from the supplied binding.
 ///
 ///      Commitment binding: the account authorizes a {PolicyBinding}; its `keccak256` is the `commitment`. When the
-///      account authorizes the session-key actor it stores `scope & SCOPE_POLICY != 0`, `policy_manager =
+///      account authorizes the session-key actor it stores `scope & Scopes.POLICY != 0`, `policy_manager =
 ///      address(this)`, and `policy_commitment = commitment` in Account Configuration. That signed actor change *is*
 ///      the authorization — there is no separate install step and no manager-side install bit. At every execute path
 ///      the manager recomputes the commitment from the supplied binding and requires it to equal the live signed

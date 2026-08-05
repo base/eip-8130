@@ -2,6 +2,7 @@
 pragma solidity ^0.8.30;
 
 import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
+import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 
 /// @notice Branch-complete, fuzz-by-default suite for the account lock surface: applySignedLockChanges (op = lock /
@@ -11,8 +12,6 @@ import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 ///         (scope 0 admin), and anyone (here the test) relays. Tests that must drive an onlyUnlocked-guarded config
 ///         path (applySignedActorChanges) create a real k1 account so the authenticated actor can change actors.
 contract AccountLockTest is AccountConfigurationTest {
-    uint16 internal constant SCOPE_SENDER = 0x0001;
-
     // ── Local fuzz-bound helpers ──
 
     /// @dev Keep a fuzzed account out of the zero address, the system contract, and the forge-std cheatcode /
@@ -65,7 +64,7 @@ contract AccountLockTest is AccountConfigurationTest {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     /// @notice applySignedLockChanges reverts UnauthorizedLockChange when the signer is a scoped (non-admin) actor.
-    /// @dev The owner authorizes a SCOPE_SENDER k1 actor, which then signs a lock op; scope != 0 is rejected after
+    /// @dev The owner authorizes a Scopes.SENDER k1 actor, which then signs a lock op; scope != 0 is rejected after
     ///      authentication, before any lock-state work.
     function test_applySignedLockChanges_revert_whenSignerNotAdmin(uint256 ownerSeed, uint256 scopedSeed, uint16 delay)
         public
@@ -78,7 +77,7 @@ contract AccountLockTest is AccountConfigurationTest {
         address scopedSigner = vm.addr(scopedPk);
         vm.assume(scopedSigner != account);
 
-        _authorizeK1ActorWithScope(account, ownerPk, scopedSigner, SCOPE_SENDER);
+        _authorizeK1ActorWithScope(account, ownerPk, scopedSigner, Scopes.SENDER);
 
         bytes memory auth = _lockAuth(scopedPk, account, delay);
         vm.expectRevert(AccountConfiguration.UnauthorizedLockChange.selector);
