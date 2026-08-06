@@ -104,12 +104,15 @@ contract Keystore {
     ///
     /// @dev Packed into a single storage slot; the field layout is normative (nodes read the raw slot for mempool
     ///      rate-limit tiering, see the EIP's Account Lock section). Field order and widths match the spec's
-    ///      account-state table: multichainSequence, localSequence, flags, lockUnion, defaultEOAExpiry,
+    ///      account-state table: multichainSequence, localSequence, localEpoch, flags, lockUnion, defaultEOAExpiry,
     ///      defaultEOAScope, then 1 reserved byte that MUST stay zero.
-    ///      The `localSequence` word is size-neutral but split in two: the high 32 bits are the `localEpoch` and the
-    ///      low 32 bits are the running local sequence counter (see {getLocalEpochAndSequence}). A non-zero combined
-    ///      64-bit word still doubles as the account initialized flag — bootstrap writes low = 1 (epoch 0), and a
-    ///      local-epoch bump writes a non-zero high half, so the word is never zeroed back out for a live account.
+    ///      The local replay counter is stored as two adjacent uint32 fields — `localSequence` (low) then `localEpoch`
+    ///      (high) — which occupy the same 8 bytes as, and read identically to, the single `localEpoch(32)||
+    ///      localSequence(32)` word committed in a signed batch's `sequence` (see {getLocalEpochAndSequence}). Storing
+    ///      them split keeps the layout size-neutral (still one slot) while removing the pack/unpack math from the hot
+    ///      path. `localSequence` non-zero doubles as the account initialized flag — bootstrap writes it to 1 (epoch
+    ///      0), and it is never zeroed for a live account except by a {BumpLocalEpoch}, which simultaneously advances
+    ///      `localEpoch` (keeping the combined value non-zero).
     ///      `flags` is a bitfield: bit 0 (FLAG_REVOKE_DEFAULT_EOA) disables the k1 self key; bit 1 (FLAG_LOCKED)
     ///      freezes actor configuration; bit 2 (FLAG_UNLOCK_INITIATED) selects how `lockUnion` is interpreted.
     ///      `lockUnion` is a union field: while FLAG_UNLOCK_INITIATED is clear it holds the configured unlock delay
@@ -123,7 +126,8 @@ contract Keystore {
     ///      self-actorId); the two homes are mutually exclusive (see _authorizeActor).
     struct AccountState {
         uint64 multichainSequence; // 8 bytes
-        uint64 localSequence; // 8 bytes – also serves as initialized flag
+        uint32 localSequence; // 4 bytes – low half of the signed local word; non-zero also serves as initialized flag
+        uint32 localEpoch; // 4 bytes – high half of the signed local word
         uint8 flags; // 1 byte – bitfield: bit 0 REVOKE_DEFAULT_EOA, bit 1 LOCKED, bit 2 UNLOCK_INITIATED
         uint48 lockUnion; // 6 bytes – union: unlockDelay while UNLOCK_INITIATED clear, else unlocksAt (timestamp)
         uint48 defaultEOAExpiry; // 6 bytes – inline self k1 expiry (Unix seconds; 0 = no expiry)
@@ -244,12 +248,6 @@ contract Keystore {
     /// @param actorId The revoked actor's identifier.
     event ActorRevoked(address indexed account, bytes32 indexed actorId);
 
-    /// @notice Emitted when an expired actor's slot is garbage-collected (permissionlessly reclaimed).
-    ///
-    /// @param account The account whose expired actor slot was collected.
-    /// @param actorId The collected actor's identifier.
-    event ActorCollected(address indexed account, bytes32 indexed actorId);
-
     /// @notice Emitted when a new account is created.
     ///
     /// @param account The created account address.
@@ -325,11 +323,6 @@ contract Keystore {
     /// @notice The local epoch is at its terminal value and cannot be bumped.
     error EpochSaturated();
 
-    /// @notice A batch reduced a landed actor's authority (revoke, shorter expiry, or narrower scope) without also
-    ///         bumping the local epoch in the same batch. Reduction must retire the signatures that granted the
-    ///         authority; on the local channel that requires a BumpLocalEpoch.
-    error ReductionRequiresEpochBump();
-
     /// @notice An authority op (AuthorizeActor / RevokeActor) followed an environment op in the same batch, violating
     ///         the normative op ordering (authority ops first, environment ops last).
     error AuthorityOpAfterEnvOp();
@@ -357,9 +350,6 @@ contract Keystore {
     /// @notice A change payload did not match the shape required by its ChangeType (e.g. a non-empty payload on
     ///         BumpLocalEpoch / Unlock).
     error InvalidChangePayload();
-
-    /// @notice collectActor targeted an actor that is not present, or is present but not yet expired.
-    error CollectLiveActor();
 
     /// @notice The auth blob is shorter than the 20-byte authenticator selector prefix.
     error InvalidAuthLength();
@@ -549,18 +539,20 @@ contract Keystore {
     /// @notice The sole signed-change entry point: applies an ordered, atomic batch of account changes (authorize,
     ///         revoke, bump-local-epoch, lock, unlock) authenticated by `s.signature`.
     ///
-    /// @dev Two axioms govern the whole surface:
-    ///        1. Replay — a signed local change is valid only while it could still be validly applied: the committed
-    ///           local epoch must match, grants self-expire (`cfg.expiry > now`), and the state they commit to must
-    ///           still hold.
-    ///        2. Reduction — removing authority (revoke, shorter expiry, narrower scope) requires retiring the
-    ///           signatures that granted it. On the local channel that means the batch MUST also bump the epoch.
+    /// @dev The governing axiom is Replay: a signed local change is valid only while it could still be validly
+    ///      applied — the committed local epoch must match, grants self-expire (`cfg.expiry > now`), and (on the
+    ///      unsequenced channel) the state they commit to must still hold (extend-by-upsert monotonicity).
+    ///
+    ///      Reduction is NOT contract-enforced. Removing authority durably (revoke, shorter expiry, narrower scope)
+    ///      requires retiring the signatures that granted it, which on the local channel means a {BumpLocalEpoch};
+    ///      the contract lets a bare reduction land, so pairing it with a bump is a wallet responsibility. A bare
+    ///      revoke (or expiry cut) is not durable while a replayable unsequenced grant for that actor is outstanding.
     ///
     ///      Pipeline (in order): (1) split the sequence word; (2) reject a stale local epoch on both channels;
     ///      (3) validate/advance the sequence counter BEFORE apply (reentrancy discipline); (4) compute the digest
     ///      via the relocatable {_changesDigest} seam and authenticate; (5) iterate changes enforcing op ordering,
-    ///      per-op channel/sequencing policy, the lock policy, per-op authorization, and the solo rules; (6) at loop
-    ///      exit enforce the reduction rule. Anyone may relay — authorization comes entirely from the signature.
+    ///      per-op channel/sequencing policy, the lock policy, per-op authorization, and the solo rules. Anyone may
+    ///      relay — authorization comes entirely from the signature.
     ///
     /// @param account The account whose configuration is changed.
     /// @param s The signed batch (channel, ordered changes, sequence word, signature).
@@ -577,15 +569,13 @@ contract Keystore {
         if (isLocal) {
             uint32 epoch = uint32(s.sequence >> 32);
             uint32 seq = uint32(s.sequence);
-            uint32 storedEpoch = uint32(a.localSequence >> 32);
-            uint32 storedSeq = uint32(a.localSequence);
-            if (epoch != storedEpoch) revert StaleEpoch();
+            if (epoch != a.localEpoch) revert StaleEpoch();
             if (seq != UNSEQUENCED) {
                 sequenced = true;
-                if (seq != storedSeq) revert BadSequence();
+                if (seq != a.localSequence) revert BadSequence();
                 if (seq >= UNSEQUENCED - 1) revert SequenceSaturated();
-                // Advance the low half before apply, preserving the epoch in the high half.
-                a.localSequence = (uint64(storedEpoch) << 32) | uint64(seq + 1);
+                // Advance the local sequence before apply (the epoch is untouched by a sequenced batch).
+                a.localSequence = seq + 1;
             }
         } else {
             // Multichain: a plain monotonic counter, always sequenced, never epoch-bearing or UNSEQUENCED.
@@ -603,11 +593,8 @@ contract Keystore {
         // Lock policy is evaluated against the account's lock state at entry (lazily clearing an elapsed unlock).
         bool locked = _checkAndClearLock(account);
 
-        // (5)-(6) Iterate. Track: an environment op having been seen (ordering fence), whether a reduction occurred,
-        // and whether the batch bumped the epoch (satisfies the reduction rule).
+        // (5) Iterate. Track only whether an environment op has been seen, for the ordering fence.
         bool sawEnvOp;
-        bool needsBump;
-        bool hadBump;
         uint256 n = s.changes.length;
         for (uint256 i; i < n; i++) {
             ChangeType t = s.changes[i].changeType;
@@ -635,48 +622,17 @@ contract Keystore {
             if (t == ChangeType.BumpLocalEpoch && !sequenced && n != 1) revert SoloOpNotSolo();
 
             if (t == ChangeType.AuthorizeActor) {
-                needsBump = _applyAuthorize(account, sequenced, isLocal, s.changes[i].payload) || needsBump;
+                _applyAuthorize(account, sequenced, s.changes[i].payload);
             } else if (t == ChangeType.RevokeActor) {
-                needsBump = _applyRevoke(account, isLocal, s.changes[i].payload) || needsBump;
+                _applyRevoke(account, s.changes[i].payload);
             } else if (t == ChangeType.BumpLocalEpoch) {
                 _applyBumpLocalEpoch(account, isLocal, s.changes[i].payload);
-                hadBump = true;
             } else if (t == ChangeType.Lock) {
                 _applyLock(account, locked, s.changes[i].payload);
             } else {
                 // ChangeType.Unlock (the only remaining member; out-of-range values reverted at ABI-decode).
                 _applyUnlock(account, s.changes[i].payload);
             }
-        }
-
-        // Reduction rule: any authority reduction on the local channel must be batched with an epoch bump.
-        if (needsBump && !hadBump) revert ReductionRequiresEpochBump();
-    }
-
-    /// @notice Permissionlessly garbage-collects a single expired actor slot, zeroing it for a gas refund.
-    ///
-    /// @dev A slot may be collected iff it is present and its expiry has passed (`slot.expiry < block.timestamp`,
-    ///      i.e. {_isExpired}). Because expiry is monotone non-decreasing across a slot's life — the unsequenced
-    ///      path only extends it upward and any sequenced decrease is forced to retire outstanding signatures via a
-    ///      mandatory epoch bump — a lapsed slot has no live replayable signature, so collection is unconditional
-    ///      and needs no authorization. Reverts with CollectLiveActor when the slot is absent or not yet expired.
-    ///
-    /// @param account The account to collect from.
-    /// @param actorId The expired actor to collect.
-    function collectActor(address account, bytes32 actorId) public nonZeroAccount(account) {
-        (bool occupied,, uint48 expiry) = _rawSlot(account, actorId);
-        if (!occupied || !_isExpired(expiry)) revert CollectLiveActor();
-        _clearActor(account, actorId);
-        emit ActorCollected(account, actorId);
-    }
-
-    /// @notice Batch variant of {collectActor}: collects each of `actorIds` (all must be present and expired).
-    ///
-    /// @param account The account to collect from.
-    /// @param actorIds The expired actors to collect.
-    function collectActors(address account, bytes32[] calldata actorIds) external {
-        for (uint256 i; i < actorIds.length; i++) {
-            collectActor(account, actorIds[i]);
         }
     }
 
@@ -685,12 +641,14 @@ contract Keystore {
     // ----------------------------------------------------------------------------------------------------------------
 
     /// @dev AuthorizeActor. `payload = abi.encode(bytes32 actorId, ActorConfig cfg, bytes policyData)`; `cfg.expiry`
-    ///      is the granted expiry and the signature self-expires at it. Returns whether the op is a reduction that
-    ///      must be batched with an epoch bump (only ever true on the local channel).
-    function _applyAuthorize(address account, bool sequenced, bool isLocal, bytes calldata payload)
-        private
-        returns (bool needsBump)
-    {
+    ///      is the granted expiry and the signature self-expires at it.
+    ///
+    ///      Note on durability of reductions: a sequenced upsert may freely shorten a slot's expiry or narrow its
+    ///      scope, and the contract does NOT force a batching epoch bump. If an unsequenced (replayable) grant with
+    ///      the older, longer expiry / broader scope is still outstanding, it can be replayed to undo the reduction
+    ///      until the slot lapses or the caller separately bumps the epoch. Durable reduction is a wallet
+    ///      responsibility: batch the reducing op with a {BumpLocalEpoch} (which retires all unlanded local grants).
+    function _applyAuthorize(address account, bool sequenced, bytes calldata payload) private {
         (bytes32 actorId, ActorConfig memory cfg, bytes memory policyData) =
             abi.decode(payload, (bytes32, ActorConfig, bytes));
 
@@ -705,39 +663,32 @@ contract Keystore {
         if (!occupied) {
             // Empty slot: plain install. Both channels, both sequencing modes.
             _authorizeActor(account, actorId, cfg, policyData);
-            return false;
+            return;
         }
 
         // Occupied slot. Authenticator equality is structural: actorId derives from the authenticator, so a different
         // authenticator is a different slot (the empty-slot case above); no explicit check is needed here.
-        // Treat a stored no-expiry (0) as unbounded for monotonicity, so nothing can silently reduce an infinite grant.
-        uint48 effectiveOld = oldExpiry == 0 ? type(uint48).max : oldExpiry;
         if (!sequenced) {
-            // Unsequenced upsert: scope frozen, strictly-monotone-up expiry (extend-by-upsert).
+            // Unsequenced upsert is extend-by-upsert only: scope frozen, expiry strictly monotone up. This is the
+            // Replay defense for the unsequenced channel — re-applying a landed grant (same/lower expiry) must fail.
+            // Treat a stored no-expiry (0) as unbounded so an infinite grant cannot be silently re-applied.
+            uint48 effectiveOld = oldExpiry == 0 ? type(uint48).max : oldExpiry;
             if (cfg.scope != oldScope) revert ScopeChangeRequiresSequencing();
             if (chExpiry <= effectiveOld) revert NonMonotoneExpiry();
-            _authorizeActor(account, actorId, cfg, policyData);
-            return false;
         }
 
-        // Sequenced upsert: any expiry, any scope. A shorter expiry or a narrowed scope (cleared grant bits) is a
-        // reduction that must be batched with a bump — but only on the local channel; the multichain counter alone
-        // retires the prior signature, so it never sets the flag.
-        bool reduction = isLocal && (chExpiry < effectiveOld || (oldScope & ~cfg.scope) != 0);
+        // Sequenced upsert: any expiry, any scope (including a reduction). See the durability note above — the
+        // contract does not force a batching bump; that is left to the caller.
         _authorizeActor(account, actorId, cfg, policyData);
-        return reduction;
     }
 
     /// @dev RevokeActor. `payload = abi.encode(bytes32 actorId)`. Sequenced-only (enforced by the channel policy).
-    ///      Deleting a still-live actor is a reduction (needs a bump on the local channel); revoking an
-    ///      already-lapsed actor is equivalent to garbage collection and skips the flag (gated on the same
-    ///      expiry-vs-now comparison collectActor uses).
-    function _applyRevoke(address account, bool isLocal, bytes calldata payload) private returns (bool needsBump) {
+    ///      Clears the slot unconditionally. Note this alone is not durable against an outstanding replayable
+    ///      unsequenced grant for the same actorId (which would re-install into the emptied slot); to durably revoke,
+    ///      the caller batches a {BumpLocalEpoch}. This is a wallet responsibility, not contract-enforced.
+    function _applyRevoke(address account, bytes calldata payload) private {
         bytes32 actorId = abi.decode(payload, (bytes32));
-        (,, uint48 expiry) = _rawSlot(account, actorId);
-        bool lapsed = _isExpired(expiry);
         _revokeActor(account, actorId);
-        return isLocal && !lapsed;
     }
 
     /// @dev BumpLocalEpoch. Empty payload. Strict increment of the local epoch, resetting the local sequence to 0
@@ -746,11 +697,11 @@ contract Keystore {
         if (payload.length != 0) revert InvalidChangePayload();
         if (!isLocal) revert EpochOpRequiresLocalChannel();
         AccountState storage a = _accountState[account];
-        uint32 epoch = uint32(a.localSequence >> 32);
-        if (epoch >= type(uint32).max - 1) revert EpochSaturated();
+        if (a.localEpoch >= type(uint32).max - 1) revert EpochSaturated();
         unchecked {
-            a.localSequence = uint64(epoch + 1) << 32; // epoch += 1, sequence := 0
+            a.localEpoch += 1;
         }
+        a.localSequence = 0;
     }
 
     /// @dev Lock. `payload = abi.encode(uint16 unlockDelay)`. Only from the unlocked state; stores the delay.
@@ -816,8 +767,8 @@ contract Keystore {
         return (false, 0, 0);
     }
 
-    /// @dev Clears an actor's config and policy slots, disabling the inline k1 self for the self-actorId. Shared by
-    ///      {_revokeActor} (which additionally requires the actor be present) and {collectActor} (GC).
+    /// @dev Clears an actor's config and policy slots, disabling the inline k1 self for the self-actorId. Used by
+    ///      {_revokeActor} (which additionally requires the actor be present).
     function _clearActor(address account, bytes32 actorId) private {
         delete _actorConfig[actorId][account];
         delete _policyCommitment[actorId][account];
@@ -1043,7 +994,9 @@ contract Keystore {
     /// @return The account's ChangeSequences (multichain counter and the raw local epoch||sequence word).
     function getChangeSequences(address account) external view returns (ChangeSequences memory) {
         AccountState storage state = _accountState[account];
-        return ChangeSequences({multichain: state.multichainSequence, local: state.localSequence});
+        // Recompose the split storage fields into the single localEpoch(32, high)||localSequence(32, low) word.
+        uint64 local = (uint64(state.localEpoch) << 32) | uint64(state.localSequence);
+        return ChangeSequences({multichain: state.multichainSequence, local: local});
     }
 
     /// @notice Returns the account's local epoch and local sequence, split from the packed 64-bit word.
@@ -1053,8 +1006,8 @@ contract Keystore {
     /// @return epoch The account's current local epoch (high 32 bits of the local word).
     /// @return sequence The account's current local sequence (low 32 bits of the local word).
     function getLocalEpochAndSequence(address account) external view returns (uint32 epoch, uint32 sequence) {
-        uint64 word = _accountState[account].localSequence;
-        return (uint32(word >> 32), uint32(word));
+        AccountState storage state = _accountState[account];
+        return (state.localEpoch, state.localSequence);
     }
 
     /// @notice Returns whether the account is currently locked (configuration frozen).

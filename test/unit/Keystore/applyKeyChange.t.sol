@@ -7,8 +7,8 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice §10 test matrix for the authority / environment ops driven through {applySignedAccountChanges}:
 ///         AuthorizeActor (sequenced + unsequenced), RevokeActor, BumpLocalEpoch, the op-ordering / solo fences,
-///         the reduction rule, and the sequenced-channel replay/saturation edges. Lock/unlock (admin-only),
-///         garbage collection, and multichain regression live in applyAccountChange.t.sol.
+///         and the sequenced-channel replay/saturation edges. Lock/unlock (admin-only),
+///         and multichain regression live in applyAccountChange.t.sol.
 contract ApplySignedAccountChangesTest is KeystoreTest {
     // Non-self, non-owner actor ids (low right-aligned constants never collide with a bytes20-left-aligned address).
     bytes32 constant ACTOR_A = bytes32(uint256(0xA1));
@@ -66,9 +66,9 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         keystore.applySignedAccountChanges(account, s);
     }
 
-    /// @notice Replaying an unsequenced grant after the slot was garbage-collected reverts ExpiredChange (the fixed
+    /// @notice Replaying an unsequenced grant after its granted expiry has passed reverts ExpiredChange (the fixed
     ///         granted expiry is now in the past).
-    function test_authorizeUnsequenced_revert_replayAfterGC(uint256 pk) public {
+    function test_authorizeUnsequenced_revert_replayAfterExpiry(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
         uint48 expiry = _future(1 days);
@@ -82,8 +82,6 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         keystore.applySignedAccountChanges(account, s);
 
         vm.warp(uint256(expiry) + 1);
-        keystore.collectActor(account, ACTOR_A);
-        assertFalse(_isActor(account, ACTOR_A));
 
         vm.expectRevert(Keystore.ExpiredChange.selector);
         keystore.applySignedAccountChanges(account, s);
@@ -240,33 +238,29 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, higher);
     }
 
-    /// @notice A sequenced expiry lowering without an epoch bump reverts ReductionRequiresEpochBump.
-    function test_authorizeSequenced_revert_expiryLowerWithoutBump(uint256 pk) public {
+    /// @notice A sequenced expiry lowering lands on its own (reduction is not contract-enforced to bump).
+    function test_authorizeSequenced_success_expiryLower(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
         _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(5 days), "")));
 
-        Keystore.SignedAccountChanges memory s = _localBatch(
-            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
-        );
-        vm.expectRevert(Keystore.ReductionRequiresEpochBump.selector);
-        keystore.applySignedAccountChanges(account, s);
+        uint48 lower = _future(1 days);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, lower, "")));
+        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, lower);
     }
 
-    /// @notice A sequenced scope narrowing without an epoch bump reverts ReductionRequiresEpochBump.
-    function test_authorizeSequenced_revert_scopeNarrowWithoutBump(uint256 pk) public {
+    /// @notice A sequenced scope narrowing lands on its own (reduction is not contract-enforced to bump).
+    function test_authorizeSequenced_success_scopeNarrow(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
         uint48 e = _future(10 days);
         _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER | NONCE, e, "")));
 
-        Keystore.SignedAccountChanges memory s =
-            _localBatch(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, e, "")));
-        vm.expectRevert(Keystore.ReductionRequiresEpochBump.selector);
-        keystore.applySignedAccountChanges(account, s);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, e, "")));
+        assertEq(keystore.getActorConfig(account, ACTOR_A).scope, SENDER);
     }
 
-    /// @notice A sequenced expiry lowering batched with a BumpLocalEpoch succeeds (reduction retired by the bump).
+    /// @notice A sequenced expiry lowering may still be batched with a BumpLocalEpoch (the durable teardown form).
     function test_authorizeSequenced_success_lowerPlusBump(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
@@ -287,15 +281,41 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
     // REVOKE
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice A bare revoke of a live actor reverts ReductionRequiresEpochBump.
-    function test_revoke_revert_bareRevokeOfLiveActor(uint256 pk) public {
+    /// @notice A bare revoke of a live actor lands and clears the slot (reduction is not contract-enforced to bump).
+    function test_revoke_success_bareRevokeOfLiveActor(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
         _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
 
-        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, _one(_revokeChange(ACTOR_A)));
-        vm.expectRevert(Keystore.ReductionRequiresEpochBump.selector);
-        keystore.applySignedAccountChanges(account, s);
+        _applyLocal(pk, account, _one(_revokeChange(ACTOR_A)));
+        assertFalse(_isActor(account, ACTOR_A));
+    }
+
+    /// @notice Documents the accepted footgun: a bare revoke is NOT durable while a replayable unsequenced grant for
+    ///         the same actor is outstanding — replaying it re-installs the actor into the emptied slot. Durable
+    ///         teardown requires a BumpLocalEpoch (see test_revoke_success_revokeBumpThenReplayFails).
+    function test_revoke_bareRevokeNotDurable_replayReinstalls(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+
+        // An outstanding unsequenced grant for ACTOR_A, captured before it first lands.
+        Keystore.SignedAccountChanges memory grant = _signBatch(
+            pk,
+            account,
+            Keystore.AccountChangeChannel.Local,
+            _unseqWord(account),
+            _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
+        );
+        keystore.applySignedAccountChanges(account, grant);
+        assertTrue(_isActor(account, ACTOR_A));
+
+        // Bare revoke lands...
+        _applyLocal(pk, account, _one(_revokeChange(ACTOR_A)));
+        assertFalse(_isActor(account, ACTOR_A));
+
+        // ...but the epoch never moved, so the original grant replays straight back into the emptied slot.
+        keystore.applySignedAccountChanges(account, grant);
+        assertTrue(_isActor(account, ACTOR_A));
     }
 
     /// @notice `[revoke, bump]` succeeds; a pre-signed authorize at the old epoch then dies on StaleEpoch.
@@ -323,7 +343,7 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         keystore.applySignedAccountChanges(account, oldGrant);
     }
 
-    /// @notice Revoking an already-lapsed actor is GC-equivalent and needs no bump (flag skipped).
+    /// @notice Revoking an already-lapsed actor is GC-equivalent and lands as a bare single-op batch.
     function test_revoke_success_lapsedActorNoBump(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);

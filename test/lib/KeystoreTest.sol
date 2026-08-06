@@ -268,11 +268,8 @@ contract KeystoreTest is Test {
     }
 
     function _revokeActor(address account, uint256 pk, bytes32 actorId) internal {
-        // A live revoke is a reduction; batch it with a bump so it lands without ReductionRequiresEpochBump.
-        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
-        ch[0] = _revokeChange(actorId);
-        ch[1] = _bumpChange();
-        _applyLocal(pk, account, ch);
+        // A bare (sequenced) revoke lands on its own; durable teardown against outstanding grants is a separate bump.
+        _applyLocal(pk, account, _one(_revokeChange(actorId)));
     }
 
     // Implicit-EOA variants are identical here (the same k1 signer path); kept as named aliases for readability.

@@ -6,8 +6,8 @@ import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice §10 test matrix for the account-environment surface driven through {applySignedAccountChanges}: the lock
-///         / unlock ops (admin-authorized), garbage collection, the Multichain channel (no epochs, no unsequenced
-///         mode), and the split-layout regression checks.
+///         / unlock ops (admin-authorized), the Multichain channel (no epochs, no unsequenced mode), and the
+///         split-layout regression checks.
 contract AccountEnvironmentTest is KeystoreTest {
     bytes32 constant ACTOR_A = bytes32(uint256(0xA1));
     bytes32 constant ACTOR_B = bytes32(uint256(0xB2));
@@ -216,65 +216,6 @@ contract AccountEnvironmentTest is KeystoreTest {
         Keystore.SignedAccountChanges memory s = _localBatch(scopedPk, account, _one(_unlockChange()));
         vm.expectRevert(Keystore.UnauthorizedLockChange.selector);
         keystore.applySignedAccountChanges(account, s);
-    }
-
-    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    // GARBAGE COLLECTION
-    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-
-    /// @notice Collecting a live actor reverts CollectLiveActor.
-    function test_collect_revert_liveActor(uint256 pk) public {
-        pk = _boundK1Pk(pk);
-        (address account,) = _createK1Account(pk);
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
-
-        vm.expectRevert(Keystore.CollectLiveActor.selector);
-        keystore.collectActor(account, ACTOR_A);
-    }
-
-    /// @notice Collecting an absent actor reverts CollectLiveActor.
-    function test_collect_revert_absentActor(uint256 pk) public {
-        pk = _boundK1Pk(pk);
-        (address account,) = _createK1Account(pk);
-
-        vm.expectRevert(Keystore.CollectLiveActor.selector);
-        keystore.collectActor(account, ACTOR_A);
-    }
-
-    /// @notice Collecting a lapsed actor clears the slot and emits ActorCollected; a fresh authorize then succeeds.
-    function test_collect_success_lapsedThenFreshAuthorize(uint256 pk) public {
-        pk = _boundK1Pk(pk);
-        (address account,) = _createK1Account(pk);
-        uint48 e = _future(1 days);
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, e, "")));
-
-        vm.warp(uint256(e) + 1);
-        vm.expectEmit(true, true, false, true, address(keystore));
-        emit Keystore.ActorCollected(account, ACTOR_A);
-        keystore.collectActor(account, ACTOR_A);
-        assertFalse(_isActor(account, ACTOR_A));
-
-        // Fresh authorize into the emptied slot succeeds (empty-slot install).
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
-        assertTrue(_isActor(account, ACTOR_A));
-    }
-
-    /// @notice The batch collector reclaims several lapsed actors at once.
-    function test_collectActors_success_batch(uint256 pk) public {
-        pk = _boundK1Pk(pk);
-        (address account,) = _createK1Account(pk);
-        uint48 e = _future(1 days);
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, e, "")));
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_B, address(k1Authenticator), SENDER, e, "")));
-
-        vm.warp(uint256(e) + 1);
-        bytes32[] memory ids = new bytes32[](2);
-        ids[0] = ACTOR_A;
-        ids[1] = ACTOR_B;
-        keystore.collectActors(account, ids);
-
-        assertFalse(_isActor(account, ACTOR_A));
-        assertFalse(_isActor(account, ACTOR_B));
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
