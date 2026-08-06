@@ -772,21 +772,26 @@ contract Keystore {
     bytes32 public constant SIGNED_MESSAGE_TYPEHASH =
         keccak256("EIP8130SignedMessage(address account,uint256 chainId,bytes32 hash)");
 
-    /// @notice Signature envelope type: wrap against chainId = block.chainid (chain-local). Append-only.
-    uint8 public constant SIG_TYPE_LOCAL = 0x00;
+    /// @notice The chain-scoping channel a signature envelope's leading type byte selects.
+    ///
+    /// @dev Read from the envelope's leading byte (uint8), not ABI-decoded, so the wire values are fixed here:
+    ///      Local = 0x00 (block.chainid), Multichain = 0x01 (chainId = 0). Append-only. Unlike the ABI-decoded change
+    ///      enums there is no decoder guard, so {validateSignature} range-checks the byte and reverts
+    ///      {UnknownSignatureType} before casting.
+    enum SignatureType {
+        Local,
+        Multichain
+    }
 
-    /// @notice Signature envelope type: wrap against chainId = 0 (explicit all-chains channel). Append-only.
-    uint8 public constant SIG_TYPE_MULTICHAIN = 0x01;
-
-    /// @notice The signature envelope's leading type byte is not a recognized SIG_TYPE_* value.
+    /// @notice The signature envelope's leading type byte is not a recognized {SignatureType} value.
     error UnknownSignatureType(uint8 sigType);
 
     /// @notice The signature envelope is empty (missing its leading type byte).
     error EmptySignatureEnvelope();
 
     /// @notice Envelope digest to sign for `hash` to be accepted for `account` on `chainId`.
-    /// @dev Pass `block.chainid` for a chain-local signature (SIG_TYPE_LOCAL) or `0` for an all-chains signature
-    ///      (SIG_TYPE_MULTICHAIN, mirroring the applySignedActorChanges multichain channel).
+    /// @dev Pass `block.chainid` for a chain-local signature ({SignatureType.Local}) or `0` for an all-chains signature
+    ///      ({SignatureType.Multichain}, mirroring the applySignedActorChanges multichain channel).
     /// @param account Account the signature is bound to.
     /// @param chainId Chain the signature is bound to (0 = all chains).
     /// @param hash Raw message digest.
@@ -814,15 +819,12 @@ contract Keystore {
     {
         if (auth.length == 0) revert EmptySignatureEnvelope();
 
-        uint8 sigType = uint8(auth[0]);
-        bytes32 digest;
-        if (sigType == SIG_TYPE_LOCAL) {
-            digest = replaySafeHash(account, block.chainid, hash);
-        } else if (sigType == SIG_TYPE_MULTICHAIN) {
-            digest = replaySafeHash(account, 0, hash);
-        } else {
-            revert UnknownSignatureType(sigType);
-        }
+        uint8 sigTypeByte = uint8(auth[0]);
+        if (sigTypeByte > uint8(type(SignatureType).max)) revert UnknownSignatureType(sigTypeByte);
+
+        bytes32 digest = SignatureType(sigTypeByte) == SignatureType.Local
+            ? replaySafeHash(account, block.chainid, hash)
+            : replaySafeHash(account, 0, hash);
 
         // Strip the type byte; the remainder is the standard authenticator(20) || data blob, resolved exactly like
         // every other authentication in the registry.

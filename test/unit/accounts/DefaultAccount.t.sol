@@ -455,7 +455,7 @@ contract DefaultAccountTest is KeystoreTest {
     }
 
     /// @notice A signature envelope too short to carry a 20-byte authenticator returns the failure magic value.
-    /// @dev An empty blob reverts EmptySignatureEnvelope; a 1..20-byte zero blob is a SIG_TYPE_LOCAL envelope whose
+    /// @dev An empty blob reverts EmptySignatureEnvelope; a 1..20-byte zero blob is a SignatureType.Local envelope whose
     ///      remainder is under 20 bytes, so authenticateActor reverts InvalidAuthLength. Both are caught -> fail.
     function test_isValidSignature_success_returnsFailureForShortSignature(
         uint256 ownerSeed,

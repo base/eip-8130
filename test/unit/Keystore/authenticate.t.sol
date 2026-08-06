@@ -758,7 +758,7 @@ contract AuthenticateTest is KeystoreTest {
         assertEq(outScope, SCOPE_SENDER | SCOPE_POLICY);
     }
 
-    /// @notice A multichain envelope (SIG_TYPE_MULTICHAIN) validates against the chainId = 0 digest.
+    /// @notice A multichain envelope (SignatureType.Multichain) validates against the chainId = 0 digest.
     /// @dev The owner signs replaySafeHash(account, 0, hash); validateSignature resolves the same all-chains digest.
     function test_validateSignature_success_multichainEnvelope(uint256 ownerSeed, bytes32 hash) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
@@ -777,7 +777,7 @@ contract AuthenticateTest is KeystoreTest {
     }
 
     /// @notice An unrecognized leading type byte reverts UnknownSignatureType.
-    /// @dev 0x00 = LOCAL, 0x01 = MULTICHAIN; every other value is rejected before any authentication.
+    /// @dev 0x00 = Local, 0x01 = Multichain; every other value is rejected before any authentication.
     function test_validateSignature_revert_unknownType(address account, uint8 sigTypeSeed, bytes32 hash) public {
         uint8 sigType = uint8(bound(uint256(sigTypeSeed), 2, 255));
         vm.expectRevert(abi.encodeWithSelector(Keystore.UnknownSignatureType.selector, sigType));
