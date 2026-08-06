@@ -557,7 +557,7 @@ contract ImportAccountTest is KeystoreTest {
         // The same key still authenticates as a full owner — now via its explicit self config, not the (disabled)
         // implicit fallback.
         bytes32 h = keccak256("post import");
-        (, uint16 scope,) = keystore.authenticateActor(eoa, h, _buildK1Auth(eoaPk, h));
+        (, uint16 scope) = keystore.authenticateActor(eoa, h, _buildK1Auth(eoaPk, h));
         assertEq(scope, 0);
     }
 }

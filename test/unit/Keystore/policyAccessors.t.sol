@@ -7,8 +7,7 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 /// @notice Fully-fuzzed unit tests for the policy accessors on `Keystore`:
 ///           - `getPolicy(account, actorId)`           — off-chain aggregate: (manager, commitment)
 ///           - `getPolicyCommitment(account, actorId)` — single-SLOAD hot-path read
-///           - `getPolicyManager(account, actorId)`    — single-SLOAD hot-path read
-///           - policyTarget                            — surfaced as the third return of `authenticateActor`
+///           - `getPolicyManager(account, actorId)`    — single-SLOAD hot-path read (the resolved policy target)
 ///
 ///         All are `view`; there are no events to assert. Every test fuzzes its inputs (managers, commitments,
 ///         actorIds, keys, scopes). Gating is determined by the SCOPE_POLICY bit, never by "slot non-zero": a
@@ -483,13 +482,13 @@ contract PolicyAccessorsTest is KeystoreTest {
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    // policyTarget — surfaced as the third return of authenticateActor
+    // policyTarget — resolved via getPolicyManager (an execution-time read, not an authenticateActor return)
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     //
-    // authenticateActor returns the stored policy manager as its third value (address(0) when unwritten).
+    // authenticateActor returns (actorId, scope); the policy manager is resolved separately via getPolicyManager
+    // (address(0) when unwritten). These tests authenticate to confirm the actor is live, then read the manager.
 
-    /// @notice A gated non-self actor authenticates; policyTarget resolves to the stored manager, equal to the
-    ///         granular getPolicyManager read.
+    /// @notice A gated non-self actor authenticates; getPolicyManager resolves to the stored manager.
     function test_policyTarget_success_gatedExplicitActor_returnsManager(
         uint256 rootSeed,
         uint256 sessionSeed,
@@ -511,14 +510,12 @@ contract PolicyAccessorsTest is KeystoreTest {
             account, rootPk, sessionActorId, _boundGatedScope(scopeSeed), manager, _boundNonZeroWord(commitmentSeed)
         );
 
-        (, uint16 outScope, address policyTarget) =
-            keystore.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
+        (, uint16 outScope) = keystore.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
         assertTrue(outScope & keystore.SCOPE_POLICY() != 0);
-        assertEq(policyTarget, manager);
-        assertEq(policyTarget, keystore.getPolicyManager(account, sessionActorId));
+        assertEq(keystore.getPolicyManager(account, sessionActorId), manager);
     }
 
-    /// @notice An ungated non-self actor authenticates; policyTarget is address(0) (no manager slot written).
+    /// @notice An ungated non-self actor authenticates; getPolicyManager is address(0) (no manager slot written).
     function test_policyTarget_success_ungatedActor_returnsZero(uint256 rootSeed, uint256 sessionSeed, bytes32 hash)
         public
     {
@@ -532,11 +529,11 @@ contract PolicyAccessorsTest is KeystoreTest {
 
         _authorizeUngatedActor(account, rootPk, sessionActorId, address(k1Authenticator));
 
-        (,, address policyTarget) = keystore.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
-        assertEq(policyTarget, address(0));
+        keystore.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
+        assertEq(keystore.getPolicyManager(account, sessionActorId), address(0));
     }
 
-    /// @notice A gated inline self authenticates; policyTarget resolves to the stored manager via the inline home.
+    /// @notice A gated inline self authenticates; getPolicyManager resolves to the stored manager via the inline home.
     function test_policyTarget_success_inlineSelfGated_returnsManager(
         uint256 eoaSeed,
         uint8 scopeSeed,
@@ -553,20 +550,19 @@ contract PolicyAccessorsTest is KeystoreTest {
             eoa, eoaPk, _boundGatedScope(scopeSeed), manager, _boundNonZeroWord(commitmentSeed)
         );
 
-        (,, address policyTarget) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
-        assertEq(policyTarget, manager);
-        assertEq(policyTarget, keystore.getPolicyManager(eoa, selfActorId));
+        keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        assertEq(keystore.getPolicyManager(eoa, selfActorId), manager);
     }
 
-    /// @notice A fresh EOA (implicit full owner, ungated) authenticates; policyTarget is address(0) over untouched
-    ///         state.
+    /// @notice A fresh EOA (implicit full owner, ungated) authenticates; getPolicyManager is address(0) over
+    ///         untouched state.
     function test_policyTarget_success_inlineSelfFullOwner_returnsZero(uint256 eoaSeed, bytes32 hash) public view {
         uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
 
-        (, uint16 outScope, address policyTarget) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
-        assertEq(outScope, uint8(0x00));
-        assertEq(policyTarget, address(0));
+        (, uint16 outScope) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        assertEq(outScope, uint16(0x00));
+        assertEq(keystore.getPolicyManager(eoa, bytes32(bytes20(eoa))), address(0));
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
