@@ -46,6 +46,12 @@ contract DefaultAccount is Receiver {
     /// @notice The Keystore system contract that owns this account's authorization state.
     Keystore public immutable KEYSTORE;
 
+    /// @notice ERC-1271 magic value returned for a valid signature: bytes4(keccak256("isValidSignature(bytes32,bytes)")).
+    bytes4 internal constant ERC1271_MAGIC_VALUE = 0x1626ba7e;
+
+    /// @notice ERC-1271 sentinel returned for an invalid signature.
+    bytes4 internal constant ERC1271_INVALID = 0xffffffff;
+
     /// @notice The caller is neither the account itself nor a registered TRUSTED_EXECUTOR actor.
     error UnauthorizedCaller();
 
@@ -106,12 +112,12 @@ contract DefaultAccount is Receiver {
     /// @param hash The digest to authenticate.
     /// @param signature Envelope in `sigType(1) || authenticator(20) || data` format.
     ///
-    /// @return The ERC-1271 magic value 0x1626ba7e if valid, otherwise 0xffffffff.
+    /// @return The ERC-1271 magic value (ERC1271_MAGIC_VALUE) if valid, otherwise ERC1271_INVALID.
     function isValidSignature(bytes32 hash, bytes calldata signature) external view virtual returns (bytes4) {
         try KEYSTORE.validateSignature(address(this), hash, signature) returns (bytes32, uint16 scope) {
-            return Scopes.isOperational(scope) ? bytes4(0x1626ba7e) : bytes4(0xFFFFFFFF);
+            return Scopes.isOperational(scope) ? ERC1271_MAGIC_VALUE : ERC1271_INVALID;
         } catch {
-            return bytes4(0xFFFFFFFF);
+            return ERC1271_INVALID;
         }
     }
 

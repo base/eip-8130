@@ -761,11 +761,6 @@ contract Keystore {
     // VIEW FUNCTIONS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    // Account signature validation: a user signature over an app `hash` is validated against an account- and
-    // chain-scoped envelope digest (see {replaySafeHash}), binding the signature to a single
-    // account and channel. The registry's own signed messages (actor changes, import, lock) bind context in-struct and
-    // use their own typehashes.
-
     /// @notice Typehash binding a user signature to its account and chainId.
     /// @dev NOT compliant with EIP-712, to mitigate eth_signTypedData phishing, consistent with the other 8130
     ///      signed-message typehashes. First byte 0x9d: provably not a transaction encoding.
@@ -778,6 +773,11 @@ contract Keystore {
     ///      Multichain = 0x02 (chainId = 0). Append-only. Invalid (0x00) is the reserved "unset" value; unlike the
     ///      ABI-decoded change enums there is no decoder guard, so {validateSignature} rejects Invalid and any
     ///      out-of-range byte with {UnknownSignatureType}.
+    ///
+    ///      Multichain binds chainId = 0, so the signature is replayable on EVERY chain; there is no strict
+    ///      per-chain-list channel. This is intentional and mirrors the applySignedActorChanges all-chains channel.
+    ///      A signer who wants single-chain binding uses Local; scoping to an arbitrary subset of chains is a broader
+    ///      protocol change (a chainId-list binding across all signed-message typehashes) deliberately left out here.
     enum SignatureType {
         Invalid,
         Local,
@@ -801,11 +801,31 @@ contract Keystore {
         return keccak256(abi.encode(SIGNED_MESSAGE_TYPEHASH, account, chainId, hash));
     }
 
-    /// @notice Canonical validation of a typed-envelope user signature over `hash` for `account`.
+    /// @notice The digest a signer must sign for `hash` to be accepted for `account` under signature type `sigType`.
     ///
-    /// @dev Reverts on an empty envelope, an unknown signature type, or any authentication failure. Never calls into
-    ///      account code, so an account's own ERC-1271 path can call this without recursion. Operational gating for
-    ///      ERC-1271 (which scopes may sign) is left to the caller, which reads the returned `scope`.
+    /// @dev Resolves the {SignatureType} to its bound chainId and returns the {replaySafeHash} digest, so clients can
+    ///      build an envelope without hardcoding the chainId semantics: sign this digest, then prepend the type byte —
+    ///      `sigType(1) || authenticator(20) || sign(envelopeDigest(sigType, account, hash))`. {validateSignature}
+    ///      resolves the same digest, so the two never drift. Reverts {UnknownSignatureType} for Invalid.
+    ///
+    /// @param sigType Envelope channel: Local (binds block.chainid) or Multichain (binds chainId = 0, all chains).
+    /// @param account Account the signature is bound to.
+    /// @param hash Raw app digest.
+    /// @return The digest to sign.
+    function envelopeDigest(SignatureType sigType, address account, bytes32 hash) public view returns (bytes32) {
+        if (sigType == SignatureType.Local) return replaySafeHash(account, block.chainid, hash);
+        if (sigType == SignatureType.Multichain) return replaySafeHash(account, 0, hash);
+        revert UnknownSignatureType(uint8(sigType)); // Invalid (0x00)
+    }
+
+    /// @notice Canonical validation of a typed-envelope user signature over an app `hash` for `account`.
+    ///
+    /// @dev The signature is validated against an account- and chain-scoped envelope digest ({envelopeDigest}), binding
+    ///      it to a single account and channel; the registry's own signed messages (actor changes, import, lock) bind
+    ///      context in-struct via their own typehashes instead. Reverts on an empty envelope, an unknown signature type,
+    ///      or any authentication failure. Never calls into account code, so an account's own ERC-1271 path can call
+    ///      this without recursion. Operational gating for ERC-1271 (which scopes may sign) is left to the caller,
+    ///      which reads the returned `scope`.
     ///
     /// @param account The account the signature is validated against.
     /// @param hash The raw app digest; validated against the account/chain-scoped envelope digest.
@@ -823,15 +843,7 @@ contract Keystore {
         uint8 sigTypeByte = uint8(auth[0]);
         if (sigTypeByte > uint8(type(SignatureType).max)) revert UnknownSignatureType(sigTypeByte);
 
-        bytes32 digest;
-        SignatureType sigType = SignatureType(sigTypeByte);
-        if (sigType == SignatureType.Local) {
-            digest = replaySafeHash(account, block.chainid, hash);
-        } else if (sigType == SignatureType.Multichain) {
-            digest = replaySafeHash(account, 0, hash);
-        } else {
-            revert UnknownSignatureType(sigTypeByte); // Invalid (0x00)
-        }
+        bytes32 digest = envelopeDigest(SignatureType(sigTypeByte), account, hash);
 
         (actorId, scope) = authenticateActor(account, digest, auth[1:]);
     }

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
+import {Keystore} from "../../../src/Keystore.sol";
+
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice Account- and chain-scoping of the Keystore signature envelope (validateSignature / replaySafeHash).
@@ -73,6 +75,27 @@ contract SignatureEnvelopeTest is KeystoreTest {
         assertTrue(
             keystore.replaySafeHash(account, block.chainid + 1, appHash) != local, "digest must differ by chainId"
         );
+    }
+
+    /// @dev envelopeDigest resolves each SignatureType to the same digest validateSignature uses, so clients can build
+    ///      envelopes without hardcoding chainId semantics. Invalid reverts.
+    function test_envelopeDigest_matchesReplaySafeHashPerType() public {
+        (address account,) = _createK1AccountWithSalt(OWNER_PK, bytes32(uint256(1)));
+        bytes32 appHash = keccak256("msg");
+
+        assertEq(
+            keystore.envelopeDigest(Keystore.SignatureType.Local, account, appHash),
+            keystore.replaySafeHash(account, block.chainid, appHash),
+            "Local must bind block.chainid"
+        );
+        assertEq(
+            keystore.envelopeDigest(Keystore.SignatureType.Multichain, account, appHash),
+            keystore.replaySafeHash(account, 0, appHash),
+            "Multichain must bind chainId 0"
+        );
+
+        vm.expectRevert(abi.encodeWithSelector(Keystore.UnknownSignatureType.selector, uint8(0)));
+        keystore.envelopeDigest(Keystore.SignatureType.Invalid, account, appHash);
     }
 
     /// @dev A non-owner key is rejected even when it signs the correct account-scoped digest.
