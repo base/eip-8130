@@ -52,7 +52,7 @@ contract Keystore {
     /// @dev ABI-encodes as uint8. The declaration ORDER is normative and doubles as a classification: every member
     ///      strictly below {BumpLocalEpoch} is an *authority op* (it mutates who can act — the actor set); every
     ///      member from {BumpLocalEpoch} onward is an *environment op* (it mutates the rules ops are checked
-    ///      against — the local epoch or the lock). `_isEnvOp(t) == (t >= BumpLocalEpoch)`. Future ops MUST be
+    ///      against — the local epoch or the lock). The classification is simply `t >= BumpLocalEpoch`. Future ops MUST be
     ///      inserted in the correct class to preserve this predicate. All five values are reachable and meaningful;
     ///      out-of-range wire values (>= 5) can never reach the handler — the enum decoder reverts them while
     ///      ABI-decoding the calldata (no in-handler "unknown" sentinel, unlike the pre-split enums).
@@ -348,6 +348,10 @@ contract Keystore {
     ///         BumpLocalEpoch / Unlock).
     error InvalidChangePayload();
 
+    /// @notice Defensive guard for an unhandled ChangeType in the apply loop. Unreachable in practice — out-of-range
+    ///         wire values are rejected by the enum decoder during ABI-decoding.
+    error UnknownActorChangeType();
+
     /// @notice The auth blob is shorter than the 20-byte authenticator selector prefix.
     error InvalidAuthLength();
 
@@ -601,7 +605,9 @@ contract Keystore {
         uint256 n = s.changes.length;
         for (uint256 i; i < n; i++) {
             ChangeType t = s.changes[i].changeType;
-            bool env = _isEnvOp(t);
+            // Enum-ordering-as-classification: an environment op (BumpLocalEpoch onward) mutates the rules ops are
+            // checked against; anything below is an authority op that mutates who can act.
+            bool env = t >= ChangeType.BumpLocalEpoch;
 
             // Ordering: authority ops may never follow an environment op.
             if (!env && sawEnvOp) revert AuthorityOpAfterEnvOp();
@@ -622,9 +628,12 @@ contract Keystore {
                 _applyBumpLocalEpoch(account, isLocal, s.changes[i].payload);
             } else if (t == ChangeType.Lock) {
                 _applyLock(account, locked, s.changes[i].payload);
-            } else {
-                // ChangeType.Unlock (the only remaining member; out-of-range values reverted at ABI-decode).
+            } else if (t == ChangeType.Unlock) {
                 _applyUnlock(account, s.changes[i].payload);
+            } else {
+                // Unreachable: out-of-range wire values are rejected by the enum decoder while ABI-decoding the
+                // calldata. Kept as a defensive guard so any future ChangeType must be wired in explicitly.
+                revert UnknownActorChangeType();
             }
         }
     }
@@ -722,13 +731,8 @@ contract Keystore {
     }
 
     // ----------------------------------------------------------------------------------------------------------------
-    // SIGNED-CHANGE POLICY PREDICATES
+    // SIGNED-CHANGE HELPERS
     // ----------------------------------------------------------------------------------------------------------------
-
-    /// @dev Enum-ordering-as-classification: an environment op mutates the rules ops are checked against.
-    function _isEnvOp(ChangeType t) private pure returns (bool) {
-        return t >= ChangeType.BumpLocalEpoch;
-    }
 
     /// @dev Reads an actor's raw stored slot IGNORING expiry (structural presence): a populated _actorConfig entry
     ///      for any non-self actor or a non-k1 self, or the inline k1 self when enabled. Returns whether the slot is
