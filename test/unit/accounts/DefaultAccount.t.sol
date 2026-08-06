@@ -26,7 +26,7 @@ contract MockTarget {
         revert Boom(code);
     }
 
-    /// @dev Reverts with empty returndata, exercising the CallFailed fallback.
+    /// @dev Reverts with empty returndata; the bubbled revert therefore carries no reason.
     function revertingSilent() external pure {
         revert();
     }
@@ -149,13 +149,12 @@ contract DefaultAccountTest is KeystoreTest {
             .executeBatch(_singleCall(address(target), value, abi.encodeCall(MockTarget.reverting, ())));
     }
 
-    /// @notice A failing inner call with empty returndata falls back to CallFailed.
-    /// @dev Exercises the returndatasize == 0 branch of the bubble-up helper.
-    function test_executeBatch_revert_emptyReturndataFallsBackToCallFailed() public {
+    /// @notice A failing inner call with empty returndata bubbles up as a reason-less (empty) revert.
+    function test_executeBatch_revert_emptyReturndataBubblesEmptyRevert() public {
         (address account,) = _createK1Account(ACTOR_PK);
 
         vm.prank(account);
-        vm.expectRevert(DefaultAccount.CallFailed.selector);
+        vm.expectRevert(bytes(""));
         DefaultAccount(payable(account))
             .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.revertingSilent, ())));
     }
@@ -312,13 +311,12 @@ contract DefaultAccountTest is KeystoreTest {
         DefaultAccount(payable(account)).execute(address(target), 0, abi.encodeCall(MockTarget.revertingCustom, (code)));
     }
 
-    /// @notice A failing inner call with empty returndata falls back to CallFailed.
-    /// @dev Exercises the returndatasize == 0 branch of the bubble-up helper.
-    function test_execute_revert_emptyReturndataFallsBackToCallFailed() public {
+    /// @notice A failing inner call with empty returndata bubbles up as a reason-less (empty) revert.
+    function test_execute_revert_emptyReturndataBubblesEmptyRevert() public {
         (address account,) = _createK1Account(ACTOR_PK);
 
         vm.prank(account);
-        vm.expectRevert(DefaultAccount.CallFailed.selector);
+        vm.expectRevert(bytes(""));
         DefaultAccount(payable(account)).execute(address(target), 0, abi.encodeCall(MockTarget.revertingSilent, ()));
     }
 

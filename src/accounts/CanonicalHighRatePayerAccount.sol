@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.36;
 
+import {LibCall} from "solady/utils/LibCall.sol";
+
 import {Call, DefaultAccount} from "./DefaultAccount.sol";
 
 /// @notice Canonical high-rate payer account variant for EIP-8130.
@@ -23,7 +25,7 @@ contract CanonicalHighRatePayerAccount is DefaultAccount {
     ///
     /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a TRUSTED_EXECUTOR actor.
     /// @dev Reverts with AccountLocked when a call carries non-zero value and the account is locked.
-    /// @dev Reverts with CallFailed when any inner call reverts.
+    /// @dev Bubbles up the inner call's revert reason verbatim (a reason-less revert propagates as an empty revert).
     ///
     /// @param calls Ordered calls to execute, each as (target, value, data).
     function executeBatch(Call[] calldata calls) external override {
@@ -33,8 +35,8 @@ contract CanonicalHighRatePayerAccount is DefaultAccount {
                 (bool locked,,,) = KEYSTORE.getLockStatus(address(this));
                 if (locked) revert AccountLocked();
             }
-            (bool success,) = calls[i].target.call{value: calls[i].value}(calls[i].data);
-            if (!success) revert CallFailed();
+            (bool success, bytes memory result) = calls[i].target.call{value: calls[i].value}(calls[i].data);
+            if (!success) LibCall.bubbleUpRevert(result);
         }
     }
 
@@ -42,7 +44,7 @@ contract CanonicalHighRatePayerAccount is DefaultAccount {
     ///
     /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a TRUSTED_EXECUTOR actor.
     /// @dev Reverts with AccountLocked when the call carries non-zero value and the account is locked.
-    /// @dev Reverts with CallFailed when the inner call reverts.
+    /// @dev Bubbles up the inner call's revert reason verbatim (a reason-less revert propagates as an empty revert).
     ///
     /// @param target Address the account calls.
     /// @param value Wei forwarded with the call.
@@ -53,7 +55,7 @@ contract CanonicalHighRatePayerAccount is DefaultAccount {
             (bool locked,,,) = KEYSTORE.getLockStatus(address(this));
             if (locked) revert AccountLocked();
         }
-        (bool success,) = target.call{value: value}(data);
-        if (!success) revert CallFailed();
+        (bool success, bytes memory result) = target.call{value: value}(data);
+        if (!success) LibCall.bubbleUpRevert(result);
     }
 }

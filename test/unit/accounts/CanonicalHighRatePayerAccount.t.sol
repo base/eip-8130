@@ -102,11 +102,11 @@ contract CanonicalHighRatePayerAccountTest is KeystoreTest {
             .executeBatch(_singleCall(address(target), 0, abi.encodeCall(HighRatePayerMockTarget.setValue, (1))));
     }
 
-    function test_executeBatch_revertsOnFailedCall() public {
+    function test_executeBatch_bubblesInnerRevert() public {
         (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
 
         vm.prank(account);
-        vm.expectRevert(DefaultAccount.CallFailed.selector);
+        vm.expectRevert(abi.encodeWithSignature("Error(string)", "boom"));
         CanonicalHighRatePayerAccount(payable(account))
             .executeBatch(_singleCall(address(target), 0, abi.encodeCall(HighRatePayerMockTarget.reverting, ())));
     }
@@ -182,11 +182,11 @@ contract CanonicalHighRatePayerAccountTest is KeystoreTest {
             .execute(address(target), 0, abi.encodeCall(HighRatePayerMockTarget.setValue, (1)));
     }
 
-    function test_execute_revertsOnFailedCall() public {
+    function test_execute_bubblesInnerRevert() public {
         (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
 
         vm.prank(account);
-        vm.expectRevert(DefaultAccount.CallFailed.selector);
+        vm.expectRevert(abi.encodeWithSignature("Error(string)", "boom"));
         CanonicalHighRatePayerAccount(payable(account))
             .execute(address(target), 0, abi.encodeCall(HighRatePayerMockTarget.reverting, ()));
     }

@@ -48,10 +48,6 @@ contract DefaultAccount is Receiver {
     /// @notice The caller is neither the account itself nor a registered TRUSTED_EXECUTOR actor.
     error UnauthorizedCaller();
 
-    /// @notice An inner call reverted with no returndata (e.g. a bare `revert()` or out-of-gas); used as the fallback
-    ///         when there is no revert reason to bubble up.
-    error CallFailed();
-
     /// @notice Deploys the account implementation bound to an Keystore instance.
     /// @param keystore Address of the Keystore system contract.
     constructor(address keystore) {
@@ -65,14 +61,15 @@ contract DefaultAccount is Receiver {
     /// @notice Executes a batch of calls from the account; reverts the entire batch if any call fails.
     ///
     /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a TRUSTED_EXECUTOR actor.
-    /// @dev Bubbles up the inner call's revert reason verbatim; falls back to CallFailed when it carries none.
+    /// @dev Bubbles up the inner call's revert reason verbatim (a reason-less revert propagates as an empty revert).
     ///
     /// @param calls Ordered calls to execute, each as (target, value, data).
     function executeBatch(Call[] calldata calls) external virtual {
         if (!_isAuthorizedCaller(msg.sender)) revert UnauthorizedCaller();
         for (uint256 i; i < calls.length; i++) {
+            // Plain `call` (not LibCall.callContract) so value transfers to codeless targets (e.g. EOAs) still succeed.
             (bool success, bytes memory result) = calls[i].target.call{value: calls[i].value}(calls[i].data);
-            if (!success) _bubbleRevert(result);
+            if (!success) LibCall.bubbleUpRevert(result);
         }
     }
 
@@ -82,7 +79,7 @@ contract DefaultAccount is Receiver {
     ///      CoinbaseSmartWallet V1 `execute(address,uint256,bytes)` (0xb61d27f6), so integrations that call that ABI
     ///      directly (e.g. SpendPermissionManager) keep working against this account.
     /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a TRUSTED_EXECUTOR actor.
-    /// @dev Bubbles up the inner call's revert reason verbatim; falls back to CallFailed when it carries none.
+    /// @dev Bubbles up the inner call's revert reason verbatim (a reason-less revert propagates as an empty revert).
     ///
     /// @param target Address the account calls.
     /// @param value Wei forwarded with the call.
@@ -90,7 +87,7 @@ contract DefaultAccount is Receiver {
     function execute(address target, uint256 value, bytes calldata data) external virtual {
         if (!_isAuthorizedCaller(msg.sender)) revert UnauthorizedCaller();
         (bool success, bytes memory result) = target.call{value: value}(data);
-        if (!success) _bubbleRevert(result);
+        if (!success) LibCall.bubbleUpRevert(result);
     }
 
     // ══════════════════════════════════════════════
@@ -138,15 +135,5 @@ contract DefaultAccount is Receiver {
         if (config.authenticator != TRUSTED_EXECUTOR) return false;
         if (config.expiry != 0 && block.timestamp > config.expiry) return false;
         return Scopes.isOperational(config.scope);
-    }
-
-    /// @dev Reverts, re-throwing the failed inner call's returndata verbatim so the caller sees the original revert
-    ///      reason (custom error, Error(string), or Panic). Falls back to CallFailed when the returndata is empty.
-    ///      Uses Solady's {LibCall.bubbleUpRevert} for the propagation; the plain `call` above (not
-    ///      {LibCall.callContract}) is kept so value transfers to codeless targets (e.g. EOAs) still succeed.
-    /// @param result The returndata captured from the failed low-level call.
-    function _bubbleRevert(bytes memory result) private pure {
-        if (result.length == 0) revert CallFailed();
-        LibCall.bubbleUpRevert(result);
     }
 }
