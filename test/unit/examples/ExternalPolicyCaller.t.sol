@@ -240,7 +240,9 @@ contract ExternalPolicyCallerTest is KeystoreTest {
     }
 
     /// @dev SessionPolicy config: `transfer` only on `token`, with a USDC-style recurring spend limit.
-    function _config(uint256 limit, uint40 period) internal view returns (bytes memory) {
+    /// @dev `public` and invoked via `this._config(...)` from `_binding` so its nested-struct abi.encode stays in its
+    ///      own stack frame; inlining it merges that frame into every test and trips a via_ir stack-too-deep.
+    function _config(uint256 limit, uint40 period) public view returns (bytes memory) {
         SessionPolicy.TokenLimit[] memory limits = new SessionPolicy.TokenLimit[](1);
         limits[0] = SessionPolicy.TokenLimit({token: address(token), limit: limit, period: period});
         SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](1);
@@ -258,7 +260,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         binding = PolicyManager.PolicyBinding({
             account: account,
             policy: address(policy),
-            policyConfig: _config(limit, period),
+            policyConfig: this._config(limit, period),
             validAfter: 0,
             validUntil: 0,
             salt: salt

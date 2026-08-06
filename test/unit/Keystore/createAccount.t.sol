@@ -176,7 +176,7 @@ contract CreateAccountTest is KeystoreTest {
         assertEq(predicted.code.length, 0);
         assertEq(keystore.getChangeSequences(predicted).local, 0);
         assertEq(keystore.getChangeSequences(predicted).multichain, 0);
-        assertFalse(keystore.isActor(predicted, actorId));
+        assertFalse(_isActor(predicted, actorId));
 
         // The writes were unwound, so the re-init guard is not tripped: the retry re-attempts the deploy and fails
         // again on the same invalid bytecode rather than reverting AlreadyInitialized.
@@ -201,7 +201,7 @@ contract CreateAccountTest is KeystoreTest {
 
         assertTrue(account != address(0));
         assertGt(account.code.length, 0);
-        assertTrue(keystore.isActor(account, actorId));
+        assertTrue(_isActor(account, actorId));
     }
 
     /// @notice Verifies an account with many sorted initial actors deploys and registers every actor as live
@@ -218,7 +218,7 @@ contract CreateAccountTest is KeystoreTest {
 
         assertGt(account.code.length, 0);
         for (uint256 i; i < count; i++) {
-            assertTrue(keystore.isActor(account, actors[i].actorId));
+            assertTrue(_isActor(account, actors[i].actorId));
         }
     }
 
@@ -243,7 +243,7 @@ contract CreateAccountTest is KeystoreTest {
         assertEq(cfg.authenticator, authenticator);
         assertEq(cfg.scope, 0x00);
         assertEq(cfg.expiry, 0);
-        assertTrue(keystore.isActor(account, actorId));
+        assertTrue(_isActor(account, actorId));
     }
 
     /// @notice Verifies initial actors are unrestricted owners and the account is initialized with safe lock defaults
@@ -287,7 +287,7 @@ contract CreateAccountTest is KeystoreTest {
 
         // The account's own self-actorId is not the seeded actor, so the inline k1 self stays disabled.
         vm.assume(bytes32(bytes20(account)) != actorId);
-        assertFalse(keystore.isActor(account, bytes32(bytes20(account))));
+        assertFalse(_isActor(account, bytes32(bytes20(account))));
     }
 
     /// @notice Verifies arbitrary valid runtime bytecode of a fuzzed length/content deploys successfully

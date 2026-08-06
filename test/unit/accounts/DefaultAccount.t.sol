@@ -28,9 +28,9 @@ contract DefaultAccountTest is KeystoreTest {
 
     // Scope bits: ERC-1271 signing is operational (admin scope == 0x00, or SENDER without POLICY). SELF_PAYER and
     // SPONSOR_PAYER are non-SENDER capability scopes that are not operational on their own.
-    uint8 constant SCOPE_SENDER = 0x01;
-    uint8 constant SCOPE_SELF_PAYER = 0x08;
-    uint8 constant SCOPE_SPONSOR_PAYER = 0x10;
+    uint16 constant SCOPE_SENDER = 0x01;
+    uint16 constant SCOPE_SELF_PAYER = 0x08;
+    uint16 constant SCOPE_SPONSOR_PAYER = 0x10;
 
     // TRUSTED_EXECUTOR sentinel: the authenticator value that marks an actor as a direct-execution caller.
     address constant TRUSTED_EXECUTOR = address(uint160(uint256(keccak256("trustedExecutor"))));
@@ -59,7 +59,7 @@ contract DefaultAccountTest is KeystoreTest {
         uint256 pk,
         bytes32 newActorId,
         address authenticator,
-        uint8 scope
+        uint16 scope
     ) internal {
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({

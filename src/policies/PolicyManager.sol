@@ -217,15 +217,15 @@ contract PolicyManager is ReentrancyGuard {
         if (signed == bytes32(0)) revert NoActivePolicy(actorId);
         if (signed != commitment) revert BindingCommitmentMismatch(signed, commitment);
 
-        _requireNotExpired(account, actorId);
+        _requireActiveActor(account, actorId);
         _enforce(binding, commitment, executionData, caller);
     }
 
-    /// @dev Reject when the acting actor's stored expiry has passed. Required on the external path (no protocol
-    ///      auth); omitted on {execute}, where authentication already enforced expiry before dispatch.
-    function _requireNotExpired(address account, bytes32 actorId) internal view {
-        Keystore.ActorConfig memory config = KEYSTORE.getActorConfig(account, actorId);
-        if (config.expiry != 0 && block.timestamp > config.expiry) revert ActorExpired(actorId);
+    /// @dev Reject when the acting actor is no longer active. Required on the external path (no protocol auth);
+    ///      omitted on {execute}, where authentication already enforced liveness before dispatch. getActorConfig
+    ///      resolves an expired (or revoked) actor to the all-zero config, so a zero authenticator means "not active".
+    function _requireActiveActor(address account, bytes32 actorId) internal view {
+        if (KEYSTORE.getActorConfig(account, actorId).authenticator == address(0)) revert ActorExpired(actorId);
     }
 
     /// @dev Common enforcement: enforce the binding's validity window (authenticated by the commitment check at the

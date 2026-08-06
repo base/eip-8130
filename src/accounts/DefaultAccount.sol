@@ -46,8 +46,8 @@ contract DefaultAccount is Receiver {
     /// @dev Local mirrors of {Keystore.SCOPE_SENDER} / {Keystore.SCOPE_POLICY}: a contract's
     ///      public constants are not accessible via its type, and reading the getters would add external calls to the
     ///      execution hot path. Kept in sync with Keystore.
-    uint8 private constant SCOPE_SENDER = 0x01;
-    uint8 private constant SCOPE_POLICY = 0x02;
+    uint16 private constant SCOPE_SENDER = 0x0001;
+    uint16 private constant SCOPE_POLICY = 0x0002;
 
     /// @notice The caller is neither the account itself nor a registered TRUSTED_EXECUTOR actor.
     error UnauthorizedCaller();
@@ -140,7 +140,7 @@ contract DefaultAccount is Receiver {
         Keystore.ActorConfig memory config = KEYSTORE.getActorConfig(address(this), bytes32(bytes20(caller)));
         if (config.authenticator != TRUSTED_EXECUTOR) return false;
         if (config.expiry != 0 && block.timestamp > config.expiry) return false;
-        uint8 scope = config.scope;
+        uint16 scope = config.scope;
         return scope == 0 || ((scope & SCOPE_SENDER != 0) && (scope & SCOPE_POLICY == 0));
     }
 }

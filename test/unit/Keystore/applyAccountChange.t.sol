@@ -36,7 +36,7 @@ contract AccountLockTest is KeystoreTest {
 
     /// @dev Authorize a k1 actor (actorId = bytes32(bytes20(newSigner))) with `scope` on `account`, signed by the
     ///      account's admin owner `ownerPk`.
-    function _authorizeK1ActorWithScope(address account, uint256 ownerPk, address newSigner, uint8 scope) internal {
+    function _authorizeK1ActorWithScope(address account, uint256 ownerPk, address newSigner, uint16 scope) internal {
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({
             changeType: 0x01,
@@ -477,7 +477,7 @@ contract AccountLockTest is KeystoreTest {
 
         keystore.applySignedActorChanges(account, chainId, changes, auth);
 
-        assertTrue(keystore.isActor(account, newActorId));
+        assertTrue(_isActor(account, newActorId));
         // The onlyUnlocked prelude cleared the stale unlock timestamp back to 0.
         (,, uint40 unlocksAt,) = keystore.getLockStatus(account);
         assertEq(unlocksAt, 0);

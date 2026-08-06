@@ -36,7 +36,7 @@ contract PolicyAccessorsTest is KeystoreTest {
         (address account,) = _createK1Account(rootPk);
         actorId = _boundExplicitActorId(account, rootPk, actorId);
 
-        uint8 scope = _boundGatedScope(scopeSeed);
+        uint16 scope = _boundGatedScope(scopeSeed);
         address manager = _boundNonZeroAddress(managerSeed);
         bytes32 commitment = _boundNonZeroWord(commitmentSeed);
 
@@ -83,7 +83,7 @@ contract PolicyAccessorsTest is KeystoreTest {
         address eoa = vm.addr(eoaPk);
         bytes32 selfActorId = bytes32(bytes20(eoa));
 
-        uint8 scope = _boundGatedScope(scopeSeed);
+        uint16 scope = _boundGatedScope(scopeSeed);
         address manager = _boundNonZeroAddress(managerSeed);
         bytes32 commitment = _boundNonZeroWord(commitmentSeed);
 
@@ -348,7 +348,7 @@ contract PolicyAccessorsTest is KeystoreTest {
         (address account,) = _createK1Account(rootPk);
         actorId = _boundExplicitActorId(account, rootPk, actorId);
 
-        uint8 scope = _boundGatedScope(scopeSeed);
+        uint16 scope = _boundGatedScope(scopeSeed);
         address manager = _boundNonZeroAddress(managerSeed);
         bytes32 commitment = _boundNonZeroWord(commitmentSeed);
         address newManager = _boundNonZeroAddress(newManagerSeed);
@@ -394,13 +394,13 @@ contract PolicyAccessorsTest is KeystoreTest {
         address manager = _boundNonZeroAddress(managerSeed);
         bytes32 commitment = _boundNonZeroWord(commitmentSeed);
 
-        uint8[4] memory otherScopes =
+        uint16[4] memory otherScopes =
             [uint8(0), keystore.SCOPE_SELF_PAYER(), keystore.SCOPE_SPONSOR_PAYER(), keystore.SCOPE_NONCE()];
         for (uint256 i; i < otherScopes.length; i++) {
             // Policy actors are keyed by actorId only; no signing key is needed, so a distinct address-shaped id
             // avoids the vm.addr curve-order bound on an unbounded rootPk + i.
             bytes32 actorId = bytes32(bytes20(address(uint160(1000 + i))));
-            uint8 scope = otherScopes[i] | keystore.SCOPE_POLICY();
+            uint16 scope = otherScopes[i] | keystore.SCOPE_POLICY();
             _authorizePolicyActor(account, rootPk, actorId, scope, manager, commitment);
 
             assertEq(keystore.getPolicyManager(account, actorId), manager);
@@ -429,7 +429,7 @@ contract PolicyAccessorsTest is KeystoreTest {
         actorB = _boundExplicitActorId(account, rootPk, actorB);
         vm.assume(actorA != actorB);
 
-        uint8 scope = _boundGatedScope(scopeSeed);
+        uint16 scope = _boundGatedScope(scopeSeed);
         address managerA = _boundNonZeroAddress(managerSeedA);
         bytes32 commitmentA = _boundNonZeroWord(commitmentSeedA);
         address managerB = _boundNonZeroAddress(managerSeedB);
@@ -467,7 +467,7 @@ contract PolicyAccessorsTest is KeystoreTest {
         vm.assume(sharedActorId != bytes32(bytes20(accountA)));
         vm.assume(sharedActorId != bytes32(bytes20(accountB)));
 
-        uint8 scope = _boundGatedScope(scopeSeed);
+        uint16 scope = _boundGatedScope(scopeSeed);
         address managerA = _boundNonZeroAddress(managerSeedA);
         bytes32 commitmentA = _boundNonZeroWord(commitmentSeedA);
         address managerB = _boundNonZeroAddress(managerSeedB);
@@ -511,7 +511,7 @@ contract PolicyAccessorsTest is KeystoreTest {
             account, rootPk, sessionActorId, _boundGatedScope(scopeSeed), manager, _boundNonZeroWord(commitmentSeed)
         );
 
-        (, uint8 outScope, address policyTarget) =
+        (, uint16 outScope, address policyTarget) =
             keystore.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
         assertTrue(outScope & keystore.SCOPE_POLICY() != 0);
         assertEq(policyTarget, manager);
@@ -564,7 +564,7 @@ contract PolicyAccessorsTest is KeystoreTest {
         uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
 
-        (, uint8 outScope, address policyTarget) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
+        (, uint16 outScope, address policyTarget) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
         assertEq(outScope, uint8(0x00));
         assertEq(policyTarget, address(0));
     }
@@ -574,8 +574,8 @@ contract PolicyAccessorsTest is KeystoreTest {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     /// @dev A policy-bearing actor's scope: always carries SCOPE_POLICY, with arbitrary other bits mixed in.
-    function _boundGatedScope(uint8 seed) internal view returns (uint8) {
-        return uint8(seed) | keystore.SCOPE_POLICY();
+    function _boundGatedScope(uint8 seed) internal view returns (uint16) {
+        return uint16(seed) | keystore.SCOPE_POLICY();
     }
 
     /// @dev A non-zero policy manager address (so a written slot is distinguishable from an unwritten one).
@@ -637,13 +637,12 @@ contract PolicyAccessorsTest is KeystoreTest {
         address account,
         uint256 rootPk,
         bytes32 actorId,
-        uint8 scope,
+        uint16 scope,
         address policyManager,
         bytes32 commitment
     ) internal {
-        Keystore.ActorConfig memory cfg = Keystore.ActorConfig({
-            authenticator: address(k1Authenticator), scope: scope, expiry: 0
-        });
+        Keystore.ActorConfig memory cfg =
+            Keystore.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0});
         bytes memory policyData = abi.encodePacked(policyManager, commitment);
 
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
@@ -661,7 +660,7 @@ contract PolicyAccessorsTest is KeystoreTest {
     function _authorizeInlineSelfWithPolicy(
         address eoa,
         uint256 eoaPk,
-        uint8 scope,
+        uint16 scope,
         address policyManager,
         bytes32 commitment
     ) internal {

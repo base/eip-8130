@@ -19,11 +19,11 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 ///         + an explicit scope == 0 check): verifySignature is now operational (a SENDER-without-POLICY key can
 ///         sign), but such a key must NOT be able to vouch as a delegate, so a non-admin nested actor reverts.
 contract DelegateAuthenticatorTest is KeystoreTest {
-    uint8 constant SCOPE_SENDER = 0x01;
-    uint8 constant SCOPE_POLICY = 0x02;
-    uint8 constant SCOPE_NONCE = 0x04;
-    uint8 constant SCOPE_SELF_PAYER = 0x08;
-    uint8 constant SCOPE_SPONSOR_PAYER = 0x10;
+    uint16 constant SCOPE_SENDER = 0x01;
+    uint16 constant SCOPE_POLICY = 0x02;
+    uint16 constant SCOPE_NONCE = 0x04;
+    uint16 constant SCOPE_SELF_PAYER = 0x08;
+    uint16 constant SCOPE_SPONSOR_PAYER = 0x10;
     uint8 constant AUTHORIZE_ACTOR = 0x01;
 
     // ── Guard 1: require(data.length >= 40) ──
@@ -111,7 +111,7 @@ contract DelegateAuthenticatorTest is KeystoreTest {
 
         // Any non-zero scope → non-admin → the delegate vouch must revert. Clear POLICY so the scoped actor
         // needs no policyData at authorization time.
-        uint8 scope = uint8(bound(uint256(scopeSeed), 1, 255)) & ~SCOPE_POLICY;
+        uint16 scope = uint16(bound(uint256(scopeSeed), 1, 255)) & ~SCOPE_POLICY;
         vm.assume(scope != 0);
 
         (address delegateAccount,) = _createK1Account(ownerPk);
@@ -189,7 +189,7 @@ contract DelegateAuthenticatorTest is KeystoreTest {
 
     /// @dev Authorizes a new K1 actor (`newPk`) with `scope` on `account`, signed by the unrestricted
     ///      owner (`ownerPk`) via applySignedActorChanges on the local chain.
-    function _authorizeScopedK1Actor(address account, uint256 ownerPk, uint256 newPk, uint8 scope) internal {
+    function _authorizeScopedK1Actor(address account, uint256 ownerPk, uint256 newPk, uint16 scope) internal {
         Keystore.ActorConfig memory config =
             Keystore.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0});
 
