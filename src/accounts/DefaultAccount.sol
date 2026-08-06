@@ -2,6 +2,7 @@
 pragma solidity 0.8.36;
 
 import {Receiver} from "solady/accounts/Receiver.sol";
+import {LibCall} from "solady/utils/LibCall.sol";
 
 import {Keystore} from "../Keystore.sol";
 import {Scopes} from "../libraries/Scopes.sol";
@@ -141,11 +142,11 @@ contract DefaultAccount is Receiver {
 
     /// @dev Reverts, re-throwing the failed inner call's returndata verbatim so the caller sees the original revert
     ///      reason (custom error, Error(string), or Panic). Falls back to CallFailed when the returndata is empty.
+    ///      Uses Solady's {LibCall.bubbleUpRevert} for the propagation; the plain `call` above (not
+    ///      {LibCall.callContract}) is kept so value transfers to codeless targets (e.g. EOAs) still succeed.
     /// @param result The returndata captured from the failed low-level call.
     function _bubbleRevert(bytes memory result) private pure {
         if (result.length == 0) revert CallFailed();
-        assembly ("memory-safe") {
-            revert(add(result, 0x20), mload(result))
-        }
+        LibCall.bubbleUpRevert(result);
     }
 }
