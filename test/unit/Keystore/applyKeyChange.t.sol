@@ -6,7 +6,7 @@ import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice §10 test matrix for the authority / environment ops driven through {applySignedAccountChanges}:
-///         AuthorizeActor (sequenced + unsequenced), RevokeActor, BumpLocalEpoch, the op-ordering / solo fences,
+///         AuthorizeActor (sequenced + unsequenced), RevokeActor, BumpLocalEpoch, the op-ordering fence,
 ///         and the sequenced-channel replay/saturation edges. Lock/unlock (admin-only),
 ///         and multichain regression live in applyAccountChange.t.sol.
 contract ApplySignedAccountChangesTest is KeystoreTest {
@@ -374,17 +374,20 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         assertEq(seq1, 0);
     }
 
-    /// @notice A non-solo unsequenced bump reverts SoloOpNotSolo.
-    function test_bump_revert_unsequencedNonSolo(uint256 pk) public {
+    /// @notice An unsequenced bump may be batched with other ops (no solo rule): `[authorize, bump]` lands.
+    function test_bump_success_unsequencedNonSolo(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
         Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
         ch[0] = _authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "");
         ch[1] = _bumpChange();
 
-        Keystore.SignedAccountChanges memory s = _unseqBatch(pk, account, ch);
-        vm.expectRevert(Keystore.SoloOpNotSolo.selector);
-        keystore.applySignedAccountChanges(account, s);
+        _applyUnsequenced(pk, account, ch);
+
+        assertTrue(_isActor(account, ACTOR_A));
+        (uint32 epoch, uint32 seq) = keystore.getLocalEpochAndSequence(account);
+        assertEq(epoch, 1);
+        assertEq(seq, 0);
     }
 
     /// @notice Two independently signed unsequenced bumps at the same epoch: the first lands, the second dies on
@@ -493,18 +496,23 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         assertEq(epoch, 1);
     }
 
-    /// @notice `[unlock, <anything>]` reverts SoloOpNotSolo — unlock must be the sole op.
-    function test_solo_revert_unlockNotSolo(uint256 pk) public {
+    /// @notice Unlock may be batched with other ops (no solo rule): on a locked account `[unlock, bump]` initiates
+    ///         the unlock and bumps the epoch.
+    function test_unlock_success_batchedWithBump(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
+        _signedLock(pk, account, 1 hours);
+        assertTrue(keystore.isLocked(account));
 
         Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
         ch[0] = _unlockChange();
         ch[1] = _bumpChange();
+        _applyLocal(pk, account, ch);
 
-        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, ch);
-        vm.expectRevert(Keystore.SoloOpNotSolo.selector);
-        keystore.applySignedAccountChanges(account, s);
+        (, bool init,,) = keystore.getLockStatus(account);
+        assertTrue(init);
+        (uint32 epoch,) = keystore.getLocalEpochAndSequence(account);
+        assertEq(epoch, 1);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡

@@ -294,7 +294,7 @@ contract KeystoreTest is Test {
         _applyLocal(pk, account, _one(_lockChange(unlockDelay)));
     }
 
-    /// @dev Relay a signed (solo) Unlock authorized by `pk` on the local channel.
+    /// @dev Relay a signed Unlock authorized by `pk` on the local channel.
     function _signedUnlock(uint256 pk, address account) internal {
         _applyLocal(pk, account, _one(_unlockChange()));
     }

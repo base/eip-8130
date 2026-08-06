@@ -341,9 +341,6 @@ contract Keystore {
     /// @notice A BumpLocalEpoch was submitted on the Multichain channel. The local epoch is a local-mode concept.
     error EpochOpRequiresLocalChannel();
 
-    /// @notice A solo-only op (Unlock always; BumpLocalEpoch when unsequenced) appeared in a multi-op batch.
-    error SoloOpNotSolo();
-
     /// @notice A change payload did not match the shape required by its ChangeType (e.g. a non-empty payload on
     ///         BumpLocalEpoch / Unlock).
     error InvalidChangePayload();
@@ -556,8 +553,8 @@ contract Keystore {
     ///      Pipeline (in order): (1) split the sequence word; (2) reject a stale local epoch on both channels;
     ///      (3) validate/advance the sequence counter BEFORE apply (reentrancy discipline); (4) compute the digest
     ///      via the relocatable {_changesDigest} seam, authenticate, and reject a non-admin signer; (5) iterate
-    ///      changes enforcing op ordering, the lock policy, and the solo rules. Anyone may relay — authorization
-    ///      comes entirely from the signature.
+    ///      changes enforcing op ordering and the lock policy. Anyone may relay — authorization comes entirely from
+    ///      the signature.
     ///
     /// @param account The account whose configuration is changed.
     /// @param s The signed batch (channel, ordered changes, sequence word, signature).
@@ -615,10 +612,6 @@ contract Keystore {
 
             // Lock policy: while the account is locked, only environment ops (bump/lock/unlock) may run.
             if (locked && !env) revert AccountIsLocked();
-
-            // Solo rules: Unlock is always solo; an unsequenced BumpLocalEpoch is solo.
-            if (t == ChangeType.Unlock && n != 1) revert SoloOpNotSolo();
-            if (t == ChangeType.BumpLocalEpoch && !sequenced && n != 1) revert SoloOpNotSolo();
 
             if (t == ChangeType.AuthorizeActor) {
                 _applyAuthorize(account, sequenced, s.changes[i].payload);
@@ -718,7 +711,7 @@ contract Keystore {
     }
 
     /// @dev Unlock. Empty payload. Only from the hard-locked state with no pending unlock; sets the effective
-    ///      unlock timestamp from the stored delay. Always a solo batch (enforced by the caller).
+    ///      unlock timestamp from the stored delay.
     function _applyUnlock(address account, bytes calldata payload) private {
         if (payload.length != 0) revert InvalidChangePayload();
         AccountState storage a = _accountState[account];
