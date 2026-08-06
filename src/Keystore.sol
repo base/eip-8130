@@ -309,8 +309,7 @@ contract Keystore {
     ///         FLAG_UNLOCK_INITIATED clear) — i.e. never locked, or an unlock was already initiated.
     error NotLocked();
 
-    /// @notice The authenticated actor lacks the scope required to change the lock state (admin, or a recovery-class
-    ///         actor for Unlock).
+    /// @notice The authenticated actor lacks the scope required to change the lock state (admin only).
     error UnauthorizedLockChange();
 
     /// @notice The batch's committed local epoch does not match the account's current local epoch: every unlanded
@@ -794,11 +793,10 @@ contract Keystore {
         return sequenced;
     }
 
-    /// @dev Per-op authorization against the recovered signer's scope. Admin (scope 0) may perform every op; a
-    ///      recovery-class actor (Scopes.RECOVERY) may only initiate an Unlock and nothing else (the second fence).
-    function _opAuthorized(ChangeType t, uint16 scope) private pure returns (bool) {
-        if (scope == 0) return true;
-        return t == ChangeType.Unlock && (scope & Scopes.RECOVERY != 0);
+    /// @dev Per-op authorization against the recovered signer's scope. Only the admin (scope 0) may perform any
+    ///      signed change; every scoped (non-zero) actor is rejected for all ops, including Unlock.
+    function _opAuthorized(ChangeType, uint16 scope) private pure returns (bool) {
+        return scope == 0;
     }
 
     /// @dev Reads an actor's raw stored slot IGNORING expiry (structural presence): a populated _actorConfig entry

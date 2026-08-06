@@ -6,14 +6,13 @@ import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice §10 test matrix for the account-environment surface driven through {applySignedAccountChanges}: the lock
-///         / unlock ops, the recovery-class "second fence" (Unlock-only) authorization, garbage collection, the
-///         Multichain channel (no epochs, no unsequenced mode), and the split-layout regression checks.
+///         / unlock ops (admin-authorized), garbage collection, the Multichain channel (no epochs, no unsequenced
+///         mode), and the split-layout regression checks.
 contract AccountEnvironmentTest is KeystoreTest {
     bytes32 constant ACTOR_A = bytes32(uint256(0xA1));
     bytes32 constant ACTOR_B = bytes32(uint256(0xB2));
 
     uint16 constant SENDER = Scopes.SENDER;
-    uint16 constant RECOVERY = Scopes.RECOVERY;
 
     function setUp() public override {
         super.setUp();
@@ -198,48 +197,24 @@ contract AccountEnvironmentTest is KeystoreTest {
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    // RECOVERY-CLASS SECOND FENCE
+    // ADMIN-ONLY LOCK CHANGES
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice A recovery-class (scope RECOVERY) key may initiate a solo Unlock on a hard-locked account.
-    function test_recovery_success_unlockSolo(uint256 ownerSeed, uint256 recSeed) public {
+    /// @notice A scoped (non-admin) actor cannot initiate an Unlock — lock changes are admin-only
+    ///         (UnauthorizedLockChange).
+    function test_lock_revert_scopedActorCannotUnlock(uint256 ownerSeed, uint256 scopedSeed) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
-        uint256 recPk = _boundK1Pk(recSeed);
-        vm.assume(vm.addr(ownerPk) != vm.addr(recPk));
+        uint256 scopedPk = _boundK1Pk(scopedSeed);
+        vm.assume(vm.addr(ownerPk) != vm.addr(scopedPk));
         (address account,) = _createK1Account(ownerPk);
-        bytes32 recId = bytes32(bytes20(vm.addr(recPk)));
+        bytes32 scopedId = bytes32(bytes20(vm.addr(scopedPk)));
 
-        _applyLocal(ownerPk, account, _one(_authorizeChange(recId, address(k1Authenticator), RECOVERY, UNBOUNDED, "")));
+        _applyLocal(ownerPk, account, _one(_authorizeChange(scopedId, address(k1Authenticator), SENDER, UNBOUNDED, "")));
         _signedLock(ownerPk, account, 1 hours);
         assertTrue(keystore.isLocked(account));
 
-        // Recovery key signs a solo unlock.
-        _applyLocal(recPk, account, _one(_unlockChange()));
-
-        (, bool init,,) = keystore.getLockStatus(account);
-        assertTrue(init);
-    }
-
-    /// @notice A recovery-class key signing a RevokeActor batch fails the per-op authorization fence
-    ///         (UnauthorizedActorChange) — it may unlock and nothing else.
-    function test_recovery_revert_revokeUnauthorized(uint256 ownerSeed, uint256 recSeed) public {
-        uint256 ownerPk = _boundK1Pk(ownerSeed);
-        uint256 recPk = _boundK1Pk(recSeed);
-        vm.assume(vm.addr(ownerPk) != vm.addr(recPk));
-        (address account,) = _createK1Account(ownerPk);
-        bytes32 recId = bytes32(bytes20(vm.addr(recPk)));
-
-        _applyLocal(
-            ownerPk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
-        );
-        _applyLocal(ownerPk, account, _one(_authorizeChange(recId, address(k1Authenticator), RECOVERY, UNBOUNDED, "")));
-
-        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
-        ch[0] = _revokeChange(ACTOR_A);
-        ch[1] = _bumpChange();
-
-        Keystore.SignedAccountChanges memory s = _localBatch(recPk, account, ch);
-        vm.expectRevert(Keystore.UnauthorizedActorChange.selector);
+        Keystore.SignedAccountChanges memory s = _localBatch(scopedPk, account, _one(_unlockChange()));
+        vm.expectRevert(Keystore.UnauthorizedLockChange.selector);
         keystore.applySignedAccountChanges(account, s);
     }
 

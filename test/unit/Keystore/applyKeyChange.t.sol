@@ -7,8 +7,8 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice §10 test matrix for the authority / environment ops driven through {applySignedAccountChanges}:
 ///         AuthorizeActor (sequenced + unsequenced), RevokeActor, BumpLocalEpoch, the op-ordering / solo fences,
-///         the reduction rule, and the sequenced-channel replay/saturation edges. Lock/unlock, recovery-key
-///         authorization, garbage collection, and multichain regression live in applyAccountChange.t.sol.
+///         the reduction rule, and the sequenced-channel replay/saturation edges. Lock/unlock (admin-only),
+///         garbage collection, and multichain regression live in applyAccountChange.t.sol.
 contract ApplySignedAccountChangesTest is KeystoreTest {
     // Non-self, non-owner actor ids (low right-aligned constants never collide with a bytes20-left-aligned address).
     bytes32 constant ACTOR_A = bytes32(uint256(0xA1));
