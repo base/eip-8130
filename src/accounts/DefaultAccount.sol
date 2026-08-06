@@ -124,18 +124,17 @@ contract DefaultAccount is Receiver {
     // ══════════════════════════════════════════════
 
     /// @dev Authorized if `caller` is the account itself, or holds the TRUSTED_EXECUTOR authenticator with an
-    ///      unexpired config AND operational (sender) authority. Expiry: 0 means none; a non-zero expiry is enforced
-    ///      so a user-set expiry is honored on the execution path. Scope: driving execution requires sender
-    ///      authority — the unrestricted admin (scope == 0x00) or an actor with Scopes.SENDER that is not gated by a
-    ///      policy (Scopes.POLICY unset). A POLICY-gated actor must route every call through its manager, so granting
-    ///      it direct executeBatch would bypass that gate; fail closed. This mirrors the operational-actor definition
-    ///      in Keystore.verifySignature, keeping the execution and signing authorization surfaces aligned.
+    ///      unexpired config AND operational authority. Expiry: 0 means none; a non-zero expiry is enforced so a
+    ///      user-set expiry is honored on the execution path. Scope: driving execution requires operational
+    ///      authority ({Scopes.isOperational}) — the unrestricted admin (scope == 0x00) or a SENDER actor not gated
+    ///      by a policy. A POLICY-gated actor must route every call through its manager, so granting it direct
+    ///      executeBatch would bypass that gate; fail closed. Sharing {Scopes.isOperational} keeps the execution and
+    ///      signing (ERC-1271) authorization surfaces aligned.
     function _isAuthorizedCaller(address caller) internal view virtual returns (bool) {
         if (caller == address(this)) return true;
         Keystore.ActorConfig memory config = KEYSTORE.getActorConfig(address(this), bytes32(bytes20(caller)));
         if (config.authenticator != TRUSTED_EXECUTOR) return false;
         if (config.expiry != 0 && block.timestamp > config.expiry) return false;
-        uint16 scope = config.scope;
-        return scope == 0 || ((scope & Scopes.SENDER != 0) && (scope & Scopes.POLICY == 0));
+        return Scopes.isOperational(config.scope);
     }
 }
