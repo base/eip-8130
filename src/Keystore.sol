@@ -826,8 +826,6 @@ contract Keystore {
             ? replaySafeHash(account, block.chainid, hash)
             : replaySafeHash(account, 0, hash);
 
-        // Strip the type byte; the remainder is the standard authenticator(20) || data blob, resolved exactly like
-        // every other authentication in the registry.
         (actorId, scope) = authenticateActor(account, digest, auth[1:]);
     }
 
