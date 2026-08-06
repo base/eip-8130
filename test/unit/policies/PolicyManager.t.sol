@@ -406,7 +406,7 @@ contract PolicyManagerTest is KeystoreTest {
     }
 
     function _revokePolicyActor(bytes32 actorId) internal {
-        // Revoking a live actor is a reduction; the harness helper batches the required epoch bump.
+        // A bare admin-signed revoke; it clears the slot here (no outstanding replayable grant to retire).
         _revokeActor(account, ROOT_PK, actorId);
     }
 }

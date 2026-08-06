@@ -177,8 +177,9 @@ contract Keystore {
     bytes32 public constant ACCOUNT_CHANGE_TYPEHASH = keccak256("AccountChange(uint8 changeType,bytes payload)");
 
     /// @notice Local-channel sequence low-half sentinel marking an unsequenced (JIT) batch. A {SignedAccountChanges}
-    ///         whose low 32 bits equal this value does not consume a sequence; only both-channel ops are permitted
-    ///         on it (see {applySignedAccountChanges}). Sequenced batches may therefore run up to UNSEQUENCED - 2.
+    ///         whose low 32 bits equal this value does not consume a sequence, so it stays replayable until the local
+    ///         epoch moves; any op type may ride it (see {applySignedAccountChanges}). Sequenced batches may therefore
+    ///         run up to UNSEQUENCED - 2.
     uint32 public constant UNSEQUENCED = type(uint32).max;
 
     // ----------------------------------------------------------------------------------------------------------------
@@ -336,10 +337,6 @@ contract Keystore {
     ///         BumpLocalEpoch / Unlock).
     error InvalidChangePayload();
 
-    /// @notice Defensive guard for an unhandled ChangeType in the apply loop. Unreachable in practice — out-of-range
-    ///         wire values are rejected by the enum decoder during ABI-decoding.
-    error UnknownActorChangeType();
-
     /// @notice The auth blob is shorter than the 20-byte authenticator selector prefix.
     error InvalidAuthLength();
 
@@ -351,6 +348,7 @@ contract Keystore {
 
     /// @notice An actor config named an authenticator below the K1 sentinel (i.e. address(0)).
     error InvalidAuthenticator();
+
     /// @notice The policyData length did not match `scope & Scopes.POLICY` (52 bytes when set, empty when unset).
     error InvalidPolicyData();
 
@@ -582,7 +580,11 @@ contract Keystore {
         (, uint16 scope) = authenticateActor(account, digest, s.signature);
         if (scope != 0) revert UnauthorizedAccountChange();
 
-        // Lock policy is evaluated against the account's lock state at entry (lazily clearing an elapsed unlock).
+        // Lock policy is evaluated against the account's lock state at entry (lazily clearing an elapsed unlock). This
+        // snapshot drives ONLY the authority-op gate below; the entry value is sound there because lock state changes
+        // only via environment ops, and the ordering fence (AuthorityOpAfterEnvOp) forces every authority op before
+        // the first environment op — so throughout the authority prefix the snapshot still equals live state.
+        // The Lock/Unlock handlers themselves read live storage, so they never rely on this snapshot.
         bool locked = _checkAndClearLock(account);
 
         // Iterate. Track only whether an environment op has been seen, for the ordering fence.
@@ -608,13 +610,11 @@ contract Keystore {
             } else if (t == ChangeType.BumpLocalEpoch) {
                 _applyBumpLocalEpoch(account, isLocal, s.changes[i].payload);
             } else if (t == ChangeType.Lock) {
-                _applyLock(account, locked, s.changes[i].payload);
-            } else if (t == ChangeType.Unlock) {
-                _applyUnlock(account, s.changes[i].payload);
+                _applyLock(account, s.changes[i].payload);
             } else {
-                // Unreachable: out-of-range wire values are rejected by the enum decoder while ABI-decoding the
-                // calldata. Kept as a defensive guard so any future ChangeType must be wired in explicitly.
-                revert UnknownActorChangeType();
+                // ChangeType.Unlock (the only remaining member; out-of-range values are rejected by the enum decoder
+                // while ABI-decoding the calldata).
+                _applyUnlock(account, s.changes[i].payload);
             }
         }
     }
@@ -626,10 +626,10 @@ contract Keystore {
     /// @dev AuthorizeActor. `payload = abi.encode(bytes32 actorId, ActorConfig cfg, bytes policyData)`; `cfg.expiry`
     ///      is the granted expiry and the signature self-expires at it (or never, if `cfg.expiry == 0`). A plain
     ///      upsert on both channels and both sequencing modes — the only gate is that a non-zero expiry be in the
-    ///      future. An
-    ///      unsequenced grant is replayable (it consumes no counter) and last-write-wins on its slot until the grant
-    ///      lapses or the epoch is bumped; durable reduction (revoke, shorter expiry, narrower scope) is therefore a
-    ///      wallet responsibility — batch the reducing op with a {BumpLocalEpoch} to retire outstanding grants.
+    ///      future. An unsequenced grant is replayable (it consumes no counter) and last-write-wins on its slot until
+    ///      the grant lapses or the epoch is bumped; durable reduction (revoke, shorter expiry, narrower scope) is
+    ///      therefore a wallet responsibility — batch the reducing op with a {BumpLocalEpoch} to retire outstanding
+    ///      grants.
     function _applyAuthorize(address account, bytes calldata payload) private {
         (bytes32 actorId, ActorConfig memory cfg, bytes memory policyData) =
             abi.decode(payload, (bytes32, ActorConfig, bytes));
@@ -670,13 +670,23 @@ contract Keystore {
         a.localSequence = 0;
     }
 
-    /// @dev Lock. `payload = abi.encode(uint16 unlockDelay)`. Only from the unlocked state; stores the delay.
-    function _applyLock(address account, bool locked, bytes calldata payload) private {
-        if (locked) revert AccountIsLocked();
+    /// @dev Lock. `payload = abi.encode(uint16 unlockDelay)`. Only from the unlocked state; stores the delay. Gates on
+    ///      LIVE lock state (not the batch-entry snapshot) and its sibling {_applyUnlock} also mutates live storage, so
+    ///      within one batch a later op sees earlier ops' writes — e.g. `[Lock, Unlock, Lock]` correctly reverts on the
+    ///      trailing Lock instead of leaving FLAG_UNLOCK_INITIATED set over a delay-valued union.
+    ///
+    ///      Two facts make the live gate airtight: (a) block.timestamp is constant within a tx, so an unlock initiated
+    ///      earlier in the batch can never elapse mid-batch — once FLAG_UNLOCK_INITIATED is set, {_isLocked} stays true
+    ///      for the remainder of the batch and a following Lock reverts; (b) the entry {_checkAndClearLock} wipes any
+    ///      already-elapsed lock, so a permitted Lock always starts from clean flags. The explicit UNLOCK_INITIATED
+    ///      clear below therefore writes a clean hard-locked flag set (LOCKED set, UNLOCK_INITIATED cleared) so
+    ///      lockUnion unambiguously holds the delay — defense-in-depth given (a)/(b), not a live repair.
+    function _applyLock(address account, bytes calldata payload) private {
+        AccountState storage a = _accountState[account];
+        if (_isLocked(a)) revert AccountIsLocked();
         uint16 unlockDelay = abi.decode(payload, (uint16));
         if (unlockDelay == 0) revert ZeroUnlockDelay();
-        AccountState storage a = _accountState[account];
-        a.flags |= FLAG_LOCKED;
+        a.flags = (a.flags | FLAG_LOCKED) & ~FLAG_UNLOCK_INITIATED;
         a.lockUnion = unlockDelay;
         emit AccountLocked(account, unlockDelay);
     }
@@ -692,27 +702,6 @@ contract Keystore {
         a.flags = flags | FLAG_UNLOCK_INITIATED;
         a.lockUnion = unlocksAt;
         emit AccountUnlockInitiated(account, unlocksAt);
-    }
-
-    // ----------------------------------------------------------------------------------------------------------------
-    // SIGNED-CHANGE HELPERS
-    // ----------------------------------------------------------------------------------------------------------------
-
-    /// @dev Reads an actor's raw stored slot IGNORING expiry (structural presence): a populated _actorConfig entry
-    ///      for any non-self actor or a non-k1 self, or the inline k1 self when enabled. Returns whether the slot is
-    ///      occupied plus its scope and expiry. Mirrors {getActorConfig}'s resolution minus the expiry masking.
-    function _rawSlot(address account, bytes32 actorId)
-        private
-        view
-        returns (bool occupied, uint16 scope, uint48 expiry)
-    {
-        ActorConfig storage c = _actorConfig[actorId][account];
-        if (c.authenticator >= K1_AUTHENTICATOR) return (true, c.scope, c.expiry);
-        if (actorId == bytes32(bytes20(account)) && !_isDefaultEoaRevoked(account)) {
-            AccountState storage st = _accountState[account];
-            return (true, st.defaultEOAScope, st.defaultEOAExpiry);
-        }
-        return (false, 0, 0);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡

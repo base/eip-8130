@@ -354,7 +354,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
     }
 
     function _revokeProvider(address account) internal {
-        // Revoking a live actor is a reduction; the harness helper batches the required epoch bump.
+        // A bare admin-signed revoke; it clears the slot here (no outstanding replayable grant to retire).
         _revokeActor(account, ROOT_PK, bytes32(bytes20(provider)));
     }
 }

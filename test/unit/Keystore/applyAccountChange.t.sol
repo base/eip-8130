@@ -88,6 +88,27 @@ contract AccountEnvironmentTest is KeystoreTest {
         keystore.applySignedAccountChanges(account, s);
     }
 
+    /// @notice Regression: `[Lock, Unlock, Lock]` in a single batch from the unlocked state must revert on the
+    ///         trailing Lock. _applyLock gates on LIVE lock state, so it sees the mid-batch Unlock rather than the
+    ///         stale batch-entry snapshot; otherwise the final Lock would corrupt the union (FLAG_UNLOCK_INITIATED
+    ///         set over a delay-valued lockUnion, making the account read instantly unlockable).
+    function test_lock_revert_lockUnlockLockSameBatch(uint256 pkSeed, uint16 d1, uint16 d2) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+        d1 = uint16(bound(d1, 1, type(uint16).max));
+        d2 = uint16(bound(d2, 1, type(uint16).max));
+
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](3);
+        ch[0] = _lockChange(d1);
+        ch[1] = _unlockChange();
+        ch[2] = _lockChange(d2);
+
+        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, ch);
+        vm.expectRevert(Keystore.AccountIsLocked.selector);
+        keystore.applySignedAccountChanges(account, s);
+    }
+
     /// @notice An unlock on a never-locked account reverts NotLocked.
     function test_unlock_revert_whenNeverLocked(uint256 pkSeed) public {
         uint256 pk = _boundK1Pk(pkSeed);
