@@ -342,7 +342,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({
             actorId: bytes32(bytes20(provider)),
-            changeType: Keystore.ChangeType.Authorize,
+            changeType: Keystore.ActorChangeType.Authorize,
             data: abi.encode(cfg, abi.encodePacked(policyManager, commitment))
         });
         _applyAsRoot(account, changes);
@@ -351,7 +351,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
     function _revokeProvider(address account) internal {
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({
-            actorId: bytes32(bytes20(provider)), changeType: Keystore.ChangeType.Revoke, data: ""
+            actorId: bytes32(bytes20(provider)), changeType: Keystore.ActorChangeType.Revoke, data: ""
         });
         _applyAsRoot(account, changes);
     }

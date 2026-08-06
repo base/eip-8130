@@ -51,10 +51,10 @@ contract Keystore {
     ///
     /// @dev ABI-encodes as uint8, so the wire values are preserved (Authorize = 0x01, Revoke = 0x02) and the
     ///      SignedActorChanges typehash keeps `uint8 changeType` — digests and the external ABI selector are
-    ///      unchanged. Invalid (0) is the reachable "unrecognized" case, rejected in-handler with {UnknownChangeType};
+    ///      unchanged. Invalid (0) is the reachable "unrecognized" case, rejected in-handler with {UnknownActorChangeType};
     ///      out-of-range wire values (>= 3) can never reach the handler — the enum decoder rejects them (reverts)
     ///      while ABI-decoding the calldata.
-    enum ChangeType {
+    enum ActorChangeType {
         Invalid,
         Authorize,
         Revoke
@@ -64,10 +64,10 @@ contract Keystore {
     ///
     /// @dev ABI-encodes as uint8, so the wire values are preserved (Lock = 0x01, Unlock = 0x02) and the
     ///      SignedLockChange typehash keeps `uint8 op` — digests and the external ABI selector are unchanged.
-    ///      Invalid (0) is the reachable "unrecognized" case, rejected in-handler with {UnknownLockOp}; out-of-range
+    ///      Invalid (0) is the reachable "unrecognized" case, rejected in-handler with {UnknownLockChangeType}; out-of-range
     ///      wire values (>= 3) can never reach the handler — the enum decoder rejects them (reverts) while
     ///      ABI-decoding the calldata.
-    enum LockOp {
+    enum LockChangeType {
         Invalid,
         Lock,
         Unlock
@@ -75,7 +75,7 @@ contract Keystore {
 
     /// @notice A single authorize/revoke operation within a signed batch.
     struct ActorChange {
-        ChangeType changeType; // Authorize or Revoke (Invalid rejected in-handler)
+        ActorChangeType changeType; // Authorize or Revoke (Invalid rejected in-handler)
         bytes32 actorId;
         bytes data; // operation-specific: ActorConfig || policyData for authorize, empty for revoke
     }
@@ -271,8 +271,8 @@ contract Keystore {
     /// @notice The authenticated actor lacks the scope required to change actors.
     error UnauthorizedActorChange();
 
-    /// @notice An ActorChange carried ChangeType.Invalid (0). Other unrecognized wire values revert at ABI-decode.
-    error UnknownChangeType();
+    /// @notice An ActorChange carried ActorChangeType.Invalid (0). Other unrecognized wire values revert at ABI-decode.
+    error UnknownActorChangeType();
 
     /// @notice The importAccount ERC-1271 signature check did not return the magic value.
     error InvalidImportSignature();
@@ -284,8 +284,8 @@ contract Keystore {
     ///         FLAG_UNLOCK_INITIATED clear) — i.e. never locked, or an unlock was already initiated.
     error NotLocked();
 
-    /// @notice applySignedLockChanges carried LockOp.Invalid (0). Other unrecognized wire values revert at ABI-decode.
-    error UnknownLockOp();
+    /// @notice applySignedLockChanges carried LockChangeType.Invalid (0). Other unrecognized wire values revert at ABI-decode.
+    error UnknownLockChangeType();
 
     /// @notice An unlock op (op = 2) carried a non-zero unlock delay (unlock delay is set only by the lock op).
     error InvalidUnlockDelay();
@@ -482,7 +482,7 @@ contract Keystore {
     /// @dev Reverts with InvalidAuthLength, InvalidSignature, AuthenticationFailed, AuthenticatorMismatch,
     ///      ActorExpired, or DefaultEoaRevoked when `auth` fails to authenticate a live actor.
     /// @dev Reverts with UnauthorizedActorChange when the authenticated actor is not unrestricted (scope != 0).
-    /// @dev Reverts with UnknownChangeType when a change carries an unrecognized changeType.
+    /// @dev Reverts with UnknownActorChangeType when a change carries an unrecognized changeType.
     /// @dev Reverts with InvalidAuthenticator or InvalidPolicyData on a malformed authorize.
     /// @dev Reverts with UnknownActor when revoking an actor that is not authorized.
     ///
@@ -509,17 +509,17 @@ contract Keystore {
         // Only an unrestricted actor (scope 0) may change actors; there is no elevated "admin" scope bit.
         if (scope != 0) revert UnauthorizedActorChange();
 
-        // Apply actorChanges. Out-of-range changeType values revert at ABI-decode, so only ChangeType.Invalid reaches
+        // Apply actorChanges. Out-of-range changeType values revert at ABI-decode, so only ActorChangeType.Invalid reaches
         // the fall-through revert here.
         for (uint256 i; i < actorChanges.length; i++) {
-            if (actorChanges[i].changeType == ChangeType.Authorize) {
+            if (actorChanges[i].changeType == ActorChangeType.Authorize) {
                 (ActorConfig memory newActorConfig, bytes memory policyData) =
                     abi.decode(actorChanges[i].data, (ActorConfig, bytes));
                 _authorizeActor(account, actorChanges[i].actorId, newActorConfig, policyData);
-            } else if (actorChanges[i].changeType == ChangeType.Revoke) {
+            } else if (actorChanges[i].changeType == ActorChangeType.Revoke) {
                 _revokeActor(account, actorChanges[i].actorId);
             } else {
-                revert UnknownChangeType();
+                revert UnknownActorChangeType();
             }
         }
     }
@@ -538,9 +538,9 @@ contract Keystore {
     ///      stay coherent on the same counter). Because both entry points share this counter, a pre-signed local
     ///      actor change and a lock op contend for the same sequence: whichever is relayed first consumes it and
     ///      invalidates the other until it is re-signed at the next sequence.
-    /// @dev op = LockOp.Lock (1): only from the unlocked state (reverts AccountIsLocked if currently locked). Sets
+    /// @dev op = LockChangeType.Lock (1): only from the unlocked state (reverts AccountIsLocked if currently locked). Sets
     ///      FLAG_LOCKED and stores `unlockDelay` in `lockUnion`. Emits AccountLocked.
-    /// @dev op = LockOp.Unlock (2): only from the hard-locked state with no pending unlock (reverts NotLocked
+    /// @dev op = LockChangeType.Unlock (2): only from the hard-locked state with no pending unlock (reverts NotLocked
     ///      otherwise); `unlockDelay` MUST be 0. Sets FLAG_UNLOCK_INITIATED and overwrites `lockUnion` with
     ///      unlocksAt = block.timestamp + storedDelay. Emits AccountUnlockInitiated.
     /// @dev Reverts with InvalidAuthLength, InvalidSignature, AuthenticationFailed, AuthenticatorMismatch,
@@ -550,14 +550,16 @@ contract Keystore {
     /// @dev Reverts with AccountIsLocked when a lock op targets an already-locked account.
     /// @dev Reverts with InvalidUnlockDelay when an unlock op carries a non-zero unlock delay.
     /// @dev Reverts with NotLocked when an unlock op targets an account that is not hard-locked.
-    /// @dev Reverts with UnknownLockOp when `op` is LockOp.Invalid.
+    /// @dev Reverts with UnknownLockChangeType when `op` is LockChangeType.Invalid.
     ///
     /// @param account The account whose lock state is changed.
-    /// @param op The lock operation: LockOp.Lock (1) to hard-lock, LockOp.Unlock (2) to initiate an unlock.
+    /// @param op The lock operation: LockChangeType.Lock (1) to hard-lock, LockChangeType.Unlock (2) to initiate an unlock.
     /// @param unlockDelay Delay in seconds before the account unlocks after an unlock is initiated (lock op only,
     ///        max uint16, ~18 hours); MUST be 0 for the unlock op.
     /// @param auth Authenticator(20) || authenticator-specific data authenticating an unrestricted actor.
-    function applySignedLockChanges(address account, LockOp op, uint16 unlockDelay, bytes calldata auth) external {
+    function applySignedLockChanges(address account, LockChangeType op, uint16 unlockDelay, bytes calldata auth)
+        external
+    {
         // Local channel only: bind the digest to the current chain and consume the local sequence (post-increment,
         // hashing the pre-increment value — identical to applySignedActorChanges so both paths share one counter).
         uint64 sequence = _accountState[account].localSequence++;
@@ -570,8 +572,8 @@ contract Keystore {
 
         AccountState storage config = _accountState[account];
 
-        // Out-of-range op values revert at ABI-decode, so only LockOp.Invalid reaches the fall-through revert below.
-        if (op == LockOp.Lock) {
+        // Out-of-range op values revert at ABI-decode, so only LockChangeType.Invalid reaches the fall-through revert below.
+        if (op == LockChangeType.Lock) {
             // Lock only from the unlocked state; lazily clear any elapsed unlock (also clears LOCKED) first.
             if (_checkAndClearLock(account)) revert AccountIsLocked();
             // Require non-zero unlock delay.
@@ -581,7 +583,7 @@ contract Keystore {
             config.flags |= FLAG_LOCKED;
             config.lockUnion = unlockDelay;
             emit AccountLocked(account, unlockDelay);
-        } else if (op == LockOp.Unlock) {
+        } else if (op == LockChangeType.Unlock) {
             // The unlock op never sets the delay; it consumes the delay stored by the lock op.
             if (unlockDelay != 0) revert InvalidUnlockDelay();
             // Require the account is hard-locked (LOCKED set) with no unlock already initiated (UNLOCK_INITIATED clear).
@@ -594,7 +596,7 @@ contract Keystore {
             config.lockUnion = unlocksAt;
             emit AccountUnlockInitiated(account, unlocksAt);
         } else {
-            revert UnknownLockOp();
+            revert UnknownLockChangeType();
         }
     }
 
@@ -1165,7 +1167,7 @@ contract Keystore {
     function _computeSignedLockChangesDigest(
         address account,
         uint256 chainId,
-        LockOp op,
+        LockChangeType op,
         uint16 unlockDelay,
         uint64 sequence
     ) internal pure returns (bytes32) {

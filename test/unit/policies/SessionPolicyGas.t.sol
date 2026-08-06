@@ -373,7 +373,7 @@ contract SessionPolicyGasTest is KeystoreTest {
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({
             actorId: actorId,
-            changeType: Keystore.ChangeType.Authorize,
+            changeType: Keystore.ActorChangeType.Authorize,
             data: abi.encode(cfg, abi.encodePacked(address(manager), commitment))
         });
         uint64 chainId = uint64(block.chainid);

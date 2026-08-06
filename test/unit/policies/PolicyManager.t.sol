@@ -360,7 +360,7 @@ contract PolicyManagerTest is KeystoreTest {
 
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({
-            actorId: actorId, changeType: Keystore.ChangeType.Authorize, data: abi.encode(cfg, policyData)
+            actorId: actorId, changeType: Keystore.ActorChangeType.Authorize, data: abi.encode(cfg, policyData)
         });
 
         uint64 chainId = uint64(block.chainid);
@@ -394,7 +394,7 @@ contract PolicyManagerTest is KeystoreTest {
 
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({
-            actorId: actorId, changeType: Keystore.ChangeType.Authorize, data: abi.encode(cfg, policyData)
+            actorId: actorId, changeType: Keystore.ActorChangeType.Authorize, data: abi.encode(cfg, policyData)
         });
 
         uint64 chainId = uint64(block.chainid);
@@ -405,7 +405,7 @@ contract PolicyManagerTest is KeystoreTest {
 
     function _revokePolicyActor(bytes32 actorId) internal {
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ChangeType.Revoke, data: ""});
+        changes[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ActorChangeType.Revoke, data: ""});
 
         uint64 chainId = uint64(block.chainid);
         uint64 sequence = keystore.getChangeSequences(account).local;

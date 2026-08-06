@@ -64,7 +64,7 @@ contract DefaultAccountTest is KeystoreTest {
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({
             actorId: newActorId,
-            changeType: Keystore.ChangeType.Authorize,
+            changeType: Keystore.ActorChangeType.Authorize,
             data: abi.encode(Keystore.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes(""))
         });
 

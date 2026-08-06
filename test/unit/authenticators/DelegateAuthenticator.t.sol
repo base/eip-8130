@@ -194,7 +194,7 @@ contract DelegateAuthenticatorTest is KeystoreTest {
 
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({
-            changeType: Keystore.ChangeType.Authorize,
+            changeType: Keystore.ActorChangeType.Authorize,
             actorId: bytes32(bytes20(vm.addr(newPk))),
             data: abi.encode(config, bytes(""))
         });

@@ -40,10 +40,10 @@ contract KeystoreTest is Test {
     bytes32 constant LOCK_CHANGE_TYPEHASH =
         keccak256("SignedLockChange(address account,uint256 chainId,uint8 op,uint16 unlockDelay,uint64 sequence)");
 
-    // Wire values for the LockOp enum (which ABI-encodes as uint8). Used to compute the signed digest, whose typehash
-    // binds `uint8 op`; the applySignedLockChanges call itself takes the typed Keystore.LockOp.
-    uint8 constant LOCK_OP = uint8(Keystore.LockOp.Lock);
-    uint8 constant UNLOCK_OP = uint8(Keystore.LockOp.Unlock);
+    // Wire values for the LockChangeType enum (which ABI-encodes as uint8). Used to compute the signed digest, whose typehash
+    // binds `uint8 op`; the applySignedLockChanges call itself takes the typed Keystore.LockChangeType.
+    uint8 constant LOCK_OP = uint8(Keystore.LockChangeType.Lock);
+    uint8 constant UNLOCK_OP = uint8(Keystore.LockChangeType.Unlock);
 
     function setUp() public virtual {
         keystore = new Keystore();
@@ -165,12 +165,14 @@ contract KeystoreTest is Test {
 
     /// @dev Relay a signed lock op (op = 1) authorized by `pk`.
     function _signedLock(uint256 pk, address account, uint16 unlockDelay) internal {
-        keystore.applySignedLockChanges(account, Keystore.LockOp.Lock, unlockDelay, _lockAuth(pk, account, unlockDelay));
+        keystore.applySignedLockChanges(
+            account, Keystore.LockChangeType.Lock, unlockDelay, _lockAuth(pk, account, unlockDelay)
+        );
     }
 
     /// @dev Relay a signed unlock op (op = 2) authorized by `pk`.
     function _signedUnlock(uint256 pk, address account) internal {
-        keystore.applySignedLockChanges(account, Keystore.LockOp.Unlock, 0, _unlockAuth(pk, account));
+        keystore.applySignedLockChanges(account, Keystore.LockChangeType.Unlock, 0, _unlockAuth(pk, account));
     }
 
     // ── Fuzzed key bounding ──
