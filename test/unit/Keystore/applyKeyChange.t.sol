@@ -51,7 +51,7 @@ contract ApplyConfigChangeActorTest is KeystoreTest {
         assertTrue(_isActor(account, actorId));
 
         Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](1);
-        ch[0] = Keystore.ActorChange({actorId: actorId, changeType: 0x02, data: ""});
+        ch[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ChangeType.Revoke, data: ""});
         _signApply(account, pk, ch);
 
         assertFalse(_isActor(account, actorId));
@@ -198,7 +198,7 @@ contract ApplyConfigChangeActorTest is KeystoreTest {
         vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
 
         Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](1);
-        ch[0] = Keystore.ActorChange({actorId: actorId, changeType: 0x02, data: ""});
+        ch[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ChangeType.Revoke, data: ""});
         bytes memory auth = _authOver(account, pk, ch);
         vm.expectRevert();
         keystore.applySignedActorChanges(account, uint64(block.chainid), ch, auth);
@@ -400,7 +400,8 @@ contract ApplyConfigChangeActorTest is KeystoreTest {
         // Phase 1: in one batch signed by the EOA, add the device key as a full owner and revoke the default EOA.
         Keystore.ActorChange[] memory switchChanges = new Keystore.ActorChange[](2);
         switchChanges[0] = _authorizeChange(deviceActorId, address(k1Authenticator), 0, "")[0];
-        switchChanges[1] = Keystore.ActorChange({actorId: selfActorId, changeType: 0x02, data: ""});
+        switchChanges[1] =
+            Keystore.ActorChange({actorId: selfActorId, changeType: Keystore.ChangeType.Revoke, data: ""});
         _signApply(eoa, eoaPk, switchChanges);
 
         assertFalse(_isActor(eoa, selfActorId));
@@ -431,7 +432,7 @@ contract ApplyConfigChangeActorTest is KeystoreTest {
 
         Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](2);
         ch[0] = _authorizeChange(newActorId, address(k1Authenticator), 0, "")[0];
-        ch[1] = Keystore.ActorChange({actorId: selfActorId, changeType: 0x02, data: ""});
+        ch[1] = Keystore.ActorChange({actorId: selfActorId, changeType: Keystore.ChangeType.Revoke, data: ""});
         _signApply(eoa, eoaPk, ch);
 
         assertFalse(_isActor(eoa, selfActorId));
@@ -537,15 +538,18 @@ contract ApplyConfigChangeActorTest is KeystoreTest {
         keystore.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
     }
 
-    /// @notice A changeType outside {authorize, revoke} reverts with UnknownChangeType (after the scope-0 gate).
-    function test_applySignedActorChanges_revert_unknownChangeType(uint256 pk, uint8 changeType) public {
+    /// @notice An ActorChange carrying ChangeType.Invalid (0) reverts UnknownChangeType (after the scope-0 gate) —
+    ///         the only unrecognized changeType that reaches the handler. Out-of-range wire values (>= 3) are rejected
+    ///         at ABI-decode instead, the same enum-decode guarantee exercised by
+    ///         ApplyAccountChange.test_applySignedLockChanges_revert_outOfRangeOp.
+    function test_applySignedActorChanges_revert_invalidChangeType(uint256 pk) public {
         pk = _boundK1Pk(pk);
-        vm.assume(changeType != 0x01 && changeType != 0x02);
         (address account,) = _createK1Account(pk);
 
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] =
-            Keystore.ActorChange({actorId: bytes32(bytes20(vm.addr(0xBEEF))), changeType: changeType, data: ""});
+        changes[0] = Keystore.ActorChange({
+            actorId: bytes32(bytes20(vm.addr(0xBEEF))), changeType: Keystore.ChangeType.Invalid, data: ""
+        });
 
         bytes memory auth = _authOver(account, pk, changes);
         vm.expectRevert(Keystore.UnknownChangeType.selector);
@@ -654,14 +658,14 @@ contract ApplyConfigChangeActorTest is KeystoreTest {
         // [authorize A, revoke A] → A ends not live.
         Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](2);
         ch[0] = _authorizeChange(actorId, address(k1Authenticator), 0, "")[0];
-        ch[1] = Keystore.ActorChange({actorId: actorId, changeType: 0x02, data: ""});
+        ch[1] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ChangeType.Revoke, data: ""});
         _signApply(account, pk, ch);
         assertFalse(_isActor(account, actorId));
 
         // Pre-authorize, then [revoke A, authorize A] → A ends live.
         _authorizeActor(account, pk, actorId, address(k1Authenticator));
         Keystore.ActorChange[] memory ch2 = new Keystore.ActorChange[](2);
-        ch2[0] = Keystore.ActorChange({actorId: actorId, changeType: 0x02, data: ""});
+        ch2[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ChangeType.Revoke, data: ""});
         ch2[1] = _authorizeChange(actorId, address(k1Authenticator), 0, "")[0];
         _signApply(account, pk, ch2);
         assertTrue(_isActor(account, actorId));
@@ -685,7 +689,7 @@ contract ApplyConfigChangeActorTest is KeystoreTest {
         _authorizeActor(account, ownerPk, signerId, address(k1Authenticator));
 
         Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](2);
-        ch[0] = Keystore.ActorChange({actorId: signerId, changeType: 0x02, data: ""});
+        ch[0] = Keystore.ActorChange({actorId: signerId, changeType: Keystore.ChangeType.Revoke, data: ""});
         ch[1] = _authorizeChange(bId, address(k1Authenticator), 0, "")[0];
         _signApply(account, signerPk, ch);
 
@@ -740,7 +744,7 @@ contract ApplyConfigChangeActorTest is KeystoreTest {
         _authorizeActor(account, pk, actorId, address(k1Authenticator));
 
         Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](1);
-        ch[0] = Keystore.ActorChange({actorId: actorId, changeType: 0x02, data: ""});
+        ch[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ChangeType.Revoke, data: ""});
         vm.expectEmit(true, true, false, true, address(keystore));
         emit Keystore.ActorRevoked(account, actorId);
         _signApply(account, pk, ch);
@@ -757,7 +761,7 @@ contract ApplyConfigChangeActorTest is KeystoreTest {
         changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({
             actorId: actorId,
-            changeType: 0x01,
+            changeType: Keystore.ChangeType.Authorize,
             data: abi.encode(Keystore.ActorConfig({authenticator: auth, scope: scope, expiry: 0}), policyData)
         });
     }
@@ -782,7 +786,7 @@ contract ApplyConfigChangeActorTest is KeystoreTest {
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({
             actorId: bytes32(bytes20(eoa)),
-            changeType: 0x01,
+            changeType: Keystore.ChangeType.Authorize,
             data: abi.encode(
                 Keystore.ActorConfig({authenticator: keystore.K1_AUTHENTICATOR(), scope: scope, expiry: 0}), bytes("")
             )
@@ -806,7 +810,7 @@ contract ApplyConfigChangeActorTest is KeystoreTest {
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({
             actorId: newActorId,
-            changeType: 0x01,
+            changeType: Keystore.ChangeType.Authorize,
             data: abi.encode(Keystore.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes(""))
         });
 
@@ -819,7 +823,7 @@ contract ApplyConfigChangeActorTest is KeystoreTest {
 
     function _revokeActor(address account, uint256 pk, bytes32 actorId) internal {
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({actorId: actorId, changeType: 0x02, data: ""});
+        changes[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ChangeType.Revoke, data: ""});
 
         uint64 seq = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
@@ -842,7 +846,7 @@ contract ApplyConfigChangeActorTest is KeystoreTest {
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({
             actorId: newActorId,
-            changeType: 0x01,
+            changeType: Keystore.ChangeType.Authorize,
             data: abi.encode(Keystore.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes(""))
         });
 

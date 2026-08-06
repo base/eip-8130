@@ -35,13 +35,15 @@ contract KeystoreTest is Test {
         "ActorChange(uint8 changeType,bytes32 actorId,bytes data)"
     );
 
-    bytes32 constant ACTORCHANGE_TYPEHASH = keccak256("ActorChange(uint8 changeType,bytes32 actorId,bytes data)");
+    bytes32 constant ACTOR_CHANGE_TYPEHASH = keccak256("ActorChange(uint8 changeType,bytes32 actorId,bytes data)");
 
     bytes32 constant LOCK_CHANGE_TYPEHASH =
         keccak256("SignedLockChange(address account,uint256 chainId,uint8 op,uint16 unlockDelay,uint64 sequence)");
 
-    uint8 constant LOCK_OP = 0x01;
-    uint8 constant UNLOCK_OP = 0x02;
+    // Wire values for the LockOp enum (which ABI-encodes as uint8). Used to compute the signed digest, whose typehash
+    // binds `uint8 op`; the applySignedLockChanges call itself takes the typed Keystore.LockOp.
+    uint8 constant LOCK_OP = uint8(Keystore.LockOp.Lock);
+    uint8 constant UNLOCK_OP = uint8(Keystore.LockOp.Unlock);
 
     function setUp() public virtual {
         keystore = new Keystore();
@@ -119,7 +121,7 @@ contract KeystoreTest is Test {
         for (uint256 i; i < actorChanges.length; i++) {
             actorChangeHash[i] = keccak256(
                 abi.encode(
-                    ACTORCHANGE_TYPEHASH,
+                    ACTOR_CHANGE_TYPEHASH,
                     actorChanges[i].changeType,
                     actorChanges[i].actorId,
                     keccak256(actorChanges[i].data)
@@ -163,12 +165,12 @@ contract KeystoreTest is Test {
 
     /// @dev Relay a signed lock op (op = 1) authorized by `pk`.
     function _signedLock(uint256 pk, address account, uint16 unlockDelay) internal {
-        keystore.applySignedLockChanges(account, LOCK_OP, unlockDelay, _lockAuth(pk, account, unlockDelay));
+        keystore.applySignedLockChanges(account, Keystore.LockOp.Lock, unlockDelay, _lockAuth(pk, account, unlockDelay));
     }
 
     /// @dev Relay a signed unlock op (op = 2) authorized by `pk`.
     function _signedUnlock(uint256 pk, address account) internal {
-        keystore.applySignedLockChanges(account, UNLOCK_OP, 0, _unlockAuth(pk, account));
+        keystore.applySignedLockChanges(account, Keystore.LockOp.Unlock, 0, _unlockAuth(pk, account));
     }
 
     // ── Fuzzed key bounding ──

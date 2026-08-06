@@ -24,7 +24,6 @@ contract DelegateAuthenticatorTest is KeystoreTest {
     uint16 constant SCOPE_NONCE = 0x04;
     uint16 constant SCOPE_SELF_PAYER = 0x08;
     uint16 constant SCOPE_SPONSOR_PAYER = 0x10;
-    uint8 constant AUTHORIZE_ACTOR = 0x01;
 
     // ── Guard 1: require(data.length >= 40) ──
 
@@ -195,7 +194,9 @@ contract DelegateAuthenticatorTest is KeystoreTest {
 
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({
-            changeType: AUTHORIZE_ACTOR, actorId: bytes32(bytes20(vm.addr(newPk))), data: abi.encode(config, bytes(""))
+            changeType: Keystore.ChangeType.Authorize,
+            actorId: bytes32(bytes20(vm.addr(newPk))),
+            data: abi.encode(config, bytes(""))
         });
 
         uint64 chainId = uint64(block.chainid);

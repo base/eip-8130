@@ -71,7 +71,6 @@ contract SessionPolicyTest is KeystoreTest {
     uint256 internal constant ROOT_PK = 0xA11CE;
     uint8 internal constant SCOPE_SENDER = 0x01;
     uint8 internal constant SCOPE_POLICY = 0x02;
-    uint8 internal constant AUTHORIZE_ACTOR = 0x01;
 
     bytes4 internal constant TRANSFER = bytes4(keccak256("transfer(address,uint256)"));
     uint40 internal constant WEEK = 7 days;
@@ -751,7 +750,7 @@ contract SessionPolicyTest is KeystoreTest {
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({
             actorId: actorId,
-            changeType: AUTHORIZE_ACTOR,
+            changeType: Keystore.ChangeType.Authorize,
             data: abi.encode(cfg, abi.encodePacked(address(manager), commitment))
         });
         uint64 chainId = uint64(block.chainid);

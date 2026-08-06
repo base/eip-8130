@@ -27,7 +27,7 @@ contract AccountLockTest is KeystoreTest {
     function _oneAuthorizeChange(bytes32 actorId) internal view returns (Keystore.ActorChange[] memory changes) {
         changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({
-            changeType: 0x01,
+            changeType: Keystore.ChangeType.Authorize,
             actorId: actorId,
             data: abi.encode(
                 Keystore.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}), bytes("")
@@ -40,7 +40,7 @@ contract AccountLockTest is KeystoreTest {
     function _authorizeK1ActorWithScope(address account, uint256 ownerPk, address newSigner, uint16 scope) internal {
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({
-            changeType: 0x01,
+            changeType: Keystore.ChangeType.Authorize,
             actorId: bytes32(bytes20(newSigner)),
             data: abi.encode(
                 Keystore.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0}), bytes("")
@@ -75,22 +75,43 @@ contract AccountLockTest is KeystoreTest {
 
         bytes memory auth = _lockAuth(scopedPk, account, delay);
         vm.expectRevert(Keystore.UnauthorizedLockChange.selector);
-        keystore.applySignedLockChanges(account, LOCK_OP, delay, auth);
+        keystore.applySignedLockChanges(account, Keystore.LockOp.Lock, delay, auth);
     }
 
-    /// @notice applySignedLockChanges reverts UnknownLockOp for any op other than LOCK_OP / UNLOCK_OP.
-    function test_applySignedLockChanges_revert_unknownOp(uint256 pkSeed, uint8 op, uint16 delay) public {
+    /// @notice applySignedLockChanges reverts UnknownLockOp for LockOp.Invalid (0) — the only unrecognized op value
+    ///         that reaches the handler. Out-of-range wire values (>= 3) never get here; they panic at ABI-decode
+    ///         (see test_applySignedLockChanges_revert_outOfRangeOpPanics).
+    function test_applySignedLockChanges_revert_invalidOp(uint256 pkSeed, uint16 delay) public {
         uint256 pk = _boundK1Pk(pkSeed);
         address account = vm.addr(pk);
         _assumeSafeAccount(account);
-        vm.assume(op != LOCK_OP && op != UNLOCK_OP);
 
         uint64 seq = keystore.getChangeSequences(account).local;
-        bytes32 digest = _computeLockChangeDigest(account, block.chainid, op, delay, seq);
+        bytes32 digest = _computeLockChangeDigest(account, block.chainid, uint8(Keystore.LockOp.Invalid), delay, seq);
         bytes memory auth = _buildK1Auth(pk, digest);
 
         vm.expectRevert(Keystore.UnknownLockOp.selector);
-        keystore.applySignedLockChanges(account, op, delay, auth);
+        keystore.applySignedLockChanges(account, Keystore.LockOp.Invalid, delay, auth);
+    }
+
+    /// @notice An out-of-range op wire value (>= 3, not a declared LockOp member) is rejected by the ABI decoder
+    ///         before the handler runs — the enum can only decode to a declared member. This is what makes Invalid (0)
+    ///         the sole reachable "unrecognized" case. Uses a low-level call so the raw wire byte survives to the
+    ///         decoder (the typed entry point cannot express an out-of-range value). Solidity's calldata enum-decode
+    ///         check reverts with empty returndata (distinct from an in-body enum conversion, which panics 0x21).
+    function test_applySignedLockChanges_revert_outOfRangeOp(uint256 pkSeed, uint8 op, uint16 delay) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+        op = uint8(bound(op, 3, type(uint8).max));
+
+        // Decode reverts before the body, so auth is irrelevant. op is ABI-encoded as the enum's uint8 slot.
+        bytes memory cd =
+            abi.encodeWithSelector(Keystore.applySignedLockChanges.selector, account, op, delay, bytes(""));
+        (bool ok, bytes memory ret) = address(keystore).call(cd);
+
+        assertFalse(ok);
+        assertEq(ret.length, 0); // enum decode rejects the out-of-range op with an empty revert
     }
 
     /// @notice A lock op (op = 1) with a zero unlock delay reverts ZeroUnlockDelay.
@@ -102,7 +123,7 @@ contract AccountLockTest is KeystoreTest {
 
         bytes memory auth = _lockAuth(pk, account, 0);
         vm.expectRevert(Keystore.ZeroUnlockDelay.selector);
-        keystore.applySignedLockChanges(account, LOCK_OP, 0, auth);
+        keystore.applySignedLockChanges(account, Keystore.LockOp.Lock, 0, auth);
     }
 
     /// @notice A lock op reverts AccountIsLocked when the account is already hard-locked.
@@ -118,7 +139,7 @@ contract AccountLockTest is KeystoreTest {
 
         bytes memory auth = _lockAuth(pk, account, secondDelay);
         vm.expectRevert(Keystore.AccountIsLocked.selector);
-        keystore.applySignedLockChanges(account, LOCK_OP, secondDelay, auth);
+        keystore.applySignedLockChanges(account, Keystore.LockOp.Lock, secondDelay, auth);
     }
 
     /// @notice An unlock op (op = 2) with a non-zero unlock delay reverts InvalidUnlockDelay.
@@ -134,7 +155,7 @@ contract AccountLockTest is KeystoreTest {
         bytes memory auth = _buildK1Auth(pk, digest);
 
         vm.expectRevert(Keystore.InvalidUnlockDelay.selector);
-        keystore.applySignedLockChanges(account, UNLOCK_OP, delay, auth);
+        keystore.applySignedLockChanges(account, Keystore.LockOp.Unlock, delay, auth);
     }
 
     /// @notice An unlock op reverts NotLocked when the account has never been locked (FLAG_LOCKED clear).
@@ -145,7 +166,7 @@ contract AccountLockTest is KeystoreTest {
 
         bytes memory auth = _unlockAuth(pk, account);
         vm.expectRevert(Keystore.NotLocked.selector);
-        keystore.applySignedLockChanges(account, UNLOCK_OP, 0, auth);
+        keystore.applySignedLockChanges(account, Keystore.LockOp.Unlock, 0, auth);
     }
 
     /// @notice An unlock op reverts NotLocked once an unlock has already been initiated.
@@ -163,7 +184,7 @@ contract AccountLockTest is KeystoreTest {
 
         bytes memory auth = _unlockAuth(pk, account);
         vm.expectRevert(Keystore.NotLocked.selector);
-        keystore.applySignedLockChanges(account, UNLOCK_OP, 0, auth);
+        keystore.applySignedLockChanges(account, Keystore.LockOp.Unlock, 0, auth);
     }
 
     /// @notice A replayed lock auth fails: the local sequence advanced on the first success, so the signed digest no
@@ -175,10 +196,10 @@ contract AccountLockTest is KeystoreTest {
         delay = uint16(bound(delay, 1, type(uint16).max));
 
         bytes memory auth = _lockAuth(pk, account, delay); // signed over sequence 0
-        keystore.applySignedLockChanges(account, LOCK_OP, delay, auth); // sequence 0 -> 1
+        keystore.applySignedLockChanges(account, Keystore.LockOp.Lock, delay, auth); // sequence 0 -> 1
 
         vm.expectRevert();
-        keystore.applySignedLockChanges(account, LOCK_OP, delay, auth);
+        keystore.applySignedLockChanges(account, Keystore.LockOp.Lock, delay, auth);
     }
 
     /// @notice A lock auth signed over a sequence other than the account's current one fails to authenticate.
@@ -196,7 +217,7 @@ contract AccountLockTest is KeystoreTest {
         bytes memory auth = _buildK1Auth(pk, digest);
 
         vm.expectRevert();
-        keystore.applySignedLockChanges(account, LOCK_OP, delay, auth);
+        keystore.applySignedLockChanges(account, Keystore.LockOp.Lock, delay, auth);
     }
 
     /// @notice applySignedActorChanges reverts AccountIsLocked while the target account is hard-locked.
@@ -267,7 +288,7 @@ contract AccountLockTest is KeystoreTest {
         bytes memory auth = _lockAuth(pk, account, delay);
         vm.expectEmit(true, false, false, true, address(keystore));
         emit Keystore.AccountLocked(account, delay);
-        keystore.applySignedLockChanges(account, LOCK_OP, delay, auth);
+        keystore.applySignedLockChanges(account, Keystore.LockOp.Lock, delay, auth);
     }
 
     /// @notice An account can be re-locked after a prior unlock delay has fully elapsed.
@@ -339,7 +360,7 @@ contract AccountLockTest is KeystoreTest {
         bytes memory auth = _unlockAuth(pk, account);
         vm.expectEmit(true, false, false, true, address(keystore));
         emit Keystore.AccountUnlockInitiated(account, uint40(t0 + delay));
-        keystore.applySignedLockChanges(account, UNLOCK_OP, 0, auth);
+        keystore.applySignedLockChanges(account, Keystore.LockOp.Unlock, 0, auth);
     }
 
     /// @notice isLocked is false for an account that has never been locked (FLAG_LOCKED clear).

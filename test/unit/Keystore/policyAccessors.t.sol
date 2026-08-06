@@ -16,9 +16,6 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 ///         verbatim, even when a field is zero. Tests bound manager/commitment to non-zero only so the written
 ///         value is distinguishable from the ungated (unwritten, zero) case.
 contract PolicyAccessorsTest is KeystoreTest {
-    uint8 internal constant AUTHORIZE_ACTOR = 0x01;
-    uint8 internal constant REVOKE_ACTOR = 0x02;
-
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // getPolicy — explicit (non-self) actor home  (stored.authenticator != 0)
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -642,8 +639,9 @@ contract PolicyAccessorsTest is KeystoreTest {
         bytes memory policyData = abi.encodePacked(policyManager, commitment);
 
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] =
-            Keystore.ActorChange({actorId: actorId, changeType: AUTHORIZE_ACTOR, data: abi.encode(cfg, policyData)});
+        changes[0] = Keystore.ActorChange({
+            actorId: actorId, changeType: Keystore.ChangeType.Authorize, data: abi.encode(cfg, policyData)
+        });
 
         uint64 seq = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
@@ -667,7 +665,7 @@ contract PolicyAccessorsTest is KeystoreTest {
 
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({
-            actorId: selfActorId, changeType: AUTHORIZE_ACTOR, data: abi.encode(cfg, policyData)
+            actorId: selfActorId, changeType: Keystore.ChangeType.Authorize, data: abi.encode(cfg, policyData)
         });
 
         uint64 seq = keystore.getChangeSequences(eoa).local;
@@ -680,7 +678,7 @@ contract PolicyAccessorsTest is KeystoreTest {
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({
             actorId: newActorId,
-            changeType: AUTHORIZE_ACTOR,
+            changeType: Keystore.ChangeType.Authorize,
             data: abi.encode(Keystore.ActorConfig({authenticator: authenticator, scope: 0x00, expiry: 0}), bytes(""))
         });
         uint64 seq = keystore.getChangeSequences(account).local;
@@ -691,7 +689,7 @@ contract PolicyAccessorsTest is KeystoreTest {
     /// @dev Revoke `actorId` from `account`, signed by `pk`.
     function _revokeActor(address account, uint256 pk, bytes32 actorId) internal {
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({actorId: actorId, changeType: REVOKE_ACTOR, data: ""});
+        changes[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ChangeType.Revoke, data: ""});
         uint64 seq = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
         keystore.applySignedActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));

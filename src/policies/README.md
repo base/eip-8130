@@ -1,11 +1,11 @@
-# Example Policies (EIP-8130 actor policies)
+# Policies (EIP-8130 actor policies)
 
-Reference, **unaudited** example of a policy manager for EIP-8130 restricted actors.
+A policy manager for EIP-8130 restricted actors.
 
 In EIP-8130, a restricted actor (e.g. a session key) is configured with `scope & Scopes.POLICY != 0`, which stores a
 `policy_manager` address and an opaque `policy_commitment` in the Keystore contract. The protocol
-gate forces every call that actor makes to land on that single manager. These contracts are an example of what
-that manager can be: one that enforces application-specific limits and then drives the account. `Scopes.POLICY`
+gate forces every call that actor makes to land on that single manager. These contracts are one realization of
+that manager: it enforces application-specific limits and then drives the account. `Scopes.POLICY`
 (`0x02`) may be combined with other scope bits (e.g. `Scopes.POLICY | Scopes.SELF_PAYER`) — `Keystore` does
 not reject scope combinations; use-time exclusivity between policy gating and an actor's other capabilities is
 protocol-side, not enforced by this contract.
@@ -104,7 +104,7 @@ reverts `ExceededAllowance`, a third MyApp selector reverts `SelectorNotAllowed`
 `TargetNotAllowed`. Two choices to note: modeling "full token access" as *any selector* also permits `approve` /
 `transferFrom` on that token (use a single `transfer` rule to restrict to transfers); and USDC is pinned to
 `transfer` precisely so the cap is airtight. End-to-end test:
-[`test_workedExample_fullTokenAccess_monthlyUsdc_appSelectors`](../../../test/unit/examples/SessionPolicy.t.sol).
+[`test_workedExample_fullTokenAccess_monthlyUsdc_appSelectors`](../../../test/unit/policies/SessionPolicy.t.sol).
 
 ### External callers (subscriptions)
 
@@ -150,7 +150,7 @@ Critically, the provider must **not** be registered with `TRUSTED_EXECUTOR` — 
 is a no-code sentinel: the actor is recognized (non-zero authenticator) but can neither drive the account directly
 nor authenticate an 8130 transaction. Give the provider its **own salt** so its commitment — and therefore its
 spend budget — is isolated from any session keys on the account. End-to-end tests:
-[`ExternalPolicyCaller.t.sol`](../../../test/unit/examples/ExternalPolicyCaller.t.sol).
+[`ExternalPolicyCaller.t.sol`](../../../test/unit/policies/ExternalPolicyCaller.t.sol).
 
 > Out of scope for this reference: signature-based replacement and uninstall. See
 > [base/account-policies](https://github.com/base/account-policies) for a fuller policy framework.

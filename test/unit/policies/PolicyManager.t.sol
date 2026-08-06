@@ -90,8 +90,6 @@ contract PolicyManagerTest is KeystoreTest {
     uint256 internal constant ROOT_PK = 0xA11CE;
 
     uint8 internal constant SCOPE_POLICY = 0x02;
-    uint8 internal constant AUTHORIZE_ACTOR = 0x01;
-    uint8 internal constant REVOKE_ACTOR = 0x02;
 
     function setUp() public override {
         super.setUp();
@@ -361,8 +359,9 @@ contract PolicyManagerTest is KeystoreTest {
         bytes memory policyData = abi.encodePacked(address(manager), commitment);
 
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] =
-            Keystore.ActorChange({actorId: actorId, changeType: AUTHORIZE_ACTOR, data: abi.encode(cfg, policyData)});
+        changes[0] = Keystore.ActorChange({
+            actorId: actorId, changeType: Keystore.ChangeType.Authorize, data: abi.encode(cfg, policyData)
+        });
 
         uint64 chainId = uint64(block.chainid);
         uint64 sequence = keystore.getChangeSequences(account).local;
@@ -394,8 +393,9 @@ contract PolicyManagerTest is KeystoreTest {
         bytes memory policyData = abi.encodePacked(address(manager), commitment);
 
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] =
-            Keystore.ActorChange({actorId: actorId, changeType: AUTHORIZE_ACTOR, data: abi.encode(cfg, policyData)});
+        changes[0] = Keystore.ActorChange({
+            actorId: actorId, changeType: Keystore.ChangeType.Authorize, data: abi.encode(cfg, policyData)
+        });
 
         uint64 chainId = uint64(block.chainid);
         uint64 sequence = keystore.getChangeSequences(target_).local;
@@ -405,7 +405,7 @@ contract PolicyManagerTest is KeystoreTest {
 
     function _revokePolicyActor(bytes32 actorId) internal {
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({actorId: actorId, changeType: REVOKE_ACTOR, data: ""});
+        changes[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ChangeType.Revoke, data: ""});
 
         uint64 chainId = uint64(block.chainid);
         uint64 sequence = keystore.getChangeSequences(account).local;

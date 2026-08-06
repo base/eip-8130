@@ -57,7 +57,7 @@ contract ImportAccountTest is KeystoreTest {
     bytes32 constant ACTOR_TYPEHASH = keccak256(
         "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"
     );
-    bytes32 constant ACTORCONFIG_TYPEHASH = keccak256("ActorConfig(address authenticator,uint48 expiry,uint16 scope)");
+    bytes32 constant ACTOR_CONFIG_TYPEHASH = keccak256("ActorConfig(address authenticator,uint48 expiry,uint16 scope)");
 
     // ── digest helpers ──
 
@@ -79,7 +79,7 @@ contract ImportAccountTest is KeystoreTest {
         for (uint256 i; i < initialActors.length; i++) {
             // Hash the actor's real scope; expiry is always 0 at import. policyData is hashed into the Actor hash.
             bytes32 configHash = keccak256(
-                abi.encode(ACTORCONFIG_TYPEHASH, initialActors[i].authenticator, uint48(0), initialActors[i].scope)
+                abi.encode(ACTOR_CONFIG_TYPEHASH, initialActors[i].authenticator, uint48(0), initialActors[i].scope)
             );
             actorHashes[i] = keccak256(
                 abi.encode(ACTOR_TYPEHASH, initialActors[i].actorId, configHash, keccak256(initialActors[i].policyData))
@@ -219,7 +219,7 @@ contract ImportAccountTest is KeystoreTest {
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({
             actorId: bytes32(bytes20(device)),
-            changeType: 0x01,
+            changeType: Keystore.ChangeType.Authorize,
             data: abi.encode(
                 Keystore.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}), bytes("")
             )
