@@ -95,8 +95,8 @@ contract Keystore {
     ///      `signature` is the standard authenticator(20) || authenticator-data blob authenticating the signer.
     struct SignedAccountChanges {
         AccountChangeChannel channel;
-        AccountChange[] changes;
         uint64 sequence;
+        AccountChange[] changes;
         bytes signature;
     }
 

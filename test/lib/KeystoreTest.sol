@@ -195,7 +195,7 @@ contract KeystoreTest is Test {
     ) internal view returns (Keystore.SignedAccountChanges memory) {
         bytes32 digest = _changesDigest(account, channel, sequence, changes);
         return Keystore.SignedAccountChanges({
-            channel: channel, changes: changes, sequence: sequence, signature: _buildK1Auth(pk, digest)
+            channel: channel, sequence: sequence, changes: changes, signature: _buildK1Auth(pk, digest)
         });
     }
 
