@@ -16,6 +16,13 @@ contract HighRatePayerMockTarget {
     function reverting() external pure {
         revert("boom");
     }
+
+    /// @dev Reverts with empty returndata to exercise the CallFailed fallback in _call.
+    function revertingEmpty() external pure {
+        assembly {
+            revert(0, 0)
+        }
+    }
 }
 
 contract CanonicalHighRatePayerAccountTest is KeystoreTest {
@@ -106,9 +113,18 @@ contract CanonicalHighRatePayerAccountTest is KeystoreTest {
         (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
 
         vm.prank(account);
-        vm.expectRevert(DefaultAccount.CallFailed.selector);
+        vm.expectRevert(abi.encodeWithSignature("Error(string)", "boom"));
         CanonicalHighRatePayerAccount(payable(account))
             .executeBatch(_singleCall(address(target), 0, abi.encodeCall(HighRatePayerMockTarget.reverting, ())));
+    }
+
+    function test_executeBatch_emptyReturndataSurfacesCallFailed() public {
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
+
+        vm.prank(account);
+        vm.expectRevert(DefaultAccount.CallFailed.selector);
+        CanonicalHighRatePayerAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(HighRatePayerMockTarget.revertingEmpty, ())));
     }
 
     function test_executeBatch_blocksETHWhenLocked() public {
@@ -146,6 +162,71 @@ contract CanonicalHighRatePayerAccountTest is KeystoreTest {
             .executeBatch(
                 _singleCall(address(target), 0.5 ether, abi.encodeCall(HighRatePayerMockTarget.setValue, (1)))
             );
+
+        assertEq(address(target).balance, 0.5 ether);
+    }
+
+    // ── execute (single call) ──
+
+    function test_execute_success() public {
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
+
+        vm.prank(account);
+        CanonicalHighRatePayerAccount(payable(account))
+            .execute(address(target), 0, abi.encodeCall(HighRatePayerMockTarget.setValue, (42)));
+
+        assertEq(target.value(), 42);
+    }
+
+    function test_execute_revertsFromNonSelf() public {
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
+
+        vm.prank(address(0xdead));
+        vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
+        CanonicalHighRatePayerAccount(payable(account))
+            .execute(address(target), 0, abi.encodeCall(HighRatePayerMockTarget.setValue, (1)));
+    }
+
+    function test_execute_bubblesReason() public {
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
+
+        vm.prank(account);
+        vm.expectRevert(abi.encodeWithSignature("Error(string)", "boom"));
+        CanonicalHighRatePayerAccount(payable(account))
+            .execute(address(target), 0, abi.encodeCall(HighRatePayerMockTarget.reverting, ()));
+    }
+
+    function test_execute_blocksETHWhenLocked() public {
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
+        vm.deal(account, 1 ether);
+
+        _lockAccount(ACTOR_PK, account, 1 hours);
+
+        vm.prank(account);
+        vm.expectRevert(CanonicalHighRatePayerAccount.AccountLocked.selector);
+        CanonicalHighRatePayerAccount(payable(account))
+            .execute(address(target), 0.1 ether, abi.encodeCall(HighRatePayerMockTarget.setValue, (1)));
+    }
+
+    function test_execute_allowsZeroValueCallWhenLocked() public {
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
+
+        _lockAccount(ACTOR_PK, account, 1 hours);
+
+        vm.prank(account);
+        CanonicalHighRatePayerAccount(payable(account))
+            .execute(address(target), 0, abi.encodeCall(HighRatePayerMockTarget.setValue, (99)));
+
+        assertEq(target.value(), 99);
+    }
+
+    function test_execute_allowsETHWhenUnlocked() public {
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
+        vm.deal(account, 1 ether);
+
+        vm.prank(account);
+        CanonicalHighRatePayerAccount(payable(account))
+            .execute(address(target), 0.5 ether, abi.encodeCall(HighRatePayerMockTarget.setValue, (1)));
 
         assertEq(address(target).balance, 0.5 ether);
     }

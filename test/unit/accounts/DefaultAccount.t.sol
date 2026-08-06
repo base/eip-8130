@@ -17,6 +17,13 @@ contract MockTarget {
     function reverting() external pure {
         revert("boom");
     }
+
+    /// @dev Reverts with empty returndata to exercise the CallFailed fallback in _call.
+    function revertingEmpty() external pure {
+        assembly {
+            revert(0, 0)
+        }
+    }
 }
 
 contract DefaultAccountTest is KeystoreTest {
@@ -123,21 +130,32 @@ contract DefaultAccountTest is KeystoreTest {
             .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1))));
     }
 
-    /// @notice A failing inner call aborts the whole batch.
-    /// @dev Exercises the false leg of `require(success)`; fuzzes the ETH value carried by the failing call.
-    function test_executeBatch_revert_failedInnerCall(uint256 value) public {
+    /// @notice A failing inner call aborts the whole batch and bubbles the callee's revert reason verbatim.
+    /// @dev The callee reverts with Error("boom"); executeBatch surfaces that data, not a generic CallFailed. Uses
+    ///      zero value so the (pure) callee actually runs — a non-zero value would fail its payability check first
+    ///      with empty returndata, which the emptyReturndata test covers separately.
+    function test_executeBatch_revert_failedInnerCall() public {
         (address account,) = _createK1Account(ACTOR_PK);
-        value = bound(value, 0, 1e24);
-        vm.deal(account, value);
+
+        vm.prank(account);
+        vm.expectRevert(abi.encodeWithSignature("Error(string)", "boom"));
+        DefaultAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.reverting, ())));
+    }
+
+    /// @notice A callee that reverts with no returndata surfaces as CallFailed (the bubble fallback).
+    /// @dev Exercises the `result.length == 0` leg of _call.
+    function test_executeBatch_revert_emptyReturndataSurfacesCallFailed() public {
+        (address account,) = _createK1Account(ACTOR_PK);
 
         vm.prank(account);
         vm.expectRevert(DefaultAccount.CallFailed.selector);
         DefaultAccount(payable(account))
-            .executeBatch(_singleCall(address(target), value, abi.encodeCall(MockTarget.reverting, ())));
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.revertingEmpty, ())));
     }
 
     /// @notice A failed call late in the batch rolls back state written by earlier successful calls.
-    /// @dev The whole executeBatch reverts, so the earlier setValue is rolled back.
+    /// @dev The whole executeBatch reverts (bubbling the callee reason), so the earlier setValue is rolled back.
     function test_executeBatch_revert_failedInnerCallRollsBackPriorState(uint256 v) public {
         (address account,) = _createK1Account(ACTOR_PK);
         v = bound(v, 1, type(uint256).max); // non-zero so the rollback assertion is meaningful
@@ -147,7 +165,7 @@ contract DefaultAccountTest is KeystoreTest {
         calls[1] = Call(address(target), 0, abi.encodeCall(MockTarget.reverting, ()));
 
         vm.prank(account);
-        vm.expectRevert(DefaultAccount.CallFailed.selector);
+        vm.expectRevert(abi.encodeWithSignature("Error(string)", "boom"));
         DefaultAccount(payable(account)).executeBatch(calls);
 
         assertEq(target.value(), 0);
@@ -249,6 +267,100 @@ contract DefaultAccountTest is KeystoreTest {
         DefaultAccount(payable(account)).executeBatch(_singleCall(t, 0, abi.encodeCall(MockTarget.setValue, (1))));
 
         assertEq(t.code.length, 0);
+    }
+
+    // ══════════════════════════════════════════════
+    //  execute — single call
+    // ══════════════════════════════════════════════
+
+    /// @notice Any caller that is neither the account nor a trusted executor reverts.
+    /// @dev Mirrors the executeBatch authorization check on the single-call path.
+    function test_execute_revert_unauthorizedCaller(address caller, uint256 value, bytes calldata data) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+        vm.assume(caller != account);
+        value = bound(value, 0, type(uint128).max);
+
+        vm.prank(caller);
+        vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
+        DefaultAccount(payable(account)).execute(address(target), value, data);
+    }
+
+    /// @notice The account calling itself executes a single call.
+    /// @dev Covers the caller == address(this) authorization branch.
+    function test_execute_success_selfCaller(uint256 v) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+
+        vm.prank(account);
+        DefaultAccount(payable(account)).execute(address(target), 0, abi.encodeCall(MockTarget.setValue, (v)));
+
+        assertEq(target.value(), v);
+    }
+
+    /// @notice execute forwards ETH value to the target.
+    /// @dev Confirms the call{value:} wiring on the single-call path.
+    function test_execute_success_withETHValue(uint256 amount) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+        amount = bound(amount, 0, 1e30);
+        vm.deal(account, amount);
+
+        vm.prank(account);
+        DefaultAccount(payable(account)).execute(address(target), amount, abi.encodeCall(MockTarget.setValue, (7)));
+
+        assertEq(address(target).balance, amount);
+        assertEq(account.balance, 0);
+        assertEq(target.value(), 7);
+    }
+
+    /// @notice A plain ETH transfer to a codeless EOA (empty calldata) succeeds.
+    /// @dev The generic call path does not require the target to have code, unlike helpers that gate on returndata.
+    function test_execute_success_valueTransferToEoa(address to, uint256 amount) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+        vm.assume(uint160(to) > 0xffff); // avoid precompiles
+        vm.assume(to != account && to != address(vm) && to.code.length == 0);
+        amount = bound(amount, 0, 1e30);
+        vm.deal(account, amount);
+        uint256 toBalBefore = to.balance;
+
+        vm.prank(account);
+        DefaultAccount(payable(account)).execute(to, amount, "");
+
+        assertEq(to.balance, toBalBefore + amount);
+        assertEq(account.balance, 0);
+    }
+
+    /// @notice A registered TRUSTED_EXECUTOR actor may drive the single-call path directly.
+    /// @dev Covers the config-driven authorization branch on execute.
+    function test_execute_success_trustedExecutor(uint256 execSeed, uint256 v) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+
+        address executor = address(uint160(bound(execSeed, 10, type(uint160).max)));
+        vm.assume(executor != account && executor != vm.addr(ACTOR_PK));
+        _authorizeActor(account, ACTOR_PK, bytes32(bytes20(executor)), TRUSTED_EXECUTOR);
+
+        vm.prank(executor);
+        DefaultAccount(payable(account)).execute(address(target), 0, abi.encodeCall(MockTarget.setValue, (v)));
+
+        assertEq(target.value(), v);
+    }
+
+    /// @notice execute bubbles the callee's revert reason verbatim.
+    /// @dev The callee reverts with Error("boom"); execute surfaces that data, not a generic CallFailed.
+    function test_execute_revert_bubblesReason() public {
+        (address account,) = _createK1Account(ACTOR_PK);
+
+        vm.prank(account);
+        vm.expectRevert(abi.encodeWithSignature("Error(string)", "boom"));
+        DefaultAccount(payable(account)).execute(address(target), 0, abi.encodeCall(MockTarget.reverting, ()));
+    }
+
+    /// @notice A callee that reverts with no returndata surfaces as CallFailed on the single-call path.
+    /// @dev Exercises the `result.length == 0` leg of _call via execute.
+    function test_execute_revert_emptyReturndataSurfacesCallFailed() public {
+        (address account,) = _createK1Account(ACTOR_PK);
+
+        vm.prank(account);
+        vm.expectRevert(DefaultAccount.CallFailed.selector);
+        DefaultAccount(payable(account)).execute(address(target), 0, abi.encodeCall(MockTarget.revertingEmpty, ()));
     }
 
     // ══════════════════════════════════════════════

@@ -52,10 +52,10 @@ contract DefaultAccount is Receiver {
     /// @notice The caller is neither the account itself nor a registered TRUSTED_EXECUTOR actor.
     error UnauthorizedCaller();
 
-    /// @notice An inner call in the executed batch reverted.
+    /// @notice A call reverted with no returndata to bubble.
     error CallFailed();
 
-    /// @notice Deploys the account implementation bound to an Keystore instance.
+    /// @notice Deploys the account implementation bound to a Keystore instance.
     /// @param keystore Address of the Keystore system contract.
     constructor(address keystore) {
         KEYSTORE = Keystore(keystore);
@@ -65,17 +65,32 @@ contract DefaultAccount is Receiver {
     //  EXECUTION
     // ══════════════════════════════════════════════
 
+    /// @notice Executes a single call from the account.
+    ///
+    /// @dev Selector-compatible with the widely deployed CoinbaseSmartWallet V1 `execute(address,uint256,bytes)`
+    ///      (0xb61d27f6), so integrations that call that ABI directly (e.g. SpendPermissionManager) keep working.
+    ///      Equivalent to a one-element {executeBatch}.
+    /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a TRUSTED_EXECUTOR actor.
+    /// @dev On failure, bubbles the callee's revert data verbatim; a revert with no returndata surfaces as CallFailed.
+    ///
+    /// @param target Address the account calls.
+    /// @param value Wei forwarded with the call.
+    /// @param data Calldata passed to `target`.
+    function execute(address target, uint256 value, bytes calldata data) external virtual {
+        if (!_isAuthorizedCaller(msg.sender)) revert UnauthorizedCaller();
+        _call(target, value, data);
+    }
+
     /// @notice Executes a batch of calls from the account; reverts the entire batch if any call fails.
     ///
     /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a TRUSTED_EXECUTOR actor.
-    /// @dev Reverts with CallFailed when any inner call reverts.
+    /// @dev On failure, bubbles the callee's revert data verbatim; a revert with no returndata surfaces as CallFailed.
     ///
     /// @param calls Ordered calls to execute, each as (target, value, data).
     function executeBatch(Call[] calldata calls) external virtual {
         if (!_isAuthorizedCaller(msg.sender)) revert UnauthorizedCaller();
         for (uint256 i; i < calls.length; i++) {
-            (bool success,) = calls[i].target.call{value: calls[i].value}(calls[i].data);
-            if (!success) revert CallFailed();
+            _call(calls[i].target, calls[i].value, calls[i].data);
         }
     }
 
@@ -150,5 +165,18 @@ contract DefaultAccount is Receiver {
         Keystore.ActorConfig memory config = KEYSTORE.getActorConfig(address(this), bytes32(bytes20(caller)));
         if (config.authenticator != TRUSTED_EXECUTOR) return false;
         return Scopes.isOperational(config.scope);
+    }
+
+    /// @dev Performs a single call from the account, bubbling the callee's revert data verbatim on failure so callers
+    ///      observe the original error (Error(string), Panic(uint256), or a custom error). A revert carrying no
+    ///      returndata (e.g. a bare `revert()` or an out-of-gas at the callee) surfaces as CallFailed.
+    function _call(address target, uint256 value, bytes calldata data) internal {
+        (bool success, bytes memory result) = target.call{value: value}(data);
+        if (!success) {
+            if (result.length == 0) revert CallFailed();
+            assembly ("memory-safe") {
+                revert(add(result, 0x20), mload(result))
+            }
+        }
     }
 }

@@ -19,11 +19,29 @@ contract CanonicalHighRatePayerAccount is DefaultAccount {
 
     constructor(address keystore) DefaultAccount(keystore) {}
 
+    /// @notice Executes a single call from the account, blocking an outbound value transfer while locked.
+    ///
+    /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a TRUSTED_EXECUTOR actor.
+    /// @dev Reverts with AccountLocked when the call carries non-zero value and the account is locked.
+    /// @dev On failure, bubbles the callee's revert data verbatim; a revert with no returndata surfaces as CallFailed.
+    ///
+    /// @param target Address the account calls.
+    /// @param value Wei forwarded with the call.
+    /// @param data Calldata passed to `target`.
+    function execute(address target, uint256 value, bytes calldata data) external override {
+        if (!_isAuthorizedCaller(msg.sender)) revert UnauthorizedCaller();
+        if (value > 0) {
+            (bool locked,,,) = KEYSTORE.getLockStatus(address(this));
+            if (locked) revert AccountLocked();
+        }
+        _call(target, value, data);
+    }
+
     /// @notice Executes a batch of calls from the account, blocking outbound value transfers while locked.
     ///
     /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a TRUSTED_EXECUTOR actor.
     /// @dev Reverts with AccountLocked when a call carries non-zero value and the account is locked.
-    /// @dev Reverts with CallFailed when any inner call reverts.
+    /// @dev On failure, bubbles the callee's revert data verbatim; a revert with no returndata surfaces as CallFailed.
     ///
     /// @param calls Ordered calls to execute, each as (target, value, data).
     function executeBatch(Call[] calldata calls) external override {
@@ -33,8 +51,7 @@ contract CanonicalHighRatePayerAccount is DefaultAccount {
                 (bool locked,,,) = KEYSTORE.getLockStatus(address(this));
                 if (locked) revert AccountLocked();
             }
-            (bool success,) = calls[i].target.call{value: calls[i].value}(calls[i].data);
-            if (!success) revert CallFailed();
+            _call(calls[i].target, calls[i].value, calls[i].data);
         }
     }
 }
