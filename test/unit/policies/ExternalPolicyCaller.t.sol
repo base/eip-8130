@@ -336,30 +336,26 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         bytes32 commitment,
         uint48 expiry
     ) internal {
-        Keystore.ActorConfig memory cfg = Keystore.ActorConfig({
-            authenticator: authenticator, scope: SCOPE_POLICY, expiry: expiry
-        });
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({
-            actorId: bytes32(bytes20(provider)),
-            changeType: Keystore.ActorChangeType.Authorize,
-            data: abi.encode(cfg, abi.encodePacked(policyManager, commitment))
-        });
-        _applyAsRoot(account, changes);
+        // A zero expiry (the old "no expiry") maps to UNBOUNDED, granted on a sequenced local batch (unbounded
+        // grants are sequenced-only), signed by the root owner.
+        uint48 grant = expiry == 0 ? UNBOUNDED : expiry;
+        _applyLocal(
+            ROOT_PK,
+            account,
+            _one(
+                _authorizeChange(
+                    bytes32(bytes20(provider)),
+                    authenticator,
+                    SCOPE_POLICY,
+                    grant,
+                    abi.encodePacked(policyManager, commitment)
+                )
+            )
+        );
     }
 
     function _revokeProvider(address account) internal {
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({
-            actorId: bytes32(bytes20(provider)), changeType: Keystore.ActorChangeType.Revoke, data: ""
-        });
-        _applyAsRoot(account, changes);
-    }
-
-    function _applyAsRoot(address account, Keystore.ActorChange[] memory changes) internal {
-        uint64 chainId = uint64(block.chainid);
-        uint64 sequence = keystore.getChangeSequences(account).local;
-        bytes32 digest = _computeActorChangeBatchDigest(account, chainId, sequence, changes);
-        keystore.applySignedActorChanges(account, chainId, changes, _buildK1Auth(ROOT_PK, digest));
+        // Revoking a live actor is a reduction; the harness helper batches the required epoch bump.
+        _revokeActor(account, ROOT_PK, bytes32(bytes20(provider)));
     }
 }

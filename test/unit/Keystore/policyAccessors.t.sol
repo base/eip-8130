@@ -625,7 +625,7 @@ contract PolicyAccessorsTest is KeystoreTest {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     /// @dev Authorize a non-self actor with a gated policy bound to (manager, commitment), signed by the root owner.
-    ///      `scope` must carry SCOPE_POLICY.
+    ///      `scope` must carry SCOPE_POLICY. Granted UNBOUNDED on a sequenced local batch (the new "no expiry").
     function _authorizePolicyActor(
         address account,
         uint256 rootPk,
@@ -634,18 +634,15 @@ contract PolicyAccessorsTest is KeystoreTest {
         address policyManager,
         bytes32 commitment
     ) internal {
-        Keystore.ActorConfig memory cfg =
-            Keystore.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0});
-        bytes memory policyData = abi.encodePacked(policyManager, commitment);
-
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({
-            actorId: actorId, changeType: Keystore.ActorChangeType.Authorize, data: abi.encode(cfg, policyData)
-        });
-
-        uint64 seq = keystore.getChangeSequences(account).local;
-        bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        keystore.applySignedActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(rootPk, digest));
+        _applyLocal(
+            rootPk,
+            account,
+            _one(
+                _authorizeChange(
+                    actorId, address(k1Authenticator), scope, UNBOUNDED, abi.encodePacked(policyManager, commitment)
+                )
+            )
+        );
     }
 
     /// @dev Authorize the EOA's self-actorId as a scoped k1 actor carrying a gated policy. The EOA is not
@@ -658,40 +655,27 @@ contract PolicyAccessorsTest is KeystoreTest {
         address policyManager,
         bytes32 commitment
     ) internal {
-        bytes32 selfActorId = bytes32(bytes20(eoa));
-        Keystore.ActorConfig memory cfg =
-            Keystore.ActorConfig({authenticator: keystore.K1_AUTHENTICATOR(), scope: scope, expiry: 0});
-        bytes memory policyData = abi.encodePacked(policyManager, commitment);
-
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({
-            actorId: selfActorId, changeType: Keystore.ActorChangeType.Authorize, data: abi.encode(cfg, policyData)
-        });
-
-        uint64 seq = keystore.getChangeSequences(eoa).local;
-        bytes32 digest = _computeActorChangeBatchDigest(eoa, uint64(block.chainid), seq, changes);
-        keystore.applySignedActorChanges(eoa, uint64(block.chainid), changes, _buildK1Auth(eoaPk, digest));
+        _applyLocal(
+            eoaPk,
+            eoa,
+            _one(
+                _authorizeChange(
+                    bytes32(bytes20(eoa)),
+                    keystore.K1_AUTHENTICATOR(),
+                    scope,
+                    UNBOUNDED,
+                    abi.encodePacked(policyManager, commitment)
+                )
+            )
+        );
     }
 
-    /// @dev Authorize an ungated (scope 0) actor under `authenticator`, signed by `pk`.
+    /// @dev Authorize an ungated (scope 0) actor under `authenticator`, signed by `pk`. Batched with an epoch bump so
+    ///      overwriting a previously gated actor down to ungated (a scope reduction) is permitted.
     function _authorizeUngatedActor(address account, uint256 pk, bytes32 newActorId, address authenticator) internal {
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({
-            actorId: newActorId,
-            changeType: Keystore.ActorChangeType.Authorize,
-            data: abi.encode(Keystore.ActorConfig({authenticator: authenticator, scope: 0x00, expiry: 0}), bytes(""))
-        });
-        uint64 seq = keystore.getChangeSequences(account).local;
-        bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        keystore.applySignedActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
-    }
-
-    /// @dev Revoke `actorId` from `account`, signed by `pk`.
-    function _revokeActor(address account, uint256 pk, bytes32 actorId) internal {
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ActorChangeType.Revoke, data: ""});
-        uint64 seq = keystore.getChangeSequences(account).local;
-        bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        keystore.applySignedActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
+        ch[0] = _authorizeChange(newActorId, authenticator, 0x00, UNBOUNDED, "");
+        ch[1] = _bumpChange();
+        _applyLocal(pk, account, ch);
     }
 }

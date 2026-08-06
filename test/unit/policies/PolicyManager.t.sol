@@ -354,19 +354,21 @@ contract PolicyManagerTest is KeystoreTest {
     }
 
     function _authorizePolicyActor(bytes32 actorId, bytes32 commitment, uint48 expiry) internal {
-        Keystore.ActorConfig memory cfg =
-            Keystore.ActorConfig({authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: expiry});
-        bytes memory policyData = abi.encodePacked(address(manager), commitment);
-
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({
-            actorId: actorId, changeType: Keystore.ActorChangeType.Authorize, data: abi.encode(cfg, policyData)
-        });
-
-        uint64 chainId = uint64(block.chainid);
-        uint64 sequence = keystore.getChangeSequences(account).local;
-        bytes32 digest = _computeActorChangeBatchDigest(account, chainId, sequence, changes);
-        keystore.applySignedActorChanges(account, chainId, changes, _buildK1Auth(ROOT_PK, digest));
+        // A zero expiry (the old "no expiry") maps to UNBOUNDED, granted on a sequenced local batch.
+        uint48 grant = expiry == 0 ? UNBOUNDED : expiry;
+        _applyLocal(
+            ROOT_PK,
+            account,
+            _one(
+                _authorizeChange(
+                    actorId,
+                    address(k1Authenticator),
+                    SCOPE_POLICY,
+                    grant,
+                    abi.encodePacked(address(manager), commitment)
+                )
+            )
+        );
     }
 
     function _createAttackerAccount() internal returns (address attacker, uint256 attackerOwnerPk) {
@@ -388,28 +390,23 @@ contract PolicyManagerTest is KeystoreTest {
     }
 
     function _authorizePolicyActorOn(address target_, uint256 ownerPk, bytes32 actorId, bytes32 commitment) internal {
-        Keystore.ActorConfig memory cfg =
-            Keystore.ActorConfig({authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: 0});
-        bytes memory policyData = abi.encodePacked(address(manager), commitment);
-
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({
-            actorId: actorId, changeType: Keystore.ActorChangeType.Authorize, data: abi.encode(cfg, policyData)
-        });
-
-        uint64 chainId = uint64(block.chainid);
-        uint64 sequence = keystore.getChangeSequences(target_).local;
-        bytes32 digest = _computeActorChangeBatchDigest(target_, chainId, sequence, changes);
-        keystore.applySignedActorChanges(target_, chainId, changes, _buildK1Auth(ownerPk, digest));
+        _applyLocal(
+            ownerPk,
+            target_,
+            _one(
+                _authorizeChange(
+                    actorId,
+                    address(k1Authenticator),
+                    SCOPE_POLICY,
+                    UNBOUNDED,
+                    abi.encodePacked(address(manager), commitment)
+                )
+            )
+        );
     }
 
     function _revokePolicyActor(bytes32 actorId) internal {
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ActorChangeType.Revoke, data: ""});
-
-        uint64 chainId = uint64(block.chainid);
-        uint64 sequence = keystore.getChangeSequences(account).local;
-        bytes32 digest = _computeActorChangeBatchDigest(account, chainId, sequence, changes);
-        keystore.applySignedActorChanges(account, chainId, changes, _buildK1Auth(ROOT_PK, digest));
+        // Revoking a live actor is a reduction; the harness helper batches the required epoch bump.
+        _revokeActor(account, ROOT_PK, actorId);
     }
 }

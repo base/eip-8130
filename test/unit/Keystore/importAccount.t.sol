@@ -216,17 +216,10 @@ contract ImportAccountTest is KeystoreTest {
         address device = vm.addr(devicePk);
         vm.assume(eoa != device);
 
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({
-            actorId: bytes32(bytes20(device)),
-            changeType: Keystore.ActorChangeType.Authorize,
-            data: abi.encode(
-                Keystore.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}), bytes("")
-            )
-        });
-        uint64 seq = keystore.getChangeSequences(eoa).multichain;
-        bytes32 changeDigest = _computeActorChangeBatchDigest(eoa, 0, seq, changes);
-        keystore.applySignedActorChanges(eoa, 0, changes, _buildK1Auth(eoaPk, changeDigest));
+        // A global (multichain / chainId 0) actor change signed by the EOA's implicit default owner.
+        _applyMultichain(
+            eoaPk, eoa, _one(_authorizeChange(bytes32(bytes20(device)), address(k1Authenticator), 0x00, UNBOUNDED, ""))
+        );
 
         // Multichain channel advanced; local channel untouched.
         assertEq(keystore.getChangeSequences(eoa).multichain, 1);

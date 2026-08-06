@@ -368,17 +368,20 @@ contract SessionPolicyGasTest is KeystoreTest {
         });
         bytes32 commitment = manager.commitmentOf(binding);
 
-        Keystore.ActorConfig memory cfg =
-            Keystore.ActorConfig({authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: 0});
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({
-            actorId: actorId,
-            changeType: Keystore.ActorChangeType.Authorize,
-            data: abi.encode(cfg, abi.encodePacked(address(manager), commitment))
-        });
-        uint64 chainId = uint64(block.chainid);
-        uint64 sequence = keystore.getChangeSequences(account).local;
-        bytes32 digest = _computeActorChangeBatchDigest(account, chainId, sequence, changes);
-        keystore.applySignedActorChanges(account, chainId, changes, _buildK1Auth(ROOT_PK, digest));
+        // Authorize the fresh session-key actor gated to the manager, granted UNBOUNDED (the new "no expiry") on a
+        // sequenced local batch, signed by the root owner.
+        _applyLocal(
+            ROOT_PK,
+            account,
+            _one(
+                _authorizeChange(
+                    actorId,
+                    address(k1Authenticator),
+                    SCOPE_POLICY,
+                    UNBOUNDED,
+                    abi.encodePacked(address(manager), commitment)
+                )
+            )
+        );
     }
 }

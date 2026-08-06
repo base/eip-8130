@@ -186,22 +186,9 @@ contract DelegateAuthenticatorTest is KeystoreTest {
 
     // ── Helpers ──
 
-    /// @dev Authorizes a new K1 actor (`newPk`) with `scope` on `account`, signed by the unrestricted
-    ///      owner (`ownerPk`) via applySignedActorChanges on the local chain.
+    /// @dev Authorizes a new K1 actor (`newPk`) with `scope` on `account`, signed by the unrestricted owner
+    ///      (`ownerPk`). Granted UNBOUNDED (the new "no expiry") on a sequenced local batch via the harness helper.
     function _authorizeScopedK1Actor(address account, uint256 ownerPk, uint256 newPk, uint16 scope) internal {
-        Keystore.ActorConfig memory config =
-            Keystore.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0});
-
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({
-            changeType: Keystore.ActorChangeType.Authorize,
-            actorId: bytes32(bytes20(vm.addr(newPk))),
-            data: abi.encode(config, bytes(""))
-        });
-
-        uint64 chainId = uint64(block.chainid);
-        uint64 sequence = keystore.getChangeSequences(account).local;
-        bytes32 digest = _computeActorChangeBatchDigest(account, chainId, sequence, changes);
-        keystore.applySignedActorChanges(account, chainId, changes, _buildK1Auth(ownerPk, digest));
+        _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(vm.addr(newPk))), address(k1Authenticator), scope);
     }
 }

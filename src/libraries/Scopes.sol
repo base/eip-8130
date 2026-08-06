@@ -38,7 +38,14 @@ library Scopes {
     /// @notice Sponsor gas: authorizes acting as `payer_auth` for a different sender (`payer != sender`).
     uint16 internal constant SPONSOR_PAYER = 0x0010;
 
-    // 0x0020..0x8000 (bits 5–15) are spare, reserved for future pure grants.
+    /// @notice Recovery class: a break-glass authenticator that may only initiate an account Unlock (never authorize,
+    ///         revoke, bump the local epoch, or lock). This is the sole grant besides admin (`scope == 0`) that
+    ///         {Keystore.applySignedAccountChanges} treats specially — it passes the Unlock authorization fence and
+    ///         nothing else. A recovery key is deliberately non-admin: it cannot mutate the actor set, so it can free
+    ///         a hard-locked account without being able to seize control of it.
+    uint16 internal constant RECOVERY = 0x0020;
+
+    // 0x0040..0x8000 (bits 6–15) are spare, reserved for future pure grants.
 
     /// @notice Whether `scope` grants operational authority — the authority to drive execution and to sign
     ///         (ERC-1271) as the account.

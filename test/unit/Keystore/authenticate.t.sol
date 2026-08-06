@@ -174,7 +174,7 @@ contract AuthenticateTest is KeystoreTest {
         address eoa = vm.addr(eoaPk);
         bytes32 selfActorId = bytes32(bytes20(eoa));
 
-        uint48 expiry = uint48(bound(uint256(expirySeed), 1, uint256(type(uint48).max) - 1));
+        uint48 expiry = uint48(bound(uint256(expirySeed), block.timestamp + 1, uint256(type(uint48).max) - 1));
         // Authorize the self-actorId as a scoped-0 K1 actor carrying an expiry (re-enables the inline self).
         _authorizeActorWithExpiry(eoa, eoaPk, selfActorId, address(k1Authenticator), expiry);
 
@@ -198,7 +198,7 @@ contract AuthenticateTest is KeystoreTest {
 
         (address account,) = _createK1Account(ownerPk);
         bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
-        uint48 expiry = uint48(bound(uint256(expirySeed), 1, uint256(type(uint48).max) - 1));
+        uint48 expiry = uint48(bound(uint256(expirySeed), block.timestamp + 1, uint256(type(uint48).max) - 1));
         _authorizeActorWithExpiry(account, ownerPk, sessionActorId, address(k1Authenticator), expiry);
 
         vm.warp(uint256(expiry) + bound(warpSeed, 1, 1_000_000));
@@ -219,7 +219,7 @@ contract AuthenticateTest is KeystoreTest {
         uint256 pk = _boundP256Pk(pkSeed);
 
         (address account,) = _createK1Account(ownerPk);
-        uint48 expiry = uint48(bound(uint256(expirySeed), 1, uint256(type(uint48).max) - 1));
+        uint48 expiry = uint48(bound(uint256(expirySeed), block.timestamp + 1, uint256(type(uint48).max) - 1));
         _authorizeActorWithExpiry(account, ownerPk, _p256ActorId(pk), address(p256Authenticator), expiry);
 
         vm.warp(uint256(expiry) + bound(warpSeed, 1, 1_000_000));
@@ -741,13 +741,13 @@ contract AuthenticateTest is KeystoreTest {
         // verifySignature applies the account-scoped EIP-7739 wrap; replaySafeHash(account, hash) is scope-independent.
         bytes memory auth = _buildK1Auth(actorPk, keystore.replaySafeHash(account, hash));
 
-        _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), SCOPE_SENDER);
+        _authorizeScopeBump(account, ownerPk, actorId, SCOPE_SENDER);
         assertTrue(keystore.verifySignature(account, hash, auth));
 
-        _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), SCOPE_SENDER | SCOPE_SELF_PAYER);
+        _authorizeScopeBump(account, ownerPk, actorId, SCOPE_SENDER | SCOPE_SELF_PAYER);
         assertTrue(keystore.verifySignature(account, hash, auth));
 
-        _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), SCOPE_SENDER | SCOPE_NONCE);
+        _authorizeScopeBump(account, ownerPk, actorId, SCOPE_SENDER | SCOPE_NONCE);
         assertTrue(keystore.verifySignature(account, hash, auth));
     }
 
@@ -765,13 +765,13 @@ contract AuthenticateTest is KeystoreTest {
         vm.assume(vm.addr(actorPk) != account);
         bytes32 actorId = bytes32(bytes20(vm.addr(actorPk)));
 
-        _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), SCOPE_SELF_PAYER);
+        _authorizeScopeBump(account, ownerPk, actorId, SCOPE_SELF_PAYER);
         assertFalse(keystore.verifySignature(account, hash, _buildK1Auth(actorPk, hash)));
 
-        _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), SCOPE_SPONSOR_PAYER);
+        _authorizeScopeBump(account, ownerPk, actorId, SCOPE_SPONSOR_PAYER);
         assertFalse(keystore.verifySignature(account, hash, _buildK1Auth(actorPk, hash)));
 
-        _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), SCOPE_NONCE);
+        _authorizeScopeBump(account, ownerPk, actorId, SCOPE_NONCE);
         assertFalse(keystore.verifySignature(account, hash, _buildK1Auth(actorPk, hash)));
     }
 
@@ -917,30 +917,12 @@ contract AuthenticateTest is KeystoreTest {
     // HELPERS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @dev Authorize `newActorId` under `authenticator` with `scope` (no expiry, no policy), signed by `pk`.
-    ///      For the self-actorId with the K1 authenticator this drives the inline-self home; for any other
-    ///      authenticator on the self-actorId it drives the mutually-exclusive non-K1 self home. `scope` must not
-    ///      carry SCOPE_POLICY (no policyData is provided).
-    function _authorizeActorWithScope(
-        address account,
-        uint256 pk,
-        bytes32 newActorId,
-        address authenticator,
-        uint16 scope
-    ) internal {
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({
-            actorId: newActorId,
-            changeType: Keystore.ActorChangeType.Authorize,
-            data: abi.encode(Keystore.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes(""))
-        });
-
-        uint64 seq = keystore.getChangeSequences(account).local;
-        bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        keystore.applySignedActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
-    }
+    // _authorizeActorWithScope, _implicitAuthorizeActor, and _revokeActor are provided by the KeystoreTest harness
+    // (re-implemented on applySignedAccountChanges). Only the expiry- and policy-specific helpers below are local.
 
     /// @dev Authorize `newActorId` under `authenticator` with the given `expiry` (scope 0, no policy), signed by `pk`.
+    ///      A zero expiry (the old "no expiry") is translated to the unbounded sentinel, granted on a sequenced local
+    ///      batch (unbounded grants are sequenced-only).
     function _authorizeActorWithExpiry(
         address account,
         uint256 pk,
@@ -948,37 +930,18 @@ contract AuthenticateTest is KeystoreTest {
         address authenticator,
         uint48 expiry
     ) internal {
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({
-            actorId: newActorId,
-            changeType: Keystore.ActorChangeType.Authorize,
-            data: abi.encode(
-                Keystore.ActorConfig({authenticator: authenticator, scope: 0x00, expiry: expiry}), bytes("")
-            )
-        });
-
-        uint64 seq = keystore.getChangeSequences(account).local;
-        bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        keystore.applySignedActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
-    }
-
-    /// @dev Authorize `newActorId` under `authenticator` as an unrestricted owner (scope 0), signed by `pk`.
-    function _implicitAuthorizeActor(address account, uint256 pk, bytes32 newActorId, address authenticator) internal {
-        _authorizeActorWithScope(account, pk, newActorId, authenticator, 0x00);
-    }
-
-    /// @dev Revoke `actorId` from `account`, signed by `pk`.
-    function _revokeActor(address account, uint256 pk, bytes32 actorId) internal {
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ActorChangeType.Revoke, data: ""});
-
-        uint64 seq = keystore.getChangeSequences(account).local;
-        bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        keystore.applySignedActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(pk, digest));
+        uint48 grant = expiry == 0 ? UNBOUNDED : expiry;
+        // Batch an epoch bump: granting a finite expiry to the implicit self-actor narrows its default UNBOUNDED
+        // grant (a reduction), which the new API requires to be paired with a bump. Harmless for fresh actors.
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
+        ch[0] = _authorizeChange(newActorId, authenticator, 0x00, grant, "");
+        ch[1] = _bumpChange();
+        _applyLocal(pk, account, ch);
     }
 
     /// @dev Authorize a K1 policy-gated actor: manager[20] || commitment[32] policy data, signed by the owner `pk`.
-    ///      `scope` must carry SCOPE_POLICY.
+    ///      `scope` must carry SCOPE_POLICY. Granted UNBOUNDED on a sequenced local batch and batched with an epoch
+    ///      bump so a re-authorize that narrows scope does not trip the reduction rule.
     function _authorizeGatedActor(
         address account,
         uint256 ownerPk,
@@ -987,18 +950,20 @@ contract AuthenticateTest is KeystoreTest {
         address policyManager,
         bytes32 commitment
     ) internal {
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({
-            actorId: newActorId,
-            changeType: Keystore.ActorChangeType.Authorize,
-            data: abi.encode(
-                Keystore.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0}),
-                abi.encodePacked(policyManager, commitment)
-            )
-        });
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
+        ch[0] = _authorizeChange(
+            newActorId, address(k1Authenticator), scope, UNBOUNDED, abi.encodePacked(policyManager, commitment)
+        );
+        ch[1] = _bumpChange();
+        _applyLocal(ownerPk, account, ch);
+    }
 
-        uint64 seq = keystore.getChangeSequences(account).local;
-        bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        keystore.applySignedActorChanges(account, uint64(block.chainid), changes, _buildK1Auth(ownerPk, digest));
+    /// @dev Authorize `actorId` at `scope` (UNBOUNDED, no policy) batched with an epoch bump so a scope reduction
+    ///      relative to a prior grant on the same slot does not trip the reduction rule. Signed by `pk`.
+    function _authorizeScopeBump(address account, uint256 pk, bytes32 actorId, uint16 scope) internal {
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
+        ch[0] = _authorizeChange(actorId, address(k1Authenticator), scope, UNBOUNDED, "");
+        ch[1] = _bumpChange();
+        _applyLocal(pk, account, ch);
     }
 }

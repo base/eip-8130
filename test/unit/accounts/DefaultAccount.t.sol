@@ -47,33 +47,9 @@ contract DefaultAccountTest is KeystoreTest {
         calls[0] = Call(t, v, d);
     }
 
-    /// @dev Authorize an actor with unrestricted scope on `account`, signed by `pk`.
-    function _authorizeActor(address account, uint256 pk, bytes32 newActorId, address authenticator) internal {
-        _authorizeActorWithScope(account, pk, newActorId, authenticator, 0x00);
-    }
-
-    /// @dev Authorize an actor with a given scope, signed by `pk`. Used to register both TRUSTED_EXECUTOR actors and
-    ///      scoped k1 actors from the account owner.
-    function _authorizeActorWithScope(
-        address account,
-        uint256 pk,
-        bytes32 newActorId,
-        address authenticator,
-        uint16 scope
-    ) internal {
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({
-            actorId: newActorId,
-            changeType: Keystore.ActorChangeType.Authorize,
-            data: abi.encode(Keystore.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes(""))
-        });
-
-        uint64 seq = keystore.getChangeSequences(account).local;
-        bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(pk, digest);
-
-        keystore.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
-    }
+    // _authorizeActor and _authorizeActorWithScope are provided by the KeystoreTest harness (re-implemented on
+    // applySignedAccountChanges, granting UNBOUNDED on a sequenced local batch). TRUSTED_EXECUTOR and scoped k1
+    // actors are registered through those helpers.
 
     // ══════════════════════════════════════════════
     //  executeBatch — reverts (source order)

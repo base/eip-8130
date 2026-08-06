@@ -30,20 +30,17 @@ contract KeystoreTest is Test {
 
     // SECP256K1_ORDER (curve order n) is inherited from forge-std; _boundK1Pk bounds fuzzed keys to [1, n-1].
 
-    bytes32 constant SIGNED_ACTOR_CHANGES_TYPEHASH = keccak256(
-        "SignedActorChanges(address account,uint256 chainId,uint64 sequence,ActorChange[] actorChanges)"
-        "ActorChange(uint8 changeType,bytes32 actorId,bytes data)"
+    bytes32 constant SIGNED_ACCOUNT_CHANGES_TYPEHASH = keccak256(
+        "SignedAccountChanges(address account,uint256 chainId,uint64 sequence,AccountChange[] changes)"
+        "AccountChange(uint8 changeType,bytes payload)"
     );
 
-    bytes32 constant ACTOR_CHANGE_TYPEHASH = keccak256("ActorChange(uint8 changeType,bytes32 actorId,bytes data)");
+    bytes32 constant ACCOUNT_CHANGE_TYPEHASH = keccak256("AccountChange(uint8 changeType,bytes payload)");
 
-    bytes32 constant LOCK_CHANGE_TYPEHASH =
-        keccak256("SignedLockChange(address account,uint256 chainId,uint8 op,uint16 unlockDelay,uint64 sequence)");
-
-    // Wire values for the LockChangeType enum (which ABI-encodes as uint8). Used to compute the signed digest, whose typehash
-    // binds `uint8 op`; the applySignedLockChanges call itself takes the typed Keystore.LockChangeType.
-    uint8 constant LOCK_OP = uint8(Keystore.LockChangeType.Lock);
-    uint8 constant UNLOCK_OP = uint8(Keystore.LockChangeType.Unlock);
+    /// @dev Unbounded expiry sentinel: an unbounded (never-expiring) grant is expressed as this value and is only
+    ///      permitted on a sequenced batch. Convenience helpers that stand in for the old "no expiry" actors grant
+    ///      this so they never trip the ExpiredChange fence (a signed grant always self-expires).
+    uint48 constant UNBOUNDED = type(uint48).max;
 
     function setUp() public virtual {
         keystore = new Keystore();
@@ -109,70 +106,237 @@ contract KeystoreTest is Test {
         return abi.encodePacked(k1Authenticator, sig);
     }
 
-    // ── Canonical digest computation ──
+    // ── Sequence-word helpers ──
 
-    function _computeActorChangeBatchDigest(
+    /// @dev The account's current local sequence WORD (localEpoch(32) || localSequence(32)) for a sequenced batch.
+    function _localSeqWord(address account) internal view returns (uint64) {
+        return keystore.getChangeSequences(account).local;
+    }
+
+    /// @dev An unsequenced (JIT) local sequence word at the account's current epoch: epoch || UNSEQUENCED.
+    function _unseqWord(address account) internal view returns (uint64) {
+        (uint32 epoch,) = keystore.getLocalEpochAndSequence(account);
+        return (uint64(epoch) << 32) | uint64(keystore.UNSEQUENCED());
+    }
+
+    /// @dev The account's current multichain sequence.
+    function _multichainSeq(address account) internal view returns (uint64) {
+        return keystore.getChangeSequences(account).multichain;
+    }
+
+    // ── Change builders ──
+
+    function _authorizeChange(bytes32 actorId, address auth, uint16 scope, uint48 expiry, bytes memory policyData)
+        internal
+        pure
+        returns (Keystore.AccountChange memory)
+    {
+        return Keystore.AccountChange({
+            changeType: Keystore.ChangeType.AuthorizeActor,
+            payload: abi.encode(
+                actorId, Keystore.ActorConfig({authenticator: auth, scope: scope, expiry: expiry}), policyData
+            )
+        });
+    }
+
+    function _revokeChange(bytes32 actorId) internal pure returns (Keystore.AccountChange memory) {
+        return Keystore.AccountChange({changeType: Keystore.ChangeType.RevokeActor, payload: abi.encode(actorId)});
+    }
+
+    function _bumpChange() internal pure returns (Keystore.AccountChange memory) {
+        return Keystore.AccountChange({changeType: Keystore.ChangeType.BumpLocalEpoch, payload: ""});
+    }
+
+    function _lockChange(uint16 unlockDelay) internal pure returns (Keystore.AccountChange memory) {
+        return Keystore.AccountChange({changeType: Keystore.ChangeType.Lock, payload: abi.encode(unlockDelay)});
+    }
+
+    function _unlockChange() internal pure returns (Keystore.AccountChange memory) {
+        return Keystore.AccountChange({changeType: Keystore.ChangeType.Unlock, payload: ""});
+    }
+
+    /// @dev Wrap a single change into a one-element array.
+    function _one(Keystore.AccountChange memory c) internal pure returns (Keystore.AccountChange[] memory arr) {
+        arr = new Keystore.AccountChange[](1);
+        arr[0] = c;
+    }
+
+    // ── Canonical digest computation (mirrors Keystore._changesDigest) ──
+
+    function _changesDigest(
         address account,
-        uint256 chainId,
+        Keystore.AccountChangeChannel channel,
         uint64 sequence,
-        Keystore.ActorChange[] memory actorChanges
-    ) internal pure returns (bytes32) {
-        bytes32[] memory actorChangeHash = new bytes32[](actorChanges.length);
-        for (uint256 i; i < actorChanges.length; i++) {
-            actorChangeHash[i] = keccak256(
-                abi.encode(
-                    ACTOR_CHANGE_TYPEHASH,
-                    actorChanges[i].changeType,
-                    actorChanges[i].actorId,
-                    keccak256(actorChanges[i].data)
-                )
+        Keystore.AccountChange[] memory changes
+    ) internal view returns (bytes32) {
+        uint256 chainId = channel == Keystore.AccountChangeChannel.Multichain ? 0 : block.chainid;
+        bytes32[] memory changeHashes = new bytes32[](changes.length);
+        for (uint256 i; i < changes.length; i++) {
+            changeHashes[i] = keccak256(
+                abi.encode(ACCOUNT_CHANGE_TYPEHASH, uint8(changes[i].changeType), keccak256(changes[i].payload))
             );
         }
         return keccak256(
             abi.encode(
-                SIGNED_ACTOR_CHANGES_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(actorChangeHash))
+                SIGNED_ACCOUNT_CHANGES_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(changeHashes))
             )
         );
     }
 
-    // ── Signed lock-change helpers ──
-    //
-    // Lock state changes go through applySignedLockChanges: a relayable, admin-authorized (scope 0) signed call.
-    // These helpers drive it for an account controlled by `pk` — either the account's inline default-EOA self (an
-    // uninitialized EOA at vm.addr(pk)) or a k1 admin actor whose actorId is bytes32(bytes20(vm.addr(pk))).
+    // ── Signed batch construction (K1) ──
 
-    function _computeLockChangeDigest(address account, uint256 chainId, uint8 op, uint16 unlockDelay, uint64 sequence)
-        internal
-        pure
-        returns (bytes32)
-    {
-        return keccak256(abi.encode(LOCK_CHANGE_TYPEHASH, account, chainId, op, unlockDelay, sequence));
+    /// @dev Build a fully-signed batch for `channel`/`sequence`, K1-signed by `pk`.
+    function _signBatch(
+        uint256 pk,
+        address account,
+        Keystore.AccountChangeChannel channel,
+        uint64 sequence,
+        Keystore.AccountChange[] memory changes
+    ) internal view returns (Keystore.SignedAccountChanges memory) {
+        bytes32 digest = _changesDigest(account, channel, sequence, changes);
+        return Keystore.SignedAccountChanges({
+            channel: channel, changes: changes, sequence: sequence, signature: _buildK1Auth(pk, digest)
+        });
     }
 
-    /// @dev Admin auth blob for a lock op (op = 1) at the account's current local sequence.
-    function _lockAuth(uint256 pk, address account, uint16 unlockDelay) internal view returns (bytes memory) {
-        uint64 seq = keystore.getChangeSequences(account).local;
-        bytes32 digest = _computeLockChangeDigest(account, block.chainid, LOCK_OP, unlockDelay, seq);
-        return _buildK1Auth(pk, digest);
-    }
-
-    /// @dev Admin auth blob for an unlock op (op = 2) at the account's current local sequence.
-    function _unlockAuth(uint256 pk, address account) internal view returns (bytes memory) {
-        uint64 seq = keystore.getChangeSequences(account).local;
-        bytes32 digest = _computeLockChangeDigest(account, block.chainid, UNLOCK_OP, 0, seq);
-        return _buildK1Auth(pk, digest);
-    }
-
-    /// @dev Relay a signed lock op (op = 1) authorized by `pk`.
-    function _signedLock(uint256 pk, address account, uint16 unlockDelay) internal {
-        keystore.applySignedLockChanges(
-            account, Keystore.LockChangeType.Lock, unlockDelay, _lockAuth(pk, account, unlockDelay)
+    /// @dev Build + relay a sequenced local batch at the account's current sequence word, K1-signed by `pk`.
+    function _applyLocal(uint256 pk, address account, Keystore.AccountChange[] memory changes) internal {
+        keystore.applySignedAccountChanges(
+            account, _signBatch(pk, account, Keystore.AccountChangeChannel.Local, _localSeqWord(account), changes)
         );
     }
 
-    /// @dev Relay a signed unlock op (op = 2) authorized by `pk`.
+    /// @dev Build + relay an unsequenced (JIT) local batch at the account's current epoch, K1-signed by `pk`.
+    function _applyUnsequenced(uint256 pk, address account, Keystore.AccountChange[] memory changes) internal {
+        keystore.applySignedAccountChanges(
+            account, _signBatch(pk, account, Keystore.AccountChangeChannel.Local, _unseqWord(account), changes)
+        );
+    }
+
+    /// @dev Build + relay a multichain batch at the account's current multichain sequence, K1-signed by `pk`.
+    function _applyMultichain(uint256 pk, address account, Keystore.AccountChange[] memory changes) internal {
+        keystore.applySignedAccountChanges(
+            account, _signBatch(pk, account, Keystore.AccountChangeChannel.Multichain, _multichainSeq(account), changes)
+        );
+    }
+
+    // ── Pre-built (unrelayed) batches ──
+    //
+    // These build the fully-signed batch WITHOUT relaying it, so revert tests can construct the batch (which reads
+    // the current sequence word via a view staticcall) BEFORE `vm.expectRevert`, then relay it as the single
+    // expected-reverting external call. Foundry's strict expectRevert binds to the very next external call, so the
+    // sequence-word staticcall must not sit between expectRevert and applySignedAccountChanges.
+
+    function _localBatch(uint256 pk, address account, Keystore.AccountChange[] memory changes)
+        internal
+        view
+        returns (Keystore.SignedAccountChanges memory)
+    {
+        return _signBatch(pk, account, Keystore.AccountChangeChannel.Local, _localSeqWord(account), changes);
+    }
+
+    function _unseqBatch(uint256 pk, address account, Keystore.AccountChange[] memory changes)
+        internal
+        view
+        returns (Keystore.SignedAccountChanges memory)
+    {
+        return _signBatch(pk, account, Keystore.AccountChangeChannel.Local, _unseqWord(account), changes);
+    }
+
+    function _multichainBatch(uint256 pk, address account, Keystore.AccountChange[] memory changes)
+        internal
+        view
+        returns (Keystore.SignedAccountChanges memory)
+    {
+        return _signBatch(pk, account, Keystore.AccountChangeChannel.Multichain, _multichainSeq(account), changes);
+    }
+
+    // ── Back-compat actor helpers (re-implemented on applySignedAccountChanges) ──
+    //
+    // These preserve the pre-split helper names used across the suite. A signed grant always self-expires, so where
+    // the old model used a no-expiry (0) actor these grant UNBOUNDED (type(uint48).max) on a sequenced batch — the
+    // same never-expiring behavior, expressed the new way.
+
+    function _authorizeActor(address account, uint256 pk, bytes32 actorId, address authenticator) internal {
+        _authorizeActorWithScope(account, pk, actorId, authenticator, 0);
+    }
+
+    function _authorizeActorWithScope(address account, uint256 pk, bytes32 actorId, address authenticator, uint16 scope)
+        internal
+    {
+        _applyLocal(pk, account, _one(_authorizeChange(actorId, authenticator, scope, UNBOUNDED, "")));
+    }
+
+    function _revokeActor(address account, uint256 pk, bytes32 actorId) internal {
+        // A live revoke is a reduction; batch it with a bump so it lands without ReductionRequiresEpochBump.
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
+        ch[0] = _revokeChange(actorId);
+        ch[1] = _bumpChange();
+        _applyLocal(pk, account, ch);
+    }
+
+    // Implicit-EOA variants are identical here (the same k1 signer path); kept as named aliases for readability.
+    function _implicitAuthorizeActor(address account, uint256 pk, bytes32 actorId, address authenticator) internal {
+        _authorizeActor(account, pk, actorId, authenticator);
+    }
+
+    function _implicitAuthorizeActorWithScope(
+        address account,
+        uint256 pk,
+        bytes32 actorId,
+        address authenticator,
+        uint16 scope
+    ) internal {
+        _authorizeActorWithScope(account, pk, actorId, authenticator, scope);
+    }
+
+    // ── Signed lock helpers (re-implemented as environment-op batches) ──
+
+    /// @dev Relay a signed Lock (unlockDelay) authorized by `pk` on the local channel.
+    function _signedLock(uint256 pk, address account, uint16 unlockDelay) internal {
+        _applyLocal(pk, account, _one(_lockChange(unlockDelay)));
+    }
+
+    /// @dev Relay a signed (solo) Unlock authorized by `pk` on the local channel.
     function _signedUnlock(uint256 pk, address account) internal {
-        keystore.applySignedLockChanges(account, Keystore.LockChangeType.Unlock, 0, _unlockAuth(pk, account));
+        _applyLocal(pk, account, _one(_unlockChange()));
+    }
+
+    /// @dev Hard-lock `account` via the signed lock path, authorized by its admin owner key `pk`.
+    function _lockAccount(uint256 pk, address account) internal {
+        _signedLock(pk, account, 1 hours);
+    }
+
+    // ── Direct AccountState storage pokes (for saturation edge cases) ──
+    //
+    // AccountState packs into one slot at base-slot 3 (declaration order: _actorConfig, _policyCommitment,
+    // _policyManager, _accountState). multichainSequence occupies bytes[0:8] and localSequence bytes[8:16] of that
+    // slot; localSequence's high 32 bits are the epoch, its low 32 bits the sequence.
+
+    function _accountStateSlot(address account) internal pure returns (bytes32) {
+        return keccak256(abi.encode(account, uint256(3)));
+    }
+
+    /// @dev Overwrite the packed localSequence word (epoch<<32 | seq), preserving every other field in the slot.
+    function _forceLocalWord(address account, uint64 word) internal {
+        bytes32 slot = _accountStateSlot(account);
+        uint256 cur = uint256(vm.load(address(keystore), slot));
+        // Clear bytes[8:16] (bits 64..127) and write the new word there.
+        uint256 mask = ~(uint256(type(uint64).max) << 64);
+        uint256 updated = (cur & mask) | (uint256(word) << 64);
+        vm.store(address(keystore), slot, bytes32(updated));
+    }
+
+    /// @dev Force the account's local epoch (high 32 bits), keeping the current low sequence.
+    function _forceLocalEpoch(address account, uint32 epoch) internal {
+        (, uint32 seq) = keystore.getLocalEpochAndSequence(account);
+        _forceLocalWord(account, (uint64(epoch) << 32) | uint64(seq));
+    }
+
+    /// @dev Force the account's local sequence (low 32 bits), keeping the current epoch.
+    function _forceLocalSequence(address account, uint32 seq) internal {
+        (uint32 epoch,) = keystore.getLocalEpochAndSequence(account);
+        _forceLocalWord(account, (uint64(epoch) << 32) | uint64(seq));
     }
 
     // ── Fuzzed key bounding ──

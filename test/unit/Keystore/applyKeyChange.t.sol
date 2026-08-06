@@ -2,863 +2,551 @@
 pragma solidity ^0.8.30;
 
 import {Keystore} from "../../../src/Keystore.sol";
+import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
-contract ApplyConfigChangeActorTest is KeystoreTest {
-    uint16 constant SCOPE_SENDER = 0x01;
-    uint16 constant SCOPE_POLICY = 0x02;
-    uint16 constant SCOPE_NONCE = 0x04;
-    uint16 constant SCOPE_SELF_PAYER = 0x08;
-    uint16 constant SCOPE_SPONSOR_PAYER = 0x10;
+/// @notice §10 test matrix for the authority / environment ops driven through {applySignedAccountChanges}:
+///         AuthorizeActor (sequenced + unsequenced), RevokeActor, BumpLocalEpoch, the op-ordering / solo fences,
+///         the reduction rule, and the sequenced-channel replay/saturation edges. Lock/unlock, recovery-key
+///         authorization, garbage collection, and multichain regression live in applyAccountChange.t.sol.
+contract ApplySignedAccountChangesTest is KeystoreTest {
+    // Non-self, non-owner actor ids (low right-aligned constants never collide with a bytes20-left-aligned address).
+    bytes32 constant ACTOR_A = bytes32(uint256(0xA1));
+    bytes32 constant ACTOR_B = bytes32(uint256(0xB2));
 
-    /// @notice Authorizing a non-self actor registers it with the given authenticator and unrestricted scope.
-    function test_authorizeActor_success_unrestricted(uint256 pk, bytes32 actorId) public {
-        pk = _boundK1Pk(pk);
-        (address account, bytes32 ownerId) = _createK1Account(pk);
-        vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
+    uint16 constant SENDER = Scopes.SENDER;
+    uint16 constant NONCE = Scopes.NONCE;
 
-        Keystore.ActorChange[] memory ch = _authorizeChange(actorId, address(k1Authenticator), 0, "");
-        _signApply(account, pk, ch);
-
-        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, actorId);
-        assertEq(cfg.authenticator, address(k1Authenticator));
-        assertEq(cfg.scope, 0x00);
+    function setUp() public override {
+        super.setUp();
+        // A non-zero base timestamp so `expiry <= block.timestamp` comparisons are meaningful.
+        vm.warp(1_000_000);
     }
 
-    /// @notice Authorizing an actor stores the requested non-zero scope verbatim.
-    /// @dev SCOPE_POLICY is masked out because a policy-bearing scope requires policyData (covered elsewhere).
-    function test_authorizeActor_success_withScope(uint256 pk, bytes32 actorId, uint16 scope) public {
-        pk = _boundK1Pk(pk);
-        (address account, bytes32 ownerId) = _createK1Account(pk);
-        vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
-        scope = uint16(bound(uint256(scope), 1, 255)) & ~SCOPE_POLICY;
-        vm.assume(scope != 0);
-
-        Keystore.ActorChange[] memory ch = _authorizeChange(actorId, address(k1Authenticator), scope, "");
-        _signApply(account, pk, ch);
-
-        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, actorId);
-        assertEq(cfg.authenticator, address(k1Authenticator));
-        assertEq(cfg.scope, scope);
+    function _future(uint48 delta) internal view returns (uint48) {
+        return uint48(block.timestamp + delta);
     }
 
-    /// @notice Revoking a live non-self actor removes it from the account.
-    function test_revokeActor_success_removesActor(uint256 pk, bytes32 actorId) public {
-        pk = _boundK1Pk(pk);
-        (address account, bytes32 ownerId) = _createK1Account(pk);
-        vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
-        _authorizeActor(account, pk, actorId, address(k1Authenticator));
-        assertTrue(_isActor(account, actorId));
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+    // AUTHORIZE — UNSEQUENCED (JIT)
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-        Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](1);
-        ch[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ActorChangeType.Revoke, data: ""});
-        _signApply(account, pk, ch);
-
-        assertFalse(_isActor(account, actorId));
-    }
-
-    /// @notice A batch of multiple authorize operations applies every element.
-    function test_applySignedActorChanges_success_multipleOperations(uint256 pk, bytes32 idA, bytes32 idB) public {
-        pk = _boundK1Pk(pk);
-        (address account, bytes32 ownerId) = _createK1Account(pk);
-        vm.assume(idA != ownerId && idA != bytes32(bytes20(account)));
-        vm.assume(idB != ownerId && idB != bytes32(bytes20(account)));
-        vm.assume(idA != idB);
-
-        Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](2);
-        ch[0] = _authorizeChange(idA, address(k1Authenticator), 0, "")[0];
-        ch[1] = _authorizeChange(idB, address(k1Authenticator), 0, "")[0];
-        _signApply(account, pk, ch);
-
-        assertTrue(_isActor(account, idA));
-        assertTrue(_isActor(account, idB));
-    }
-
-    /// @notice Each applied batch increments the account's local change sequence by one.
-    /// @dev createAccount initializes localSequence to 1 (the initialized flag), so the local channel starts at 1.
-    function test_applySignedActorChanges_success_sequenceIncrements(uint256 pk, bytes32 idA, bytes32 idB) public {
-        pk = _boundK1Pk(pk);
-        (address account, bytes32 ownerId) = _createK1Account(pk);
-        vm.assume(idA != ownerId && idA != bytes32(bytes20(account)));
-        vm.assume(idB != ownerId && idB != bytes32(bytes20(account)));
-        vm.assume(idA != idB);
-
-        assertEq(keystore.getChangeSequences(account).local, 1);
-
-        _authorizeActor(account, pk, idA, address(k1Authenticator));
-        assertEq(keystore.getChangeSequences(account).local, 2);
-
-        _authorizeActor(account, pk, idB, address(k1Authenticator));
-        assertEq(keystore.getChangeSequences(account).local, 3);
-    }
-
-    /// @notice A hard-locked account rejects actor changes.
-    /// @dev The onlyUnlocked modifier fires before any authentication work.
-    function test_applySignedActorChanges_revert_whenLocked(uint256 pk, bytes32 actorId) public {
-        pk = _boundK1Pk(pk);
-        (address account, bytes32 ownerId) = _createK1Account(pk);
-        vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
-        _lockAccount(pk, account);
-
-        Keystore.ActorChange[] memory ch = _authorizeChange(actorId, address(k1Authenticator), 0, "");
-        bytes memory auth = _authOver(account, pk, ch);
-        vm.expectRevert(Keystore.AccountIsLocked.selector);
-        keystore.applySignedActorChanges(account, uint64(block.chainid), ch, auth);
-    }
-
-    /// @notice Any authorized unrestricted actor, not only the owner, may authorize further actors.
-    function test_applySignedActorChanges_success_anyUnrestrictedActorAuthorizes(
-        uint256 ownerPk,
-        uint256 actorPk,
-        bytes32 targetId
-    ) public {
-        ownerPk = _boundK1Pk(ownerPk);
-        actorPk = _boundK1Pk(actorPk);
-        vm.assume(ownerPk != actorPk);
-        (address account, bytes32 ownerId) = _createK1Account(ownerPk);
-        bytes32 actorId = bytes32(bytes20(vm.addr(actorPk)));
-        vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
-        vm.assume(targetId != ownerId && targetId != actorId && targetId != bytes32(bytes20(account)));
-
-        _authorizeActor(account, ownerPk, actorId, address(k1Authenticator));
-
-        Keystore.ActorChange[] memory ch = _authorizeChange(targetId, address(k1Authenticator), 0, "");
-        _signApply(account, actorPk, ch);
-        assertTrue(_isActor(account, targetId));
-    }
-
-    /// @notice Any scoped (non-zero) actor cannot authorize actors; admin is exactly scope == 0.
-    /// @dev Reverts with UnauthorizedActorChange at the scope-0 gate.
-    function test_applySignedActorChanges_revert_scopedActorCannotAuthorize(
-        uint256 ownerPk,
-        uint256 actorPk,
-        uint16 scope,
-        bytes32 targetId
-    ) public {
-        ownerPk = _boundK1Pk(ownerPk);
-        actorPk = _boundK1Pk(actorPk);
-        vm.assume(ownerPk != actorPk);
-        (address account, bytes32 ownerId) = _createK1Account(ownerPk);
-        bytes32 actorId = bytes32(bytes20(vm.addr(actorPk)));
-        vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
-        vm.assume(targetId != ownerId && targetId != actorId && targetId != bytes32(bytes20(account)));
-        scope = uint16(bound(uint256(scope), 1, 255)) & ~SCOPE_POLICY;
-        vm.assume(scope != 0);
-
-        _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), scope);
-
-        Keystore.ActorChange[] memory ch = _authorizeChange(targetId, address(k1Authenticator), 0, "");
-        bytes memory auth = _authOver(account, actorPk, ch);
-        vm.expectRevert(Keystore.UnauthorizedActorChange.selector);
-        keystore.applySignedActorChanges(account, uint64(block.chainid), ch, auth);
-    }
-
-    /// @notice Re-authorizing an already-configured non-self actor upserts its config in place.
-    /// @dev The owner actor is re-scoped from unrestricted to a scoped key rather than reverting.
-    function test_authorizeActor_success_reauthorizeUpsertsInPlace(uint256 pk) public {
-        pk = _boundK1Pk(pk);
-        (address account, bytes32 ownerId) = _createK1Account(pk);
-
-        uint16 newScope = SCOPE_SENDER;
-        Keystore.ActorChange[] memory ch = _authorizeChange(ownerId, address(k1Authenticator), newScope, "");
-        _signApply(account, pk, ch);
-
-        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, ownerId);
-        assertEq(cfg.scope, newScope);
-        assertEq(cfg.authenticator, address(k1Authenticator));
-    }
-
-    /// @notice Re-authorizing a live inline k1 self is an in-place upsert with no prior revoke.
-    /// @dev Even a non-trivially-scoped live self can be re-scoped directly.
-    function test_selfActorId_success_reauthorizeLiveSelfRescopes(uint256 eoaPk) public {
-        eoaPk = _boundK1Pk(eoaPk);
-        address eoa = vm.addr(eoaPk);
-        bytes32 selfActorId = bytes32(bytes20(eoa));
-
-        // First rescope keeps self at admin scope (0) so the same key retains authority to sign the second change;
-        // this materializes an explicit live self config over the implicit default-EOA.
-        uint8 firstScope = 0;
-        _rescopeSelf(eoa, eoaPk, firstScope);
-        assertEq(keystore.getActorConfig(eoa, selfActorId).scope, firstScope);
-
-        // Second admin-signed change rescopes the live self actor in place to a non-admin scope.
-        uint16 newScope = SCOPE_SENDER | SCOPE_SELF_PAYER;
-        _rescopeSelf(eoa, eoaPk, newScope);
-
-        Keystore.ActorConfig memory cfg = keystore.getActorConfig(eoa, selfActorId);
-        assertEq(cfg.scope, newScope);
-        assertEq(cfg.authenticator, keystore.K1_AUTHENTICATOR());
-        assertTrue(_isActor(eoa, selfActorId));
-    }
-
-    /// @notice Revoking an actor that was never authorized reverts.
-    function test_revokeActor_revert_nonExistentActor(uint256 pk, bytes32 actorId) public {
-        pk = _boundK1Pk(pk);
-        (address account, bytes32 ownerId) = _createK1Account(pk);
-        vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
-
-        Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](1);
-        ch[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ActorChangeType.Revoke, data: ""});
-        bytes memory auth = _authOver(account, pk, ch);
-        vm.expectRevert();
-        keystore.applySignedActorChanges(account, uint64(block.chainid), ch, auth);
-    }
-
-    /// @notice A batch signed by a key that is not an actor on the account reverts.
-    function test_applySignedActorChanges_revert_invalidSignature(uint256 pk, uint256 wrongPk, bytes32 actorId) public {
-        pk = _boundK1Pk(pk);
-        wrongPk = _boundK1Pk(wrongPk);
-        vm.assume(vm.addr(pk) != vm.addr(wrongPk));
-        (address account, bytes32 ownerId) = _createK1Account(pk);
-        vm.assume(vm.addr(wrongPk) != account);
-        vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
-
-        Keystore.ActorChange[] memory ch = _authorizeChange(actorId, address(k1Authenticator), 0, "");
-        bytes memory badAuth = _authOver(account, wrongPk, ch);
-        vm.expectRevert();
-        keystore.applySignedActorChanges(account, uint64(block.chainid), ch, badAuth);
-    }
-
-    // ── Implicit EOA (registered by default) ──
-    //
-    // Every account has an implicit self-actorId bytes32(bytes20(account))
-    // that is authorized with unrestricted scope when the config slot
-    // is empty. No createAccount/importAccount needed.
-
-    /// @notice A never-created EOA can sign actor changes via its implicit self key.
-    function test_applySignedActorChanges_success_implicitEoaSigner(uint256 eoaPk, bytes32 actorId) public {
-        eoaPk = _boundK1Pk(eoaPk);
-        address eoa = vm.addr(eoaPk);
-        vm.assume(actorId != bytes32(bytes20(eoa)));
-
-        _signApply(eoa, eoaPk, _authorizeChange(actorId, address(k1Authenticator), 0, ""));
-        assertTrue(_isActor(eoa, actorId));
-    }
-
-    /// @notice The implicit EOA self key can be revoked via the default-EOA flag using another key.
-    /// @dev A revoked default EOA reports an all-zero config.
-    function test_selfActorId_success_implicitEoaRevokesSelfViaFlag(uint256 eoaPk, uint256 newPk) public {
-        eoaPk = _boundK1Pk(eoaPk);
-        newPk = _boundK1Pk(newPk);
-        vm.assume(eoaPk != newPk);
-        address eoa = vm.addr(eoaPk);
-        bytes32 selfActorId = bytes32(bytes20(eoa));
-        bytes32 newActorId = bytes32(bytes20(vm.addr(newPk)));
-        vm.assume(newActorId != selfActorId);
-        assertTrue(_isActor(eoa, selfActorId));
-
-        _implicitAuthorizeActor(eoa, eoaPk, newActorId, address(k1Authenticator));
-        _revokeActor(eoa, newPk, selfActorId);
-
-        assertFalse(_isActor(eoa, selfActorId));
-        assertTrue(_isActor(eoa, newActorId));
-
-        Keystore.ActorConfig memory cfg = keystore.getActorConfig(eoa, selfActorId);
-        assertEq(cfg.authenticator, address(0));
-        assertEq(cfg.scope, 0);
-    }
-
-    /// @notice A live default EOA reports a synthesized K1 owner config for its self-actorId.
-    function test_selfActorId_success_liveReportsAsK1Owner(uint256 eoaPk) public view {
-        eoaPk = _boundK1Pk(eoaPk);
-        address eoa = vm.addr(eoaPk);
-        bytes32 selfActorId = bytes32(bytes20(eoa));
-
-        Keystore.ActorConfig memory cfg = keystore.getActorConfig(eoa, selfActorId);
-        assertEq(cfg.authenticator, keystore.K1_AUTHENTICATOR());
-        assertEq(cfg.scope, 0);
-    }
-
-    /// @notice The account's own key can be downgraded to a scoped actor via the self-actorId.
-    /// @dev With a single k1 path the config alone decides the scope; there is no implicit full-owner escape.
-    function test_selfActorId_success_scopeViaK1(uint256 eoaPk, uint16 scope, bytes32 hash) public {
-        eoaPk = _boundK1Pk(eoaPk);
-        address eoa = vm.addr(eoaPk);
-        bytes32 selfActorId = bytes32(bytes20(eoa));
-        scope = uint16(bound(uint256(scope), 1, 255)) & ~SCOPE_POLICY;
-        vm.assume(scope != 0);
-        assertTrue(_isActor(eoa, selfActorId));
-
-        _implicitAuthorizeActorWithScope(eoa, eoaPk, selfActorId, address(k1Authenticator), scope);
-
-        assertTrue(_isActor(eoa, selfActorId));
-        Keystore.ActorConfig memory cfg = keystore.getActorConfig(eoa, selfActorId);
-        assertEq(cfg.authenticator, address(k1Authenticator));
-        assertEq(cfg.scope, scope);
-
-        (, uint16 outScope) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
-        assertEq(outScope, scope);
-    }
-
-    /// @notice A self key scoped to any non-zero scope can no longer authorize, including re-authorizing itself.
-    /// @dev Reverts with UnauthorizedActorChange: the downgraded self fails the scope-0 (admin) gate.
-    function test_selfActorId_revert_scopedSelfCannotReauthorize(uint256 eoaPk, uint16 scope) public {
-        eoaPk = _boundK1Pk(eoaPk);
-        address eoa = vm.addr(eoaPk);
-        bytes32 selfActorId = bytes32(bytes20(eoa));
-        scope = uint16(bound(uint256(scope), 1, 255)) & ~SCOPE_POLICY;
-        vm.assume(scope != 0);
-
-        _implicitAuthorizeActorWithScope(eoa, eoaPk, selfActorId, address(k1Authenticator), scope);
-
-        Keystore.ActorChange[] memory ch = _authorizeChange(selfActorId, keystore.K1_AUTHENTICATOR(), 0, "");
-        bytes memory auth = _authOver(eoa, eoaPk, ch);
-        vm.expectRevert(Keystore.UnauthorizedActorChange.selector);
-        keystore.applySignedActorChanges(eoa, uint64(block.chainid), ch, auth);
-    }
-
-    /// @notice A never-created EOA can apply a multichain (chainId 0) actor change via its implicit self key.
-    function test_applySignedActorChanges_success_multichainImplicitEoa(uint256 eoaPk, bytes32 actorId) public {
-        eoaPk = _boundK1Pk(eoaPk);
-        address eoa = vm.addr(eoaPk);
-        vm.assume(actorId != bytes32(bytes20(eoa)));
-
-        Keystore.ActorChange[] memory ch = _authorizeChange(actorId, address(k1Authenticator), 0, "");
-        uint64 seq = keystore.getChangeSequences(eoa).multichain;
-        bytes32 digest = _computeActorChangeBatchDigest(eoa, 0, seq, ch);
-        keystore.applySignedActorChanges(eoa, 0, ch, _buildK1Auth(eoaPk, digest));
-        assertTrue(_isActor(eoa, actorId));
-    }
-
-    // ── Default EOA self-actorId semantics ──
-    //
-    // The self-actorId for an account is bytes32(bytes20(account)). Without an explicit entry it is the implicit
-    // default EOA (full owner), gated by the AccountState flag. It may also be configured as an explicit actor like
-    // any other (e.g. to scope the account's own key), which sets the flag and disables the implicit address(0)
-    // path. The flag is never cleared, so a managed self-actorId is operated through its explicit entry/prefix.
-    // createAccount and importAccount disable the implicit default EOA by default.
-
-    /// @notice createAccount disables the implicit default EOA, so the self-actorId is not a live actor.
-    function test_selfActorId_success_revokedByDefaultOnCreate(uint256 pk) public {
+    /// @notice An unsequenced grant lands on an empty slot and does not consume the local sequence.
+    function test_authorizeUnsequenced_success_happyPath(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
-        bytes32 selfActorId = bytes32(bytes20(account));
+        uint64 seqBefore = _localSeqWord(account);
 
-        assertFalse(_isActor(account, selfActorId));
-        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, selfActorId);
-        assertEq(cfg.authenticator, address(0));
-        assertEq(cfg.scope, 0);
+        _applyUnsequenced(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
+        );
+
+        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, ACTOR_A);
+        assertEq(cfg.authenticator, address(k1Authenticator));
+        assertEq(cfg.scope, SENDER);
+        assertEq(cfg.expiry, _future(1 days));
+        // Unsequenced batches never consume the counter.
+        assertEq(_localSeqWord(account), seqBefore);
     }
 
-    /// @notice An owner re-enables the default EOA by authorizing the self-actorId with the owner shape.
-    function test_selfActorId_success_reEnableOnCreatedAccount(uint256 pk) public {
+    /// @notice Replaying an unsequenced grant after it landed reverts NonMonotoneExpiry (same expiry, occupied slot).
+    function test_authorizeUnsequenced_revert_replayAfterLanding(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
-        bytes32 selfActorId = bytes32(bytes20(account));
-        assertFalse(_isActor(account, selfActorId));
+        Keystore.SignedAccountChanges memory s = _signBatch(
+            pk,
+            account,
+            Keystore.AccountChangeChannel.Local,
+            _unseqWord(account),
+            _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
+        );
+        keystore.applySignedAccountChanges(account, s);
 
-        _authorizeActor(account, pk, selfActorId, keystore.K1_AUTHENTICATOR());
-
-        assertTrue(_isActor(account, selfActorId));
-        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, selfActorId);
-        assertEq(cfg.authenticator, keystore.K1_AUTHENTICATOR());
-        assertEq(cfg.scope, 0);
+        vm.expectRevert(Keystore.NonMonotoneExpiry.selector);
+        keystore.applySignedAccountChanges(account, s);
     }
 
-    /// @notice A revoked default EOA can be re-enabled by authorizing the self-actorId as a native k1 owner.
-    /// @dev While revoked the own key cannot authenticate; after re-enable it resolves via the explicit self config.
-    function test_selfActorId_success_revokeThenReEnable(uint256 eoaPk, uint256 newPk, bytes32 hash) public {
-        eoaPk = _boundK1Pk(eoaPk);
-        newPk = _boundK1Pk(newPk);
-        vm.assume(eoaPk != newPk);
-        address eoa = vm.addr(eoaPk);
-        bytes32 selfActorId = bytes32(bytes20(eoa));
-        bytes32 newActorId = bytes32(bytes20(vm.addr(newPk)));
-        vm.assume(newActorId != selfActorId);
-        assertTrue(_isActor(eoa, selfActorId));
-
-        _implicitAuthorizeActor(eoa, eoaPk, newActorId, address(k1Authenticator));
-        _revokeActor(eoa, newPk, selfActorId);
-        assertFalse(_isActor(eoa, selfActorId));
-
-        vm.expectRevert();
-        keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
-
-        _authorizeActor(eoa, newPk, selfActorId, keystore.K1_AUTHENTICATOR());
-        assertTrue(_isActor(eoa, selfActorId));
-
-        (, uint16 scope) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
-        assertEq(scope, 0);
-    }
-
-    /// @notice Full lifecycle: default EOA hands the account to a device key, then re-enables the K1 key.
-    /// @dev The revoke-self + re-enable-self mechanics are authenticator-agnostic; K1 stands in for a passkey here.
-    function test_selfActorId_success_eoaToPasskeyLifecycle(uint256 eoaPk, uint256 devicePk, bytes32 hash) public {
-        eoaPk = _boundK1Pk(eoaPk);
-        devicePk = _boundK1Pk(devicePk);
-        vm.assume(eoaPk != devicePk);
-        address eoa = vm.addr(eoaPk);
-        bytes32 selfActorId = bytes32(bytes20(eoa));
-        bytes32 deviceActorId = bytes32(bytes20(vm.addr(devicePk)));
-        vm.assume(deviceActorId != selfActorId);
-
-        // Phase 0: the default EOA is live and authenticates with its own k1 signature.
-        assertTrue(_isActor(eoa, selfActorId));
-        (, uint16 scope0) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
-        assertEq(scope0, 0);
-
-        // Phase 1: in one batch signed by the EOA, add the device key as a full owner and revoke the default EOA.
-        Keystore.ActorChange[] memory switchChanges = new Keystore.ActorChange[](2);
-        switchChanges[0] = _authorizeChange(deviceActorId, address(k1Authenticator), 0, "")[0];
-        switchChanges[1] =
-            Keystore.ActorChange({actorId: selfActorId, changeType: Keystore.ActorChangeType.Revoke, data: ""});
-        _signApply(eoa, eoaPk, switchChanges);
-
-        assertFalse(_isActor(eoa, selfActorId));
-        assertTrue(_isActor(eoa, deviceActorId));
-        vm.expectRevert();
-        keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
-        (, uint16 scope1) = keystore.authenticateActor(eoa, hash, _buildK1Auth(devicePk, hash));
-        assertEq(scope1, 0);
-
-        // Phase 2: the device key re-enables the K1 key by authorizing the self-actorId as a native k1 owner.
-        Keystore.ActorChange[] memory reEnable = _authorizeChange(selfActorId, keystore.K1_AUTHENTICATOR(), 0, "");
-        _signApply(eoa, devicePk, reEnable);
-
-        assertTrue(_isActor(eoa, selfActorId));
-        (, uint16 scope2) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
-        assertEq(scope2, 0);
-    }
-
-    /// @notice A single batch signed by the default EOA can add a key and revoke the default EOA together.
-    function test_selfActorId_success_batchRevokeViaFlag(uint256 eoaPk, uint256 newPk) public {
-        eoaPk = _boundK1Pk(eoaPk);
-        newPk = _boundK1Pk(newPk);
-        vm.assume(eoaPk != newPk);
-        address eoa = vm.addr(eoaPk);
-        bytes32 selfActorId = bytes32(bytes20(eoa));
-        bytes32 newActorId = bytes32(bytes20(vm.addr(newPk)));
-        vm.assume(newActorId != selfActorId);
-
-        Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](2);
-        ch[0] = _authorizeChange(newActorId, address(k1Authenticator), 0, "")[0];
-        ch[1] = Keystore.ActorChange({actorId: selfActorId, changeType: Keystore.ActorChangeType.Revoke, data: ""});
-        _signApply(eoa, eoaPk, ch);
-
-        assertFalse(_isActor(eoa, selfActorId));
-        assertTrue(_isActor(eoa, newActorId));
-
-        Keystore.ActorConfig memory cfg = keystore.getActorConfig(eoa, selfActorId);
-        assertEq(cfg.authenticator, address(0));
-        assertEq(cfg.scope, 0);
-    }
-
-    /// @notice A revoked default EOA can no longer sign actor changes, but a still-active key can.
-    /// @dev The revoked self signature reverts; the second key's signature over the same digest applies.
-    function test_selfActorId_revert_revokedCannotSign(uint256 eoaPk, uint256 newPk, bytes32 targetId) public {
-        eoaPk = _boundK1Pk(eoaPk);
-        newPk = _boundK1Pk(newPk);
-        vm.assume(eoaPk != newPk);
-        address eoa = vm.addr(eoaPk);
-        bytes32 selfActorId = bytes32(bytes20(eoa));
-        bytes32 newActorId = bytes32(bytes20(vm.addr(newPk)));
-        vm.assume(newActorId != selfActorId);
-        vm.assume(targetId != selfActorId && targetId != newActorId);
-
-        _implicitAuthorizeActor(eoa, eoaPk, newActorId, address(k1Authenticator));
-        _revokeActor(eoa, newPk, selfActorId);
-
-        Keystore.ActorChange[] memory ch = _authorizeChange(targetId, address(k1Authenticator), 0, "");
-        uint64 seq = keystore.getChangeSequences(eoa).local;
-        bytes32 digest = _computeActorChangeBatchDigest(eoa, uint64(block.chainid), seq, ch);
-
-        vm.expectRevert();
-        keystore.applySignedActorChanges(eoa, uint64(block.chainid), ch, _buildK1Auth(eoaPk, digest));
-
-        keystore.applySignedActorChanges(eoa, uint64(block.chainid), ch, _buildK1Auth(newPk, digest));
-        assertTrue(_isActor(eoa, targetId));
-    }
-
-    /// @notice A revoked signer key can no longer authorize actor changes.
-    function test_applySignedActorChanges_revert_revokedSignerKey(uint256 ownerPk, uint256 newPk, bytes32 targetId)
-        public
-    {
-        ownerPk = _boundK1Pk(ownerPk);
-        newPk = _boundK1Pk(newPk);
-        vm.assume(ownerPk != newPk);
-        (address account, bytes32 ownerId) = _createK1Account(ownerPk);
-        bytes32 newActorId = bytes32(bytes20(vm.addr(newPk)));
-        vm.assume(newActorId != ownerId && newActorId != bytes32(bytes20(account)));
-        vm.assume(targetId != ownerId && targetId != newActorId && targetId != bytes32(bytes20(account)));
-
-        _authorizeActor(account, ownerPk, newActorId, address(k1Authenticator));
-        _revokeActor(account, newPk, ownerId);
-
-        Keystore.ActorChange[] memory ch = _authorizeChange(targetId, address(k1Authenticator), 0, "");
-        bytes memory auth = _authOver(account, ownerPk, ch);
-        vm.expectRevert();
-        keystore.applySignedActorChanges(account, uint64(block.chainid), ch, auth);
-    }
-
-    /// @notice Revoking a non-self actor deletes its config slot.
-    function test_revokeActor_success_deletesSlot(uint256 pk, bytes32 actorId) public {
+    /// @notice Replaying an unsequenced grant after the slot was garbage-collected reverts ExpiredChange (the fixed
+    ///         granted expiry is now in the past).
+    function test_authorizeUnsequenced_revert_replayAfterGC(uint256 pk) public {
         pk = _boundK1Pk(pk);
-        (address account, bytes32 ownerId) = _createK1Account(pk);
-        vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
-        _authorizeActor(account, pk, actorId, address(k1Authenticator));
-
-        _revokeActor(account, pk, actorId);
-
-        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, actorId);
-        assertEq(cfg.authenticator, address(0));
-        assertEq(cfg.scope, 0);
-    }
-
-    // ── Fuzzed reverts and branch coverage ──
-
-    /// @notice applySignedActorChanges reverts for a chainId that is neither 0 (multichain) nor the current chain.
-    /// @dev Exercises the `chainId != 0 && chainId != block.chainid` guard on the actor-change path.
-    function test_applySignedActorChanges_revert_invalidChainId(uint256 pk, uint256 badChainId) public {
-        pk = _boundK1Pk(pk);
-        badChainId = bound(badChainId, 1, type(uint64).max);
-        vm.assume(badChainId != block.chainid);
         (address account,) = _createK1Account(pk);
+        uint48 expiry = _future(1 days);
+        Keystore.SignedAccountChanges memory s = _signBatch(
+            pk,
+            account,
+            Keystore.AccountChangeChannel.Local,
+            _unseqWord(account),
+            _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, expiry, ""))
+        );
+        keystore.applySignedAccountChanges(account, s);
 
-        Keystore.ActorChange[] memory changes =
-            _authorizeChange(bytes32(bytes20(vm.addr(0xBEEF))), address(k1Authenticator), 0, "");
-        bytes memory auth = _buildK1Auth(pk, _computeActorChangeBatchDigest(account, uint64(badChainId), 0, changes));
+        vm.warp(uint256(expiry) + 1);
+        keystore.collectActor(account, ACTOR_A);
+        assertFalse(_isActor(account, ACTOR_A));
 
-        vm.expectRevert(Keystore.InvalidChainId.selector);
-        keystore.applySignedActorChanges(account, uint64(badChainId), changes, auth);
+        vm.expectRevert(Keystore.ExpiredChange.selector);
+        keystore.applySignedAccountChanges(account, s);
     }
 
-    /// @notice Replaying an identical (changes, auth) pair fails once the sequence is consumed.
-    /// @dev The replay recomputes the digest at seq+1, so the stale signature recovers a non-actor and reverts.
-    function test_applySignedActorChanges_revert_replay(uint256 pk, bytes32 actorId) public {
+    /// @notice An unsequenced batch signed at a stale epoch reverts StaleEpoch.
+    function test_authorizeUnsequenced_revert_wrongEpoch(uint256 pk) public {
         pk = _boundK1Pk(pk);
-        (address account, bytes32 ownerId) = _createK1Account(pk);
-        vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
+        (address account,) = _createK1Account(pk);
+        // Pre-sign at epoch 0, then bump the epoch out from under it.
+        Keystore.SignedAccountChanges memory s = _signBatch(
+            pk,
+            account,
+            Keystore.AccountChangeChannel.Local,
+            _unseqWord(account),
+            _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
+        );
+        _applyUnsequenced(pk, account, _one(_bumpChange())); // epoch 0 -> 1
 
-        Keystore.ActorChange[] memory changes = _authorizeChange(actorId, address(k1Authenticator), 0, "");
-        bytes memory auth = _authOver(account, pk, changes);
-
-        keystore.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
-
-        vm.expectRevert();
-        keystore.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
+        vm.expectRevert(Keystore.StaleEpoch.selector);
+        keystore.applySignedAccountChanges(account, s);
     }
 
-    /// @notice An ActorChange carrying ActorChangeType.Invalid (0) reverts UnknownActorChangeType (after the scope-0 gate) —
-    ///         the only unrecognized changeType that reaches the handler. Out-of-range wire values (>= 3) are rejected
-    ///         at ABI-decode instead, the same enum-decode guarantee exercised by
-    ///         ApplyAccountChange.test_applySignedLockChanges_revert_outOfRangeOp.
-    function test_applySignedActorChanges_revert_invalidActorChangeType(uint256 pk) public {
+    /// @notice A grant whose expiry is not strictly in the future reverts ExpiredChange (covers expiry == now and 0).
+    function test_authorizeUnsequenced_revert_pastExpiry(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
 
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({
-            actorId: bytes32(bytes20(vm.addr(0xBEEF))), changeType: Keystore.ActorChangeType.Invalid, data: ""
-        });
-
-        bytes memory auth = _authOver(account, pk, changes);
-        vm.expectRevert(Keystore.UnknownActorChangeType.selector);
-        keystore.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
+        Keystore.SignedAccountChanges memory s = _unseqBatch(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, uint48(block.timestamp), ""))
+        );
+        vm.expectRevert(Keystore.ExpiredChange.selector);
+        keystore.applySignedAccountChanges(account, s);
     }
 
-    /// @notice The admin gate: an authenticated actor may change actors iff its scope == 0.
-    /// @dev Fuzzes the signer's scope (SCOPE_POLICY masked out) and asserts success only when scope is 0.
-    function test_applySignedActorChanges_adminGate_acrossScopes(
-        uint256 ownerPk,
-        uint256 signerPk,
-        uint16 signerScope,
-        bytes32 targetId
-    ) public {
-        ownerPk = _boundK1Pk(ownerPk);
-        signerPk = _boundK1Pk(signerPk);
-        vm.assume(ownerPk != signerPk);
-        (address account, bytes32 ownerId) = _createK1Account(ownerPk);
-        bytes32 signerId = bytes32(bytes20(vm.addr(signerPk)));
-        vm.assume(signerId != ownerId && signerId != bytes32(bytes20(account)));
-        vm.assume(targetId != ownerId && targetId != signerId && targetId != bytes32(bytes20(account)));
-
-        signerScope = signerScope & ~SCOPE_POLICY;
-        _authorizeActorWithScope(account, ownerPk, signerId, address(k1Authenticator), signerScope);
-
-        Keystore.ActorChange[] memory ch = _authorizeChange(targetId, address(k1Authenticator), 0, "");
-        if (signerScope == 0) {
-            _signApply(account, signerPk, ch);
-            assertTrue(_isActor(account, targetId));
-        } else {
-            bytes memory auth = _authOver(account, signerPk, ch);
-            vm.expectRevert(Keystore.UnauthorizedActorChange.selector);
-            keystore.applySignedActorChanges(account, uint64(block.chainid), ch, auth);
-        }
-    }
-
-    /// @notice Authorizing with a zero authenticator reverts with InvalidAuthenticator.
-    function test_authorizeActor_revert_invalidAuthenticator(uint256 pk, bytes32 actorId) public {
+    /// @notice An unsequenced grant may not request the unbounded (max) expiry — that is sequenced-only.
+    function test_authorizeUnsequenced_revert_unboundedExpiry(uint256 pk) public {
         pk = _boundK1Pk(pk);
-        (address account, bytes32 ownerId) = _createK1Account(pk);
-        vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
+        (address account,) = _createK1Account(pk);
 
-        Keystore.ActorChange[] memory ch = _authorizeChange(actorId, address(0), 0, "");
-        bytes memory auth = _authOver(account, pk, ch);
-        vm.expectRevert(Keystore.InvalidAuthenticator.selector);
-        keystore.applySignedActorChanges(account, uint64(block.chainid), ch, auth);
+        Keystore.SignedAccountChanges memory s =
+            _unseqBatch(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, UNBOUNDED, "")));
+        vm.expectRevert(Keystore.UnboundedGrantRequiresSequencing.selector);
+        keystore.applySignedAccountChanges(account, s);
     }
 
-    /// @notice An ungated actor (scope & SCOPE_POLICY == 0) with non-empty policyData reverts with InvalidPolicyData.
-    function test_authorizeActor_revert_invalidPolicyData_ungatedWithData(
-        uint256 pk,
-        bytes32 actorId,
-        bytes memory data
-    ) public {
+    /// @notice An unsequenced upsert may not change an occupied slot's scope.
+    function test_authorizeUnsequenced_revert_scopeChangeOnOccupied(uint256 pk) public {
         pk = _boundK1Pk(pk);
-        vm.assume(data.length != 0);
-        (address account, bytes32 ownerId) = _createK1Account(pk);
-        vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
+        (address account,) = _createK1Account(pk);
+        _applyUnsequenced(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
+        );
 
-        Keystore.ActorChange[] memory ch = _authorizeChange(actorId, address(k1Authenticator), 0, data);
-        bytes memory auth = _authOver(account, pk, ch);
-        vm.expectRevert(Keystore.InvalidPolicyData.selector);
-        keystore.applySignedActorChanges(account, uint64(block.chainid), ch, auth);
+        Keystore.SignedAccountChanges memory s = _unseqBatch(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), NONCE, _future(2 days), ""))
+        );
+        vm.expectRevert(Keystore.ScopeChangeRequiresSequencing.selector);
+        keystore.applySignedAccountChanges(account, s);
     }
 
-    /// @notice A gated actor (scope & SCOPE_POLICY) whose policyData is not exactly 52 bytes reverts.
-    function test_authorizeActor_revert_invalidPolicyData_gatedWrongLength(
-        uint256 pk,
-        bytes32 actorId,
-        bytes memory data
-    ) public {
+    /// @notice Extend-by-upsert is order-independent: applying two grants (T1 < T2) in either order settles at the
+    ///         max expiry (the lower one either lands-then-is-overwritten or reverts NonMonotoneExpiry).
+    function test_authorizeUnsequenced_extendByUpsert_bothOrdersSettleAtMax(uint256 pk) public {
         pk = _boundK1Pk(pk);
-        vm.assume(data.length != 52);
-        (address account, bytes32 ownerId) = _createK1Account(pk);
-        vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
+        uint48 t1 = _future(1 days);
+        uint48 t2 = _future(2 days);
 
-        Keystore.ActorChange[] memory ch = _authorizeChange(actorId, address(k1Authenticator), SCOPE_POLICY, data);
-        bytes memory auth = _authOver(account, pk, ch);
-        vm.expectRevert(Keystore.InvalidPolicyData.selector);
-        keystore.applySignedActorChanges(account, uint64(block.chainid), ch, auth);
+        // Order (T1, T2): both land, expiry ends at T2.
+        (address accA,) = _createK1Account(pk);
+        _applyUnsequenced(pk, accA, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, t1, "")));
+        _applyUnsequenced(pk, accA, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, t2, "")));
+        assertEq(keystore.getActorConfig(accA, ACTOR_A).expiry, t2);
+
+        // Order (T2, T1): T2 lands, T1 reverts NonMonotoneExpiry, expiry still at T2.
+        (address accB,) = _createK1AccountWithSalt(pk, bytes32(uint256(1)));
+        _applyUnsequenced(pk, accB, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, t2, "")));
+        Keystore.SignedAccountChanges memory low =
+            _unseqBatch(pk, accB, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, t1, "")));
+        vm.expectRevert(Keystore.NonMonotoneExpiry.selector);
+        keystore.applySignedAccountChanges(accB, low);
+        assertEq(keystore.getActorConfig(accB, ACTOR_A).expiry, t2);
     }
 
-    /// @notice A gated actor with a zero manager and zero commitment is valid (relaxed policyData rule).
-    /// @dev The 52-byte all-zero policyData is written verbatim; gating is by the SCOPE_POLICY bit.
-    function test_authorizeActor_success_gatedZeroManagerAndCommitment(uint256 pk, bytes32 actorId) public {
+    /// @notice A different authenticator under the same actorId is not possible (id derives from the authenticator);
+    ///         two distinct actorIds land in two independent slots.
+    function test_authorize_success_distinctSlots(uint256 pk) public {
         pk = _boundK1Pk(pk);
-        (address account, bytes32 ownerId) = _createK1Account(pk);
-        vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
+        (address account,) = _createK1Account(pk);
 
-        bytes memory data = abi.encodePacked(bytes20(address(0)), bytes32(0));
-        Keystore.ActorChange[] memory ch = _authorizeChange(actorId, address(k1Authenticator), SCOPE_POLICY, data);
-        _signApply(account, pk, ch);
+        _applyUnsequenced(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
+        );
+        _applyUnsequenced(
+            pk, account, _one(_authorizeChange(ACTOR_B, address(p256Authenticator), SENDER, _future(1 days), ""))
+        );
 
-        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, actorId);
-        assertTrue(cfg.scope & SCOPE_POLICY != 0);
-        assertEq(keystore.getPolicyManager(account, actorId), address(0));
-        assertEq(keystore.getPolicyCommitment(account, actorId), bytes32(0));
+        assertEq(keystore.getActorConfig(account, ACTOR_A).authenticator, address(k1Authenticator));
+        assertEq(keystore.getActorConfig(account, ACTOR_B).authenticator, address(p256Authenticator));
     }
 
-    /// @notice Duplicate actorIds within one batch apply sequentially (last operation wins).
-    function test_applySignedActorChanges_success_duplicateActorIdInBatch(uint256 pk, bytes32 actorId) public {
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+    // AUTHORIZE — SEQUENCED
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+
+    /// @notice A sequenced batch consumes the local sequence (low half) and preserves the epoch.
+    function test_authorizeSequenced_success_consumesSequence(uint256 pk) public {
         pk = _boundK1Pk(pk);
-        (address account, bytes32 ownerId) = _createK1Account(pk);
-        vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
+        (address account,) = _createK1Account(pk);
+        (uint32 epoch0, uint32 seq0) = keystore.getLocalEpochAndSequence(account);
 
-        // [authorize A, revoke A] → A ends not live.
-        Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](2);
-        ch[0] = _authorizeChange(actorId, address(k1Authenticator), 0, "")[0];
-        ch[1] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ActorChangeType.Revoke, data: ""});
-        _signApply(account, pk, ch);
-        assertFalse(_isActor(account, actorId));
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
 
-        // Pre-authorize, then [revoke A, authorize A] → A ends live.
-        _authorizeActor(account, pk, actorId, address(k1Authenticator));
-        Keystore.ActorChange[] memory ch2 = new Keystore.ActorChange[](2);
-        ch2[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ActorChangeType.Revoke, data: ""});
-        ch2[1] = _authorizeChange(actorId, address(k1Authenticator), 0, "")[0];
-        _signApply(account, pk, ch2);
-        assertTrue(_isActor(account, actorId));
+        (uint32 epoch1, uint32 seq1) = keystore.getLocalEpochAndSequence(account);
+        assertEq(epoch1, epoch0);
+        assertEq(seq1, seq0 + 1);
     }
 
-    /// @notice An unrestricted (scope 0) signer may revoke itself mid-batch; the scope gate is evaluated once,
-    ///         pre-loop.
-    function test_applySignedActorChanges_success_signerRevokesSelfMidBatch(
-        uint256 ownerPk,
-        uint256 signerPk,
-        bytes32 bId
-    ) public {
-        ownerPk = _boundK1Pk(ownerPk);
-        signerPk = _boundK1Pk(signerPk);
-        vm.assume(ownerPk != signerPk);
-        (address account, bytes32 ownerId) = _createK1Account(ownerPk);
-        bytes32 signerId = bytes32(bytes20(vm.addr(signerPk)));
-        vm.assume(signerId != ownerId && signerId != bytes32(bytes20(account)));
-        vm.assume(bId != ownerId && bId != signerId && bId != bytes32(bytes20(account)));
-
-        _authorizeActor(account, ownerPk, signerId, address(k1Authenticator));
-
-        Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](2);
-        ch[0] = Keystore.ActorChange({actorId: signerId, changeType: Keystore.ActorChangeType.Revoke, data: ""});
-        ch[1] = _authorizeChange(bId, address(k1Authenticator), 0, "")[0];
-        _signApply(account, signerPk, ch);
-
-        assertFalse(_isActor(account, signerId));
-        assertTrue(_isActor(account, bId));
-    }
-
-    /// @notice Self-actorId flip: k1 self → non-k1 (p256) self → k1 self; the non-k1 config replaces then is replaced.
-    function test_selfActorId_success_flipFlopK1NonK1(uint256 eoaPk, uint256 adminPk) public {
-        eoaPk = _boundK1Pk(eoaPk);
-        adminPk = _boundK1Pk(adminPk);
-        vm.assume(eoaPk != adminPk);
-        address eoa = vm.addr(eoaPk);
-        bytes32 selfId = bytes32(bytes20(eoa));
-        bytes32 adminId = bytes32(bytes20(vm.addr(adminPk)));
-        vm.assume(adminId != selfId);
-
-        // Implicit self authorizes an unrestricted admin (scope 0) to drive the flips.
-        _implicitAuthorizeActor(eoa, eoaPk, adminId, address(k1Authenticator));
-
-        // Flip self → non-k1 (p256): sets the revoke flag, stores the non-k1 self config; k1 self dies.
-        _authorizeActorWithScope(eoa, adminPk, selfId, address(p256Authenticator), SCOPE_SENDER);
-        assertEq(keystore.getActorConfig(eoa, selfId).authenticator, address(p256Authenticator));
-        bytes32 h = keccak256("flip");
-        vm.expectRevert();
-        keystore.authenticateActor(eoa, h, _buildK1Auth(eoaPk, h));
-
-        // Flip self → k1 owner: deletes the non-k1 config, restores inline k1 (flag cleared); k1 self lives again.
-        _authorizeActor(eoa, adminPk, selfId, keystore.K1_AUTHENTICATOR());
-        assertEq(keystore.getActorConfig(eoa, selfId).authenticator, keystore.K1_AUTHENTICATOR());
-        (, uint16 scope) = keystore.authenticateActor(eoa, h, _buildK1Auth(eoaPk, h));
-        assertEq(scope, 0);
-    }
-
-    /// @notice A happy-path authorize emits ActorAuthorized once with the correct account and actorId.
-    function test_applySignedActorChanges_success_emitsActorAuthorized(uint256 pk, bytes32 actorId) public {
+    /// @notice A sequenced reinstall over a lapsed slot (later expiry, same scope) is bump-free.
+    function test_authorizeSequenced_success_reinstallOverLapsed(uint256 pk) public {
         pk = _boundK1Pk(pk);
-        (address account, bytes32 ownerId) = _createK1Account(pk);
-        vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
+        (address account,) = _createK1Account(pk);
+        uint48 e1 = _future(1 days);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, e1, "")));
 
-        Keystore.ActorChange[] memory ch = _authorizeChange(actorId, address(k1Authenticator), 0, "");
+        vm.warp(uint256(e1) + 1);
+        assertFalse(_isActor(account, ACTOR_A)); // lapsed
+
+        uint48 e2 = _future(1 days);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, e2, "")));
+        assertTrue(_isActor(account, ACTOR_A));
+        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, e2);
+    }
+
+    /// @notice A sequenced scope widen (adding grant bits) is bump-free.
+    function test_authorizeSequenced_success_scopeWidenBumpFree(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        uint48 e = _future(10 days);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, e, "")));
+
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER | NONCE, e, "")));
+        assertEq(keystore.getActorConfig(account, ACTOR_A).scope, SENDER | NONCE);
+    }
+
+    /// @notice A sequenced expiry raise is bump-free.
+    function test_authorizeSequenced_success_expiryRaiseBumpFree(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
+
+        uint48 higher = _future(5 days);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, higher, "")));
+        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, higher);
+    }
+
+    /// @notice A sequenced expiry lowering without an epoch bump reverts ReductionRequiresEpochBump.
+    function test_authorizeSequenced_revert_expiryLowerWithoutBump(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(5 days), "")));
+
+        Keystore.SignedAccountChanges memory s = _localBatch(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
+        );
+        vm.expectRevert(Keystore.ReductionRequiresEpochBump.selector);
+        keystore.applySignedAccountChanges(account, s);
+    }
+
+    /// @notice A sequenced scope narrowing without an epoch bump reverts ReductionRequiresEpochBump.
+    function test_authorizeSequenced_revert_scopeNarrowWithoutBump(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        uint48 e = _future(10 days);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER | NONCE, e, "")));
+
+        Keystore.SignedAccountChanges memory s =
+            _localBatch(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, e, "")));
+        vm.expectRevert(Keystore.ReductionRequiresEpochBump.selector);
+        keystore.applySignedAccountChanges(account, s);
+    }
+
+    /// @notice A sequenced expiry lowering batched with a BumpLocalEpoch succeeds (reduction retired by the bump).
+    function test_authorizeSequenced_success_lowerPlusBump(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(5 days), "")));
+
+        uint48 lower = _future(1 days);
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
+        ch[0] = _authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, lower, "");
+        ch[1] = _bumpChange();
+        _applyLocal(pk, account, ch);
+
+        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, lower);
+        (uint32 epoch,) = keystore.getLocalEpochAndSequence(account);
+        assertEq(epoch, 1);
+    }
+
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+    // REVOKE
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+
+    /// @notice A bare revoke of a live actor reverts ReductionRequiresEpochBump.
+    function test_revoke_revert_bareRevokeOfLiveActor(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
+
+        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, _one(_revokeChange(ACTOR_A)));
+        vm.expectRevert(Keystore.ReductionRequiresEpochBump.selector);
+        keystore.applySignedAccountChanges(account, s);
+    }
+
+    /// @notice `[revoke, bump]` succeeds; a pre-signed authorize at the old epoch then dies on StaleEpoch.
+    function test_revoke_success_revokeBumpThenReplayFails(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
+
+        // A grant signed at the pre-bump epoch (unsequenced), captured before the revoke+bump lands.
+        Keystore.SignedAccountChanges memory oldGrant = _signBatch(
+            pk,
+            account,
+            Keystore.AccountChangeChannel.Local,
+            _unseqWord(account),
+            _one(_authorizeChange(ACTOR_B, address(k1Authenticator), SENDER, _future(1 days), ""))
+        );
+
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
+        ch[0] = _revokeChange(ACTOR_A);
+        ch[1] = _bumpChange();
+        _applyLocal(pk, account, ch);
+        assertFalse(_isActor(account, ACTOR_A));
+
+        vm.expectRevert(Keystore.StaleEpoch.selector);
+        keystore.applySignedAccountChanges(account, oldGrant);
+    }
+
+    /// @notice Revoking an already-lapsed actor is GC-equivalent and needs no bump (flag skipped).
+    function test_revoke_success_lapsedActorNoBump(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        uint48 e = _future(1 days);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, e, "")));
+
+        vm.warp(uint256(e) + 1);
+        _applyLocal(pk, account, _one(_revokeChange(ACTOR_A))); // no bump needed
+        assertFalse(_isActor(account, ACTOR_A));
+    }
+
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+    // BUMP LOCAL EPOCH
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+
+    /// @notice An unsequenced solo bump increments the epoch and resets the sequence to 0.
+    function test_bump_success_unsequencedSolo(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        // Consume a sequence first so we can observe the reset.
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
+        (uint32 epoch0,) = keystore.getLocalEpochAndSequence(account);
+
+        _applyUnsequenced(pk, account, _one(_bumpChange()));
+
+        (uint32 epoch1, uint32 seq1) = keystore.getLocalEpochAndSequence(account);
+        assertEq(epoch1, epoch0 + 1);
+        assertEq(seq1, 0);
+    }
+
+    /// @notice A non-solo unsequenced bump reverts SoloOpNotSolo.
+    function test_bump_revert_unsequencedNonSolo(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
+        ch[0] = _authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "");
+        ch[1] = _bumpChange();
+
+        Keystore.SignedAccountChanges memory s = _unseqBatch(pk, account, ch);
+        vm.expectRevert(Keystore.SoloOpNotSolo.selector);
+        keystore.applySignedAccountChanges(account, s);
+    }
+
+    /// @notice Two independently signed unsequenced bumps at the same epoch: the first lands, the second dies on
+    ///         StaleEpoch.
+    function test_bump_success_twoSignedBumpsSecondFails(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        uint64 word = _unseqWord(account);
+        Keystore.SignedAccountChanges memory b1 =
+            _signBatch(pk, account, Keystore.AccountChangeChannel.Local, word, _one(_bumpChange()));
+        Keystore.SignedAccountChanges memory b2 =
+            _signBatch(pk, account, Keystore.AccountChangeChannel.Local, word, _one(_bumpChange()));
+
+        keystore.applySignedAccountChanges(account, b1);
+        vm.expectRevert(Keystore.StaleEpoch.selector);
+        keystore.applySignedAccountChanges(account, b2);
+    }
+
+    /// @notice A sequenced bump that is not terminal (an authority op follows it) reverts AuthorityOpAfterEnvOp.
+    function test_bump_revert_sequencedNonTerminal(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
+        ch[0] = _bumpChange();
+        ch[1] = _authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "");
+
+        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, ch);
+        vm.expectRevert(Keystore.AuthorityOpAfterEnvOp.selector);
+        keystore.applySignedAccountChanges(account, s);
+    }
+
+    /// @notice A bump at the terminal epoch reverts EpochSaturated.
+    function test_bump_revert_epochSaturated(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        _forceLocalEpoch(account, type(uint32).max - 1);
+
+        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, _one(_bumpChange()));
+        vm.expectRevert(Keystore.EpochSaturated.selector);
+        keystore.applySignedAccountChanges(account, s);
+    }
+
+    /// @notice A bump does not disturb already-landed actors.
+    function test_bump_success_landedActorsUnaffected(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
+
+        _applyUnsequenced(pk, account, _one(_bumpChange()));
+
+        assertTrue(_isActor(account, ACTOR_A));
+        assertEq(keystore.getActorConfig(account, ACTOR_A).scope, SENDER);
+    }
+
+    /// @notice Post-bump, an old unsequenced signature on the local channel is invalid (StaleEpoch).
+    function test_bump_success_oldLocalSignatureInvalid(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        Keystore.SignedAccountChanges memory stale = _signBatch(
+            pk,
+            account,
+            Keystore.AccountChangeChannel.Local,
+            _unseqWord(account),
+            _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
+        );
+        _applyUnsequenced(pk, account, _one(_bumpChange()));
+
+        vm.expectRevert(Keystore.StaleEpoch.selector);
+        keystore.applySignedAccountChanges(account, stale);
+    }
+
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+    // ORDERING / SOLO
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+
+    /// @notice `[lock, revoke]` reverts AuthorityOpAfterEnvOp (a revoke after the lock env op).
+    function test_ordering_revert_lockThenRevoke(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
+
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
+        ch[0] = _lockChange(1 hours);
+        ch[1] = _revokeChange(ACTOR_A);
+
+        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, ch);
+        vm.expectRevert(Keystore.AuthorityOpAfterEnvOp.selector);
+        keystore.applySignedAccountChanges(account, s);
+    }
+
+    /// @notice `[revoke, bump, lock]` succeeds: authority op first, environment ops after, reduction retired by bump.
+    function test_ordering_success_revokeBumpLock(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
+
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](3);
+        ch[0] = _revokeChange(ACTOR_A);
+        ch[1] = _bumpChange();
+        ch[2] = _lockChange(1 hours);
+        _applyLocal(pk, account, ch);
+
+        assertFalse(_isActor(account, ACTOR_A));
+        assertTrue(keystore.isLocked(account));
+        (uint32 epoch,) = keystore.getLocalEpochAndSequence(account);
+        assertEq(epoch, 1);
+    }
+
+    /// @notice `[unlock, <anything>]` reverts SoloOpNotSolo — unlock must be the sole op.
+    function test_solo_revert_unlockNotSolo(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
+        ch[0] = _unlockChange();
+        ch[1] = _bumpChange();
+
+        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, ch);
+        vm.expectRevert(Keystore.SoloOpNotSolo.selector);
+        keystore.applySignedAccountChanges(account, s);
+    }
+
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+    // SEQUENCED CHANNEL EDGES
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+
+    /// @notice A sequenced batch at the terminal local sequence (UNSEQUENCED - 1) reverts SequenceSaturated.
+    function test_sequenced_revert_saturationAtMaxMinusOne(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        _forceLocalSequence(account, keystore.UNSEQUENCED() - 1);
+
+        Keystore.SignedAccountChanges memory s = _localBatch(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
+        );
+        vm.expectRevert(Keystore.SequenceSaturated.selector);
+        keystore.applySignedAccountChanges(account, s);
+    }
+
+    /// @notice The sequence advances BEFORE apply, so re-submitting the exact same sequenced batch reverts BadSequence.
+    function test_sequenced_revert_replaySameBatch(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        Keystore.SignedAccountChanges memory s = _signBatch(
+            pk,
+            account,
+            Keystore.AccountChangeChannel.Local,
+            _localSeqWord(account),
+            _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
+        );
+
+        keystore.applySignedAccountChanges(account, s);
+        vm.expectRevert(Keystore.BadSequence.selector);
+        keystore.applySignedAccountChanges(account, s);
+    }
+
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+    // EVENTS
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+
+    /// @notice A happy-path authorize emits ActorAuthorized(account, actorId, ...).
+    function test_authorize_success_emitsActorAuthorized(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+
         vm.expectEmit(true, true, false, false, address(keystore));
-        emit Keystore.ActorAuthorized(account, actorId, "");
-        _signApply(account, pk, ch);
+        emit Keystore.ActorAuthorized(account, ACTOR_A, "");
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
     }
 
-    /// @notice A happy-path revoke emits ActorRevoked once with the correct account and actorId.
-    function test_applySignedActorChanges_success_emitsActorRevoked(uint256 pk, bytes32 actorId) public {
+    /// @notice A `[revoke, bump]` batch emits ActorRevoked(account, actorId).
+    function test_revoke_success_emitsActorRevoked(uint256 pk) public {
         pk = _boundK1Pk(pk);
-        (address account, bytes32 ownerId) = _createK1Account(pk);
-        vm.assume(actorId != ownerId && actorId != bytes32(bytes20(account)));
-        _authorizeActor(account, pk, actorId, address(k1Authenticator));
+        (address account,) = _createK1Account(pk);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
 
-        Keystore.ActorChange[] memory ch = new Keystore.ActorChange[](1);
-        ch[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ActorChangeType.Revoke, data: ""});
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
+        ch[0] = _revokeChange(ACTOR_A);
+        ch[1] = _bumpChange();
+
         vm.expectEmit(true, true, false, true, address(keystore));
-        emit Keystore.ActorRevoked(account, actorId);
-        _signApply(account, pk, ch);
-    }
-
-    // ── Helpers ──
-
-    /// @dev Build a one-element authorize batch with a full ActorConfig + policyData (expiry fixed at 0).
-    function _authorizeChange(bytes32 actorId, address auth, uint16 scope, bytes memory policyData)
-        internal
-        pure
-        returns (Keystore.ActorChange[] memory changes)
-    {
-        changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({
-            actorId: actorId,
-            changeType: Keystore.ActorChangeType.Authorize,
-            data: abi.encode(Keystore.ActorConfig({authenticator: auth, scope: scope, expiry: 0}), policyData)
-        });
-    }
-
-    /// @dev Owner/actor signature over a batch at the current local sequence.
-    function _authOver(address account, uint256 pk, Keystore.ActorChange[] memory changes)
-        internal
-        view
-        returns (bytes memory)
-    {
-        uint64 seq = keystore.getChangeSequences(account).local;
-        return _buildK1Auth(pk, _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes));
-    }
-
-    /// @dev Sign (with pk) and apply a batch on the local chain.
-    function _signApply(address account, uint256 pk, Keystore.ActorChange[] memory changes) internal {
-        keystore.applySignedActorChanges(account, uint64(block.chainid), changes, _authOver(account, pk, changes));
-    }
-
-    /// @dev Authorize/overwrite the EOA's own inline k1 self-actorId with the given scope, signed by the EOA key.
-    function _rescopeSelf(address eoa, uint256 eoaPk, uint16 scope) internal {
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({
-            actorId: bytes32(bytes20(eoa)),
-            changeType: Keystore.ActorChangeType.Authorize,
-            data: abi.encode(
-                Keystore.ActorConfig({authenticator: keystore.K1_AUTHENTICATOR(), scope: scope, expiry: 0}), bytes("")
-            )
-        });
-        uint64 seq = keystore.getChangeSequences(eoa).local;
-        bytes32 digest = _computeActorChangeBatchDigest(eoa, uint64(block.chainid), seq, changes);
-        keystore.applySignedActorChanges(eoa, uint64(block.chainid), changes, _buildK1Auth(eoaPk, digest));
-    }
-
-    function _authorizeActor(address account, uint256 pk, bytes32 newActorId, address authenticator) internal {
-        _authorizeActorWithScope(account, pk, newActorId, authenticator, 0x00);
-    }
-
-    function _authorizeActorWithScope(
-        address account,
-        uint256 pk,
-        bytes32 newActorId,
-        address authenticator,
-        uint16 scope
-    ) internal {
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({
-            actorId: newActorId,
-            changeType: Keystore.ActorChangeType.Authorize,
-            data: abi.encode(Keystore.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes(""))
-        });
-
-        uint64 seq = keystore.getChangeSequences(account).local;
-        bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(pk, digest);
-
-        keystore.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
-    }
-
-    function _revokeActor(address account, uint256 pk, bytes32 actorId) internal {
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({actorId: actorId, changeType: Keystore.ActorChangeType.Revoke, data: ""});
-
-        uint64 seq = keystore.getChangeSequences(account).local;
-        bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(pk, digest);
-
-        keystore.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
-    }
-
-    function _implicitAuthorizeActor(address account, uint256 pk, bytes32 newActorId, address authenticator) internal {
-        _implicitAuthorizeActorWithScope(account, pk, newActorId, authenticator, 0x00);
-    }
-
-    function _implicitAuthorizeActorWithScope(
-        address account,
-        uint256 pk,
-        bytes32 newActorId,
-        address authenticator,
-        uint16 scope
-    ) internal {
-        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
-        changes[0] = Keystore.ActorChange({
-            actorId: newActorId,
-            changeType: Keystore.ActorChangeType.Authorize,
-            data: abi.encode(Keystore.ActorConfig({authenticator: authenticator, scope: scope, expiry: 0}), bytes(""))
-        });
-
-        uint64 seq = keystore.getChangeSequences(account).local;
-        bytes32 digest = _computeActorChangeBatchDigest(account, uint64(block.chainid), seq, changes);
-        bytes memory auth = _buildK1Auth(pk, digest);
-
-        keystore.applySignedActorChanges(account, uint64(block.chainid), changes, auth);
-    }
-
-    /// @dev Hard-lock `account` via the signed lock path, authorized by its admin owner key `pk`.
-    function _lockAccount(uint256 pk, address account) internal {
-        _signedLock(pk, account, 1 hours);
+        emit Keystore.ActorRevoked(account, ACTOR_A);
+        _applyLocal(pk, account, ch);
     }
 }
