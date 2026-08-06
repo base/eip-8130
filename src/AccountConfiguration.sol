@@ -648,7 +648,7 @@ contract AccountConfiguration {
     // 1271 signature to a single account and chain. Deliberately NOT EIP-712 (no 0x1901 / domain separator): a fixed
     // typehash provides domain separation while keeping eth_signTypedData from producing these digests (anti-phishing),
     // consistent with the registry's other signed-message typehashes (import, actor changes, lock). Readable
-    // (EIP-7739 TypedDataSign) rendering is intentionally not offered here; it is an account-layer concern.
+    // typed-data signature rendering is intentionally not offered here; it is an account-layer concern.
 
     /// @notice Typehash binding a 1271 signature to its account and chainId.
     ///
