@@ -72,9 +72,9 @@ contract ExternalPolicyCallerTest is KeystoreTest {
     function test_executeFor_revertsForUnauthorizedCaller() public {
         address account = _optIn(bytes32(uint256(1)), 100e6, MONTH);
 
-        // A different external address was never authorized by the account → no manager binding for its actorId.
+        // A different external address was never authorized by the account → not a live actor of it.
         address stranger = address(0xBAD);
-        vm.expectRevert(abi.encodeWithSelector(PolicyManager.NoActivePolicy.selector, bytes32(bytes20(stranger))));
+        vm.expectRevert(abi.encodeWithSelector(PolicyManager.InvalidActor.selector, bytes32(bytes20(stranger))));
         vm.prank(stranger);
         manager.executeFor(lastBinding, _pull(1));
     }
@@ -108,18 +108,20 @@ contract ExternalPolicyCallerTest is KeystoreTest {
 
         _revokeProvider(account);
 
-        vm.expectRevert(abi.encodeWithSelector(PolicyManager.NoActivePolicy.selector, bytes32(bytes20(provider))));
+        // A revoked provider is no longer a live actor of the account.
+        vm.expectRevert(abi.encodeWithSelector(PolicyManager.InvalidActor.selector, bytes32(bytes20(provider))));
         vm.prank(provider);
         manager.executeFor(lastBinding, _pull(1));
     }
 
     function test_executeFor_revertsWhenActorExpired() public {
-        // External path has no protocol auth, so expiry must be enforced in the manager.
+        // External path has no protocol auth, so liveness must be enforced in the manager; an expired actor is
+        // rejected as InvalidActor.
         uint48 expiry = uint48(block.timestamp + 1 days);
         address account = _optInWithExpiry(bytes32(uint256(1)), 100e6, MONTH, expiry);
 
         vm.warp(uint256(expiry) + 1);
-        vm.expectRevert(abi.encodeWithSelector(PolicyManager.ActorExpired.selector, bytes32(bytes20(provider))));
+        vm.expectRevert(abi.encodeWithSelector(PolicyManager.InvalidActor.selector, bytes32(bytes20(provider))));
         vm.prank(provider);
         manager.executeFor(lastBinding, _pull(1));
     }
@@ -152,7 +154,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
     // ── Cross-account best-effort batch ──
 
     function test_executeForMany_bestEffort_isolatesFailures() public {
-        // Three subscribers; the middle one opts in then revokes, so its pull reverts (NoActivePolicy) and must be
+        // Three subscribers; the middle one opts in then revokes, so its pull reverts (InvalidActor) and must be
         // skipped without blocking the other two.
         address a1 = _optIn(bytes32(uint256(1)), 100e6, MONTH);
         address a2 = _optIn(bytes32(uint256(2)), 100e6, MONTH);
