@@ -143,7 +143,8 @@ contract DelegateAuthenticatorTest is KeystoreTest {
 
         // The account's ERC-1271 accepts a local envelope over replaySafeHash. (nestedAuth, over the raw hash, is
         // for the vouch below.)
-        bytes memory wrappedAuth = _wrapLocal(_buildK1Auth(signerPk, keystore.replaySafeHash(delegateAccount, hash)));
+        bytes memory wrappedAuth =
+            _wrapLocal(_buildK1Auth(signerPk, keystore.replaySafeHash(delegateAccount, block.chainid, hash)));
         assertEq(DefaultAccount(payable(delegateAccount)).isValidSignature(hash, wrappedAuth), bytes4(0x1626ba7e));
 
         // But it cannot vouch as a delegate — the nested check stays admin-only.

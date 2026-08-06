@@ -726,7 +726,7 @@ contract AuthenticateTest is KeystoreTest {
         bytes32 actorId = bytes32(bytes20(vm.addr(actorPk)));
         _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), scope);
 
-        bytes memory auth = _wrapLocal(_buildK1Auth(actorPk, keystore.replaySafeHash(account, hash)));
+        bytes memory auth = _wrapLocal(_buildK1Auth(actorPk, keystore.replaySafeHash(account, block.chainid, hash)));
         (bytes32 outActorId, uint16 outScope) = keystore.validateSignature(account, hash, auth);
         assertEq(outActorId, actorId);
         assertEq(outScope, scope);
@@ -752,19 +752,19 @@ contract AuthenticateTest is KeystoreTest {
         bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
         _authorizeGatedActor(account, ownerPk, sessionActorId, SCOPE_SENDER | SCOPE_POLICY, manager, commitment);
 
-        bytes memory auth = _wrapLocal(_buildK1Auth(sessionPk, keystore.replaySafeHash(account, hash)));
+        bytes memory auth = _wrapLocal(_buildK1Auth(sessionPk, keystore.replaySafeHash(account, block.chainid, hash)));
         (bytes32 outActorId, uint16 outScope) = keystore.validateSignature(account, hash, auth);
         assertEq(outActorId, sessionActorId);
         assertEq(outScope, SCOPE_SENDER | SCOPE_POLICY);
     }
 
     /// @notice A multichain envelope (SIG_TYPE_MULTICHAIN) validates against the chainId = 0 digest.
-    /// @dev The owner signs multichainSafeHash(account, hash); validateSignature resolves the same all-chains digest.
+    /// @dev The owner signs replaySafeHash(account, 0, hash); validateSignature resolves the same all-chains digest.
     function test_validateSignature_success_multichainEnvelope(uint256 ownerSeed, bytes32 hash) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         (address account,) = _createK1Account(ownerPk);
 
-        bytes memory auth = _wrapMultichain(_buildK1Auth(ownerPk, keystore.multichainSafeHash(account, hash)));
+        bytes memory auth = _wrapMultichain(_buildK1Auth(ownerPk, keystore.replaySafeHash(account, 0, hash)));
         (bytes32 outActorId, uint16 outScope) = keystore.validateSignature(account, hash, auth);
         assertEq(outActorId, bytes32(bytes20(vm.addr(ownerPk))));
         assertEq(outScope, 0);
@@ -796,7 +796,7 @@ contract AuthenticateTest is KeystoreTest {
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(strangerPk) != account);
 
-        bytes memory auth = _wrapLocal(_buildK1Auth(strangerPk, keystore.replaySafeHash(account, hash)));
+        bytes memory auth = _wrapLocal(_buildK1Auth(strangerPk, keystore.replaySafeHash(account, block.chainid, hash)));
         vm.expectRevert();
         keystore.validateSignature(account, hash, auth);
     }

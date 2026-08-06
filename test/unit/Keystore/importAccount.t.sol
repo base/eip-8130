@@ -514,9 +514,12 @@ contract ImportAccountTest is KeystoreTest {
 
         Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(device);
         bytes32 digest = _computeImportDigest(eoa, actors);
-        // importAccount validates via the account's ERC-1271: a local signature envelope over replaySafeHash(eoa, digest).
+        // importAccount validates via the account's ERC-1271: a local envelope over replaySafeHash(eoa, block.chainid, digest).
         keystore.importAccount(
-            eoa, uint64(block.chainid), actors, _wrapLocal(_buildK1Auth(eoaPk, keystore.replaySafeHash(eoa, digest)))
+            eoa,
+            uint64(block.chainid),
+            actors,
+            _wrapLocal(_buildK1Auth(eoaPk, keystore.replaySafeHash(eoa, block.chainid, digest)))
         );
 
         assertEq(keystore.getChangeSequences(eoa).localSequence, 1);
@@ -546,9 +549,12 @@ contract ImportAccountTest is KeystoreTest {
         });
 
         bytes32 digest = _computeImportDigest(eoa, actors);
-        // importAccount validates via the account's ERC-1271: a local signature envelope over replaySafeHash(eoa, digest).
+        // importAccount validates via the account's ERC-1271: a local envelope over replaySafeHash(eoa, block.chainid, digest).
         keystore.importAccount(
-            eoa, uint64(block.chainid), actors, _wrapLocal(_buildK1Auth(eoaPk, keystore.replaySafeHash(eoa, digest)))
+            eoa,
+            uint64(block.chainid),
+            actors,
+            _wrapLocal(_buildK1Auth(eoaPk, keystore.replaySafeHash(eoa, block.chainid, digest)))
         );
 
         assertEq(keystore.getChangeSequences(eoa).localSequence, 1);

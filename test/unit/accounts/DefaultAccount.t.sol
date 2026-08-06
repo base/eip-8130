@@ -400,7 +400,7 @@ contract DefaultAccountTest is KeystoreTest {
         vm.assume(vm.addr(wrongPk) != vm.addr(ownerPk) && vm.addr(wrongPk) != account);
 
         // Well-formed local envelope over the correct digest, but signed by a key that is not a registered actor.
-        bytes memory authData = _wrapLocal(_buildK1Auth(wrongPk, keystore.replaySafeHash(account, hash)));
+        bytes memory authData = _wrapLocal(_buildK1Auth(wrongPk, keystore.replaySafeHash(account, block.chainid, hash)));
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, ERC1271_FAIL);
@@ -425,7 +425,7 @@ contract DefaultAccountTest is KeystoreTest {
         _authorizeActorWithScope(account, ownerPk, bytes32(uint256(uint160(actor))), k1Authenticator, SCOPE_SELF_PAYER);
 
         // Otherwise-valid local envelope: the sole failure reason is the non-operational scope.
-        bytes memory authData = _wrapLocal(_buildK1Auth(actorPk, keystore.replaySafeHash(account, hash)));
+        bytes memory authData = _wrapLocal(_buildK1Auth(actorPk, keystore.replaySafeHash(account, block.chainid, hash)));
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, ERC1271_FAIL);
@@ -448,7 +448,7 @@ contract DefaultAccountTest is KeystoreTest {
         _authorizeActorWithScope(account, ownerPk, bytes32(uint256(uint160(actor))), k1Authenticator, SCOPE_SENDER);
 
         // Chain-local envelope over the account-scoped replaySafeHash digest.
-        bytes memory authData = _wrapLocal(_buildK1Auth(actorPk, keystore.replaySafeHash(account, hash)));
+        bytes memory authData = _wrapLocal(_buildK1Auth(actorPk, keystore.replaySafeHash(account, block.chainid, hash)));
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, ERC1271_MAGIC);
@@ -483,7 +483,7 @@ contract DefaultAccountTest is KeystoreTest {
         (address account,) = _createK1Account(pk);
 
         // Chain-local envelope over the account-scoped replaySafeHash digest.
-        bytes memory authData = _wrapLocal(_buildK1Auth(pk, keystore.replaySafeHash(account, hash)));
+        bytes memory authData = _wrapLocal(_buildK1Auth(pk, keystore.replaySafeHash(account, block.chainid, hash)));
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, ERC1271_MAGIC);
@@ -507,7 +507,7 @@ contract DefaultAccountTest is KeystoreTest {
         );
 
         // Otherwise-valid local envelope: the sole failure reason is the non-operational scope.
-        bytes memory authData = _wrapLocal(_buildK1Auth(actorPk, keystore.replaySafeHash(account, hash)));
+        bytes memory authData = _wrapLocal(_buildK1Auth(actorPk, keystore.replaySafeHash(account, block.chainid, hash)));
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, ERC1271_FAIL);

@@ -762,7 +762,7 @@ contract Keystore {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     // Account signature validation: a user signature over an app `hash` is validated against an account- and
-    // chain-scoped envelope digest (see {replaySafeHash} / {multichainSafeHash}), binding the signature to a single
+    // chain-scoped envelope digest (see {replaySafeHash}), binding the signature to a single
     // account and channel. The registry's own signed messages (actor changes, import, lock) bind context in-struct and
     // use their own typehashes.
 
@@ -784,21 +784,15 @@ contract Keystore {
     /// @notice The signature envelope is empty (missing its leading type byte).
     error EmptySignatureEnvelope();
 
-    /// @notice Chain-local digest to sign for `hash` to be accepted for `account` on the current chain.
+    /// @notice Envelope digest to sign for `hash` to be accepted for `account` on `chainId`.
+    /// @dev Pass `block.chainid` for a chain-local signature (SIG_TYPE_LOCAL) or `0` for an all-chains signature
+    ///      (SIG_TYPE_MULTICHAIN, mirroring the applySignedActorChanges multichain channel).
     /// @param account Account the signature is bound to.
+    /// @param chainId Chain the signature is bound to (0 = all chains).
     /// @param hash Raw message digest.
-    /// @return The chain-local digest to sign.
-    function replaySafeHash(address account, bytes32 hash) public view returns (bytes32) {
-        return keccak256(abi.encode(SIGNED_MESSAGE_TYPEHASH, account, block.chainid, hash));
-    }
-
-    /// @notice Multichain digest: same construction with chainId = 0. Valid on every chain for `account`; mirrors the
-    ///         applySignedActorChanges multichain channel.
-    /// @param account Account the signature is bound to.
-    /// @param hash Raw message digest.
-    /// @return The all-chains digest to sign.
-    function multichainSafeHash(address account, bytes32 hash) public pure returns (bytes32) {
-        return keccak256(abi.encode(SIGNED_MESSAGE_TYPEHASH, account, uint256(0), hash));
+    /// @return The digest to sign.
+    function replaySafeHash(address account, uint256 chainId, bytes32 hash) public pure returns (bytes32) {
+        return keccak256(abi.encode(SIGNED_MESSAGE_TYPEHASH, account, chainId, hash));
     }
 
     /// @notice Canonical validation of a typed-envelope user signature over `hash` for `account`.
@@ -823,9 +817,9 @@ contract Keystore {
         uint8 sigType = uint8(auth[0]);
         bytes32 digest;
         if (sigType == SIG_TYPE_LOCAL) {
-            digest = replaySafeHash(account, hash);
+            digest = replaySafeHash(account, block.chainid, hash);
         } else if (sigType == SIG_TYPE_MULTICHAIN) {
-            digest = multichainSafeHash(account, hash);
+            digest = replaySafeHash(account, 0, hash);
         } else {
             revert UnknownSignatureType(sigType);
         }

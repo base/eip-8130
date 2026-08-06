@@ -3,8 +3,7 @@ pragma solidity ^0.8.30;
 
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
-/// @notice Account- and chain-scoping of the Keystore signature envelope (validateSignature / replaySafeHash /
-///         multichainSafeHash).
+/// @notice Account- and chain-scoping of the Keystore signature envelope (validateSignature / replaySafeHash).
 ///
 /// @dev The envelope digest binds a signature to a specific account and channel at the singleton level, so
 ///      cross-account replay is closed for EVERY consumer of validateSignature — including registry-direct verifiers
@@ -13,7 +12,7 @@ contract SignatureEnvelopeTest is KeystoreTest {
     uint256 constant OWNER_PK = 0xA11CE;
 
     /// @dev validateSignature binds to the account-scoped digest: a signature over the RAW app hash does not resolve
-    ///      to the owner, so authentication reverts; the signer must sign replaySafeHash(account, appHash).
+    ///      to the owner, so authentication reverts; the signer must sign replaySafeHash(account, block.chainid, appHash).
     function test_validateSignature_requiresAccountScopedDigest() public {
         (address account,) = _createK1AccountWithSalt(OWNER_PK, bytes32(uint256(1)));
         bytes32 appHash = keccak256("hello world");
@@ -23,7 +22,8 @@ contract SignatureEnvelopeTest is KeystoreTest {
         keystore.validateSignature(account, appHash, _wrapLocal(_buildK1Auth(OWNER_PK, appHash)));
 
         // The account-scoped digest validates and resolves the owner actor (actorId = owner EOA).
-        bytes memory signable = _wrapLocal(_buildK1Auth(OWNER_PK, keystore.replaySafeHash(account, appHash)));
+        bytes memory signable =
+            _wrapLocal(_buildK1Auth(OWNER_PK, keystore.replaySafeHash(account, block.chainid, appHash)));
         (bytes32 actorId,) = keystore.validateSignature(account, appHash, signable);
         assertEq(actorId, bytes32(bytes20(vm.addr(OWNER_PK))), "must resolve the owner actor");
     }
@@ -37,7 +37,8 @@ contract SignatureEnvelopeTest is KeystoreTest {
         assertTrue(accountA != accountB, "accounts must differ");
 
         bytes32 appHash = keccak256("sign in to dapp");
-        bytes memory sigForA = _wrapLocal(_buildK1Auth(OWNER_PK, keystore.replaySafeHash(accountA, appHash)));
+        bytes memory sigForA =
+            _wrapLocal(_buildK1Auth(OWNER_PK, keystore.replaySafeHash(accountA, block.chainid, appHash)));
 
         (bytes32 actorId,) = keystore.validateSignature(accountA, appHash, sigForA);
         assertEq(actorId, bytes32(bytes20(vm.addr(OWNER_PK))), "valid on the intended account");
@@ -54,25 +55,23 @@ contract SignatureEnvelopeTest is KeystoreTest {
         bytes32 appHash = keccak256("msg");
 
         assertTrue(
-            keystore.replaySafeHash(accountA, appHash) != keystore.replaySafeHash(accountB, appHash),
+            keystore.replaySafeHash(accountA, block.chainid, appHash)
+                != keystore.replaySafeHash(accountB, block.chainid, appHash),
             "digests must differ by account"
         );
     }
 
-    /// @dev The chain-local digest binds the current chainId (moves with it); the multichain (chainId = 0) digest is
-    ///      chain-independent, and the two channels never collide.
-    function test_multichainSafeHash_differsFromLocalAndIsChainIndependent() public {
+    /// @dev The digest binds chainId: the chain-local digest (block.chainid) and the all-chains digest (0) differ,
+    ///      and the digest is a deterministic function of the chainId argument.
+    function test_replaySafeHash_bindsChainId() public {
         (address account,) = _createK1AccountWithSalt(OWNER_PK, bytes32(uint256(1)));
         bytes32 appHash = keccak256("msg");
 
-        bytes32 localBefore = keystore.replaySafeHash(account, appHash);
-        bytes32 multichain = keystore.multichainSafeHash(account, appHash);
-        assertTrue(localBefore != multichain, "local (chainId) and multichain (0) digests must differ");
-
-        vm.chainId(block.chainid + 1);
-        assertTrue(keystore.replaySafeHash(account, appHash) != localBefore, "local digest must move with chainId");
-        assertEq(
-            keystore.multichainSafeHash(account, appHash), multichain, "multichain digest must be chain-independent"
+        bytes32 local = keystore.replaySafeHash(account, block.chainid, appHash);
+        bytes32 multichain = keystore.replaySafeHash(account, 0, appHash);
+        assertTrue(local != multichain, "chain-local (block.chainid) and all-chains (0) digests must differ");
+        assertTrue(
+            keystore.replaySafeHash(account, block.chainid + 1, appHash) != local, "digest must differ by chainId"
         );
     }
 
@@ -80,7 +79,8 @@ contract SignatureEnvelopeTest is KeystoreTest {
     function test_validateSignature_rejectsNonOwner() public {
         (address account,) = _createK1AccountWithSalt(OWNER_PK, bytes32(uint256(1)));
         bytes32 appHash = keccak256("hello world");
-        bytes memory signable = _wrapLocal(_buildK1Auth(0xBEEF, keystore.replaySafeHash(account, appHash)));
+        bytes memory signable =
+            _wrapLocal(_buildK1Auth(0xBEEF, keystore.replaySafeHash(account, block.chainid, appHash)));
 
         vm.expectRevert();
         keystore.validateSignature(account, appHash, signable);
