@@ -6,7 +6,7 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice Fuzzed, branch-complete suite for the authentication paths of Keystore:
 ///         authenticateActor -> _authenticate -> {_authenticateK1, IAuthenticator} -> _recoverSigner, plus the
-///         verifySignature / getActorConfig / getPolicy / isActor views that read the same actor resolution.
+///         verifySignature / getActorConfig / getPolicy views that read the same actor resolution.
 ///
 ///         Source-order revert coverage (as declared / hit through authenticateActor):
 ///           1. InvalidAuthLength      authenticateActor: auth.length < 20

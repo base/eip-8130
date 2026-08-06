@@ -727,7 +727,7 @@ contract Keystore {
     ///         or expired).
     function getActorConfig(address account, bytes32 actorId) external view returns (ActorConfig memory) {
         ActorConfig memory config = _actorConfig[actorId][account];
-        // Non-zero authenticator = a stored entry. Uses the same `>= K1_AUTHENTICATOR` namespace idiom as isActor:
+        // Non-zero authenticator = a stored entry. Uses the same `>= K1_AUTHENTICATOR` namespace idiom as _isAuthorized:
         // every stored authenticator is K1_AUTHENTICATOR (0x1) or a contract, so this is equivalent to != address(0).
         if (config.authenticator >= K1_AUTHENTICATOR) {
             // An expired stored actor reports as empty (as if never authorized), never its stale config.
@@ -746,29 +746,6 @@ contract Keystore {
     /// @dev The all-zero ActorConfig returned for a non-live actor (unknown, disabled, or expired).
     function _emptyActorConfig() private pure returns (ActorConfig memory) {
         return ActorConfig({authenticator: address(0), expiry: 0, scope: 0});
-    }
-
-    /// @notice Returns whether `actorId` is currently a live actor on `account`: a stored actor entry (or the inline
-    ///         k1 self) that exists, is enabled, and has not expired.
-    ///
-    /// @dev Liveness, not mere authorization — an expired, revoked, or disabled actor returns false, matching the
-    ///      empty config {getActorConfig} reports for it. Equivalent to
-    ///      `getActorConfig(account, actorId).authenticator != address(0)`, resolved directly from storage. This is
-    ///      the actor-presence check for consumers on non-8130 chains where authentication does not run first (e.g. a
-    ///      policy manager gating an auth-less subscription path); native 8130 dispatch already enforces liveness at
-    ///      authentication.
-    ///
-    /// @param account The account to read.
-    /// @param actorId The actor identifier to resolve.
-    ///
-    /// @return True iff the actor is currently live on the account.
-    function isActor(address account, bytes32 actorId) external view returns (bool) {
-        ActorConfig storage config = _actorConfig[actorId][account];
-        if (config.authenticator >= K1_AUTHENTICATOR) return !_isExpired(config.expiry);
-        if (actorId == bytes32(bytes20(account)) && !_isDefaultEoaRevoked(account)) {
-            return !_isExpired(_accountState[account].defaultEOAExpiry);
-        }
-        return false;
     }
 
     /// @notice Resolves an actor's policy gate target (manager) and signed commitment.
@@ -1038,7 +1015,7 @@ contract Keystore {
     /// @dev Returns whether `actorId` has an authorization entry on `account` (a stored actor config, or the inline
     ///      k1 self is enabled), IGNORING expiry: an expired-but-not-revoked actor still returns true — intentional,
     ///      since _revokeActor relies on it to revoke expired actors and reclaim their slots. Callers that want
-    ///      liveness (expiry-aware) use {isActor} or {getActorConfig} instead.
+    ///      liveness (expiry-aware) read {getActorConfig} (authenticator != 0) instead.
     function _isAuthorized(address account, bytes32 actorId) private view returns (bool) {
         // A populated _actorConfig entry is always live: any non-self actor, or a non-k1 self authenticator.
         if (_actorConfig[actorId][account].authenticator >= K1_AUTHENTICATOR) return true;
