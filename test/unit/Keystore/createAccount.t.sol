@@ -266,7 +266,7 @@ contract CreateAccountTest is KeystoreTest {
         assertEq(keystore.getChangeSequences(account).local, 1);
         assertEq(keystore.getChangeSequences(account).multichain, 0);
 
-        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 unlockDelay) = keystore.getLockStatus(account);
+        (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 unlockDelay) = keystore.getLockStatus(account);
         assertFalse(locked);
         assertFalse(hasInitiatedUnlock);
         assertEq(unlocksAt, 0);

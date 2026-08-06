@@ -143,7 +143,7 @@ contract ImportAccountTest is KeystoreTest {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     /// @notice Verifies importAccount reverts when the account is hard-locked (onlyUnlocked runs before all else).
-    /// @dev A lock op sets unlocksAt = type(uint40).max, so the account stays locked regardless of warp; any non-zero
+    /// @dev A lock op sets unlocksAt = type(uint48).max, so the account stays locked regardless of warp; any non-zero
     ///      unlock delay locks it. The onlyUnlocked modifier trips before the chainId/sequence/signature checks, so
     ///      the account is a controllable EOA (its inline default-EOA self signs the lock) and the actors/sig are
     ///      never reached.

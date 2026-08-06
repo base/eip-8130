@@ -271,10 +271,10 @@ contract AccountLockTest is KeystoreTest {
 
         _signedLock(pk, account, delay);
 
-        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 storedDelay) = keystore.getLockStatus(account);
+        (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 storedDelay) = keystore.getLockStatus(account);
         assertTrue(locked);
         assertFalse(hasInitiatedUnlock);
-        assertEq(unlocksAt, type(uint40).max);
+        assertEq(unlocksAt, type(uint48).max);
         assertEq(storedDelay, delay);
         assertTrue(keystore.isLocked(account));
     }
@@ -319,10 +319,10 @@ contract AccountLockTest is KeystoreTest {
 
         _signedLock(pk, account, secondDelay);
 
-        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 storedDelay) = keystore.getLockStatus(account);
+        (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 storedDelay) = keystore.getLockStatus(account);
         assertTrue(locked);
         assertFalse(hasInitiatedUnlock);
-        assertEq(unlocksAt, type(uint40).max);
+        assertEq(unlocksAt, type(uint48).max);
         assertEq(storedDelay, secondDelay);
     }
 
@@ -339,10 +339,10 @@ contract AccountLockTest is KeystoreTest {
         vm.warp(t0);
         _signedUnlock(pk, account);
 
-        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 storedDelay) = keystore.getLockStatus(account);
+        (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 storedDelay) = keystore.getLockStatus(account);
         assertTrue(locked); // block.timestamp (t0) < unlocksAt (t0 + delay)
         assertTrue(hasInitiatedUnlock);
-        assertEq(unlocksAt, uint40(t0 + delay));
+        assertEq(unlocksAt, uint48(t0 + delay));
         assertEq(storedDelay, 0);
         assertTrue(keystore.isLocked(account));
     }
@@ -360,7 +360,7 @@ contract AccountLockTest is KeystoreTest {
 
         bytes memory auth = _unlockAuth(pk, account);
         vm.expectEmit(true, false, false, true, address(keystore));
-        emit Keystore.AccountUnlockInitiated(account, uint40(t0 + delay));
+        emit Keystore.AccountUnlockInitiated(account, uint48(t0 + delay));
         keystore.applySignedLockChanges(account, Keystore.LockChangeType.Unlock, 0, auth);
     }
 
@@ -428,18 +428,19 @@ contract AccountLockTest is KeystoreTest {
 
     /// @notice getLockStatus reports all-clear for a never-locked account: unlocked, not initiated, zeroed fields.
     function test_getLockStatus_success_whenNeverLocked(address account) public view {
-        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 unlockDelay) = keystore.getLockStatus(account);
+        (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 unlockDelay) = keystore.getLockStatus(account);
         assertFalse(locked);
         assertFalse(hasInitiatedUnlock);
         assertEq(unlocksAt, 0);
         assertEq(unlockDelay, 0);
     }
 
-    /// @notice getLockStatus after the delay elapses (with no intervening onlyUnlocked call) still surfaces the
-    ///         initiated-unlock state: unlocked, but hasInitiatedUnlock true and unlocksAt unchanged.
-    /// @dev getLockStatus is a pure view: it never runs _checkAndClearLock, so the lock flags/union are not cleared and
-    ///      the FLAG_UNLOCK_INITIATED branch reports hasInitiatedUnlock true even though the account is now unlocked.
-    function test_getLockStatus_success_afterUnlockElapsedNotCleared(
+    /// @notice getLockStatus reports a clean unlocked state once an initiated unlock has elapsed, even with no
+    ///         intervening onlyUnlocked call to clear storage.
+    /// @dev getLockStatus never runs _checkAndClearLock, but it applies the elapse itself: once block.timestamp
+    ///      reaches unlocksAt it returns (false, false, 0, 0) — matching _checkAndClearLock's post-clear result —
+    ///      rather than surfacing the stale initiated-unlock fields still sitting in storage.
+    function test_getLockStatus_success_afterUnlockElapsedReportsUnlocked(
         uint256 pkSeed,
         uint16 delay,
         uint256 t0,
@@ -456,12 +457,12 @@ contract AccountLockTest is KeystoreTest {
         vm.warp(t0);
         _signedUnlock(pk, account);
 
-        vm.warp(t0 + delay + extra); // past unlocksAt, but no onlyUnlocked call to clear it
+        vm.warp(t0 + delay + extra); // at or past unlocksAt, but no onlyUnlocked call to clear storage
 
-        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 storedDelay) = keystore.getLockStatus(account);
+        (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 storedDelay) = keystore.getLockStatus(account);
         assertFalse(locked);
-        assertTrue(hasInitiatedUnlock);
-        assertEq(unlocksAt, uint40(t0 + delay));
+        assertFalse(hasInitiatedUnlock);
+        assertEq(unlocksAt, 0);
         assertEq(storedDelay, 0);
     }
 
@@ -502,7 +503,7 @@ contract AccountLockTest is KeystoreTest {
 
         assertTrue(_isActor(account, newActorId));
         // The onlyUnlocked prelude cleared the stale unlock timestamp back to 0.
-        (,, uint40 unlocksAt,) = keystore.getLockStatus(account);
+        (,, uint48 unlocksAt,) = keystore.getLockStatus(account);
         assertEq(unlocksAt, 0);
     }
 

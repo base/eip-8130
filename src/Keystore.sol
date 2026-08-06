@@ -85,7 +85,7 @@ contract Keystore {
     /// @dev Packed into a single storage slot; the field layout is normative (nodes read the raw slot for mempool
     ///      rate-limit tiering, see the EIP's Account Lock section). Field order and widths match the spec's
     ///      account-state table: multichainSequence, localSequence, flags, lockUnion, defaultEOAExpiry,
-    ///      defaultEOAScope, then 2 reserved bytes that MUST stay zero.
+    ///      defaultEOAScope, then 1 reserved byte that MUST stay zero.
     ///      localSequence > 0 doubles as the account initialized flag.
     ///      `flags` is a bitfield: bit 0 (FLAG_REVOKE_DEFAULT_EOA) disables the k1 self key; bit 1 (FLAG_LOCKED)
     ///      freezes actor configuration; bit 2 (FLAG_UNLOCK_INITIATED) selects how `lockUnion` is interpreted.
@@ -102,10 +102,10 @@ contract Keystore {
         uint64 multichainSequence; // 8 bytes
         uint64 localSequence; // 8 bytes – also serves as initialized flag
         uint8 flags; // 1 byte – bitfield: bit 0 REVOKE_DEFAULT_EOA, bit 1 LOCKED, bit 2 UNLOCK_INITIATED
-        uint40 lockUnion; // 5 bytes – union: unlockDelay while UNLOCK_INITIATED clear, else unlocksAt (timestamp)
+        uint48 lockUnion; // 6 bytes – union: unlockDelay while UNLOCK_INITIATED clear, else unlocksAt (timestamp)
         uint48 defaultEOAExpiry; // 6 bytes – inline self k1 expiry (Unix seconds; 0 = no expiry)
         uint16 defaultEOAScope; // 2 bytes – inline self k1 scope (0 = full owner)
-        // 2 bytes reserved (remaining slot bytes); MUST stay zero.
+        // 1 byte reserved (remaining slot byte); MUST stay zero.
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -250,7 +250,7 @@ contract Keystore {
     ///
     /// @param account The account whose unlock was initiated.
     /// @param unlocksAt The timestamp at which the account will unlock.
-    event AccountUnlockInitiated(address indexed account, uint40 unlocksAt);
+    event AccountUnlockInitiated(address indexed account, uint48 unlocksAt);
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // ERRORS
@@ -591,7 +591,7 @@ contract Keystore {
             if (flags & FLAG_LOCKED == 0 || flags & FLAG_UNLOCK_INITIATED != 0) revert NotLocked();
 
             // Reinterpret the union: it held the stored delay, now it holds the effective unlock timestamp.
-            uint40 unlocksAt = uint40(block.timestamp + uint16(config.lockUnion));
+            uint48 unlocksAt = uint48(block.timestamp + uint16(config.lockUnion));
             config.flags = flags | FLAG_UNLOCK_INITIATED;
             config.lockUnion = unlocksAt;
             emit AccountUnlockInitiated(account, unlocksAt);
@@ -830,12 +830,12 @@ contract Keystore {
     ///
     /// @return locked True if the account is locked at the current block timestamp.
     /// @return hasInitiatedUnlock True if an unlock has been initiated but not yet elapsed.
-    /// @return unlocksAt The timestamp at which the account unlocks (type(uint40).max while hard-locked).
+    /// @return unlocksAt The timestamp at which the account unlocks (type(uint48).max while hard-locked).
     /// @return unlockDelay The configured unlock delay in seconds.
     function getLockStatus(address account)
         external
         view
-        returns (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 unlockDelay)
+        returns (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 unlockDelay)
     {
         AccountState storage config = _accountState[account];
         uint8 flags = config.flags;
@@ -845,11 +845,14 @@ contract Keystore {
         }
         if (flags & FLAG_UNLOCK_INITIATED == 0) {
             // Hard-locked: lockUnion holds the configured delay; synthesize the max sentinel for unlocksAt.
-            return (true, false, type(uint40).max, uint16(config.lockUnion));
+            return (true, false, type(uint48).max, uint16(config.lockUnion));
         }
-        // Unlock initiated: lockUnion holds the effective unlock timestamp; the delay has been consumed.
-        uint40 unlockTime = config.lockUnion;
-        return (block.timestamp < unlockTime, true, unlockTime, 0);
+        // Unlock initiated: lockUnion holds the effective unlock timestamp. Once it has elapsed the account is
+        // effectively unlocked (storage is cleared lazily on the next onlyUnlocked op), so report the clean unlocked
+        // state — matching _checkAndClearLock's post-clear result — instead of surfacing the stale timestamp.
+        uint48 unlockTime = config.lockUnion;
+        if (block.timestamp >= unlockTime) return (false, false, 0, 0);
+        return (true, true, unlockTime, 0);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
