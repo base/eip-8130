@@ -126,6 +126,19 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         manager.executeFor(lastBinding, _pull(1));
     }
 
+    function test_executeFor_revertsForNonExternalPullActor() public {
+        // The provider is a live, policy-gated actor of the account, correctly gated to this manager with a matching
+        // commitment — but it was provisioned with a *signing* authenticator, not EXTERNAL_POLICY_AUTHENTICATOR. Such
+        // a native key must act through the protocol-authenticated path, never the auth-less external pull.
+        address account = _createAccount(bytes32(uint256(1)));
+        (PolicyManager.PolicyBinding memory binding, bytes32 commitment) = _binding(account, 1, 100e6, MONTH);
+        _authorizeProviderWithAuthenticator(account, address(k1Authenticator), address(manager), commitment, 0);
+
+        vm.expectRevert(abi.encodeWithSelector(PolicyManager.InvalidActor.selector, bytes32(bytes20(provider))));
+        vm.prank(provider);
+        manager.executeFor(binding, _pull(1));
+    }
+
     function test_executeFor_revertsOverBudget() public {
         address account = _optIn(bytes32(uint256(1)), 50e6, MONTH);
 
@@ -312,8 +325,22 @@ contract ExternalPolicyCallerTest is KeystoreTest {
     }
 
     function _authorizeProvider(address account, address policyManager, bytes32 commitment, uint48 expiry) internal {
-        Keystore.ActorConfig memory cfg =
-            Keystore.ActorConfig({authenticator: EXTERNAL_POLICY_AUTHENTICATOR, scope: SCOPE_POLICY, expiry: expiry});
+        _authorizeProviderWithAuthenticator(account, EXTERNAL_POLICY_AUTHENTICATOR, policyManager, commitment, expiry);
+    }
+
+    /// @dev Authorize the provider actor with an arbitrary `authenticator` (an external-pull actor MUST use
+    ///      {EXTERNAL_POLICY_AUTHENTICATOR}; used by tests to provision a non-external-pull actor and assert the
+    ///      manager rejects it on the external path).
+    function _authorizeProviderWithAuthenticator(
+        address account,
+        address authenticator,
+        address policyManager,
+        bytes32 commitment,
+        uint48 expiry
+    ) internal {
+        Keystore.ActorConfig memory cfg = Keystore.ActorConfig({
+            authenticator: authenticator, scope: SCOPE_POLICY, expiry: expiry
+        });
         Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
         changes[0] = Keystore.ActorChange({
             actorId: bytes32(bytes20(provider)),

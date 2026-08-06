@@ -8,14 +8,16 @@ import {Keystore} from "../Keystore.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../interfaces/ITransactionContext.sol";
 import {Policy} from "./Policy.sol";
 
-/// @dev Recommended `authenticator` for an actor that represents an *external caller* governed by a policy (e.g. a
+/// @dev Required `authenticator` for an actor that represents an *external caller* governed by a policy (e.g. a
 ///      subscription provider): an address that may act ONLY through its policy manager's external entrypoints, never
 ///      directly. Distinct from `TRUSTED_EXECUTOR` (which grants direct `executeBatch`): this is a
 ///      no-code, hash-derived sentinel, so the actor is recognized by Keystore (non-zero authenticator)
 ///      yet cannot drive the account directly and cannot authenticate an 8130 transaction (its `authenticate()` would
-///      call into empty code and fail). Only the account-side authorization (and these examples/tests) ever reference
-///      it; neither the account nor the manager runtime reads it — `executeFor` authorizes purely on
-///      `actorId == bytes20(msg.sender)`, `policy_manager == this`, and a matching binding commitment.
+///      call into empty code and fail). `executeFor` / `executeForMany` require the acting actor's stored
+///      authenticator to equal this sentinel: that restricts the external path to actors the account explicitly
+///      provisioned as external-pull, so a native signing key gated to the same manager cannot be driven through the
+///      auth-less external path. Authorization then also requires `actorId == bytes20(msg.sender)`,
+///      `policy_manager == this`, and a matching binding commitment.
 address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak256("externalPolicyCaller"))));
 
 /// @title PolicyManager
@@ -99,9 +101,9 @@ contract PolicyManager is ReentrancyGuard {
     ///         is not policy-gated, or (on the external path) the account did not gate this manager for it, or its
     ///         signed commitment is zero.
     error NoActivePolicy(bytes32 actorId);
-    /// @notice The acting actor is not currently live on the account (unknown, revoked, or expired). Enforced on the
-    ///         external path ({executeFor} / {executeForMany}), which has no protocol auth to reject it first; the
-    ///         commitment is not cleared on expiry (only on revoke), so the manager checks liveness itself.
+    /// @notice The acting actor is not a live external-pull actor of the account: it is unknown, revoked, or expired,
+    ///         or its stored authenticator is not {EXTERNAL_POLICY_AUTHENTICATOR}. Enforced on the external path
+    ///         ({executeFor} / {executeForMany}), which has no protocol auth to reject it first.
     error InvalidActor(bytes32 actorId);
     /// @notice {executeForMany} array length mismatch between `bindings` and `executionData`.
     error LengthMismatch();
@@ -156,7 +158,8 @@ contract PolicyManager is ReentrancyGuard {
     ///
     /// @dev The acting identity is the caller itself — `actorId == bytes20(msg.sender)` — and `account` is
     ///      `binding.account`. There is no protocol routing on this path, so unlike {execute} this re-verifies that
-    ///      the account gated *this* manager for the caller and that the actor is unexpired.
+    ///      the caller is a live external-pull actor (authenticator == {EXTERNAL_POLICY_AUTHENTICATOR}) and that the
+    ///      account gated *this* manager for it.
     ///
     /// @param binding       Full account-authorized binding (config + window + salt).
     /// @param executionData Per-use action parameters interpreted by the policy.
@@ -202,7 +205,8 @@ contract PolicyManager is ReentrancyGuard {
         _enforceExternal(binding, actorId, executionData, caller);
     }
 
-    /// @dev External-path validation: actor liveness, manager-match, live commitment vs binding, then enforce.
+    /// @dev External-path validation: live external-pull actor, manager-match, live commitment vs binding, then
+    ///      enforce.
     function _enforceExternal(
         PolicyBinding calldata binding,
         bytes32 actorId,
@@ -211,12 +215,18 @@ contract PolicyManager is ReentrancyGuard {
     ) internal {
         address account = binding.account;
 
-        // Liveness precondition. The external path has no protocol auth (omitted on {execute}, where authentication
-        // already enforced liveness before dispatch), so the manager rejects a caller that is not a live actor of the
-        // account. Keystore.isActor is expiry-aware — an unknown, revoked, or expired actor reports false — so this
-        // is the single actor-presence gate, checked before the policy-binding checks so those stay specific to a
-        // live actor.
-        if (!KEYSTORE.isActor(account, actorId)) revert InvalidActor(actorId);
+        // Liveness + verifier precondition. The external path has no protocol auth (omitted on {execute}, where
+        // authentication already enforced this before dispatch), so the manager itself gates the caller. It requires
+        // the actor to be provisioned with EXTERNAL_POLICY_AUTHENTICATOR — the no-code sentinel that marks an
+        // external-pull actor (one that can act ONLY through this path and can never authenticate a native 8130 tx).
+        // getActorConfig resolves an unknown, revoked, or expired actor to the all-zero config (authenticator 0), so
+        // this single read both enforces liveness AND restricts executeFor to actors the account explicitly opted
+        // into external pull. A native signing key gated to this manager (a real authenticator) is therefore not
+        // drivable through the auth-less external path, where it would bypass protocol replay protection. Checked
+        // before the policy-binding checks so those stay specific to a live external-pull actor.
+        if (KEYSTORE.getActorConfig(account, actorId).authenticator != EXTERNAL_POLICY_AUTHENTICATOR) {
+            revert InvalidActor(actorId);
+        }
 
         if (KEYSTORE.getPolicyManager(account, actorId) != address(this)) {
             revert NoActivePolicy(actorId);
