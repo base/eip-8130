@@ -390,7 +390,7 @@ contract DefaultAccountTest is KeystoreTest {
     // ══════════════════════════════════════════════
 
     /// @notice A signature from a key that is not a registered actor returns the failure magic value.
-    /// @dev authenticateActor reverts (AuthenticatorMismatch/DefaultEoaRevoked), caught by verifySignature -> false.
+    /// @dev validateSignature reverts (AuthenticatorMismatch/DefaultEoaRevoked); isValidSignature catches it -> fail.
     function test_isValidSignature_success_returnsFailureForWrongKey(uint256 ownerSeed, uint256 wrongSeed, bytes32 hash)
         public
     {
@@ -399,14 +399,16 @@ contract DefaultAccountTest is KeystoreTest {
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(wrongPk) != vm.addr(ownerPk) && vm.addr(wrongPk) != account);
 
-        bytes memory authData = _buildK1Auth(wrongPk, hash);
+        // Well-formed local envelope over the correct digest, but signed by a key that is not a registered actor.
+        bytes memory authData = _wrapLocal(_buildK1Auth(wrongPk, keystore.replaySafeHash(account, hash)));
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, ERC1271_FAIL);
     }
 
     /// @notice A valid signature from a payer-only (non-SENDER, non-admin) actor returns the failure magic value.
-    /// @dev verifySignature is false for a non-operational actor; here SCOPE_SELF_PAYER (no SENDER, no admin).
+    /// @dev isValidSignature gates on Scopes.isOperational; here SCOPE_SELF_PAYER (no SENDER, no admin) is not
+    ///      operational, so an otherwise-valid signature is rejected.
     function test_isValidSignature_success_returnsFailureForNonOperationalScope(
         uint256 ownerSeed,
         uint256 actorSeed,
@@ -422,15 +424,16 @@ contract DefaultAccountTest is KeystoreTest {
         // Authorize the actor with SELF_PAYER scope only — it is not operational and cannot validate signatures.
         _authorizeActorWithScope(account, ownerPk, bytes32(uint256(uint160(actor))), k1Authenticator, SCOPE_SELF_PAYER);
 
-        bytes memory authData = _buildK1Auth(actorPk, hash);
+        // Otherwise-valid local envelope: the sole failure reason is the non-operational scope.
+        bytes memory authData = _wrapLocal(_buildK1Auth(actorPk, keystore.replaySafeHash(account, hash)));
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, ERC1271_FAIL);
     }
 
     /// @notice A valid signature from an operational SENDER-without-POLICY actor returns the ERC-1271 magic value.
-    /// @dev verifySignature is true for an operational actor: signing encodes authority a SENDER key already holds
-    ///      via calls, so it does not require the admin scope.
+    /// @dev An operational actor validates: signing encodes authority a SENDER key already holds via calls, so it
+    ///      does not require the admin scope.
     function test_isValidSignature_success_operationalSenderSigns(uint256 ownerSeed, uint256 actorSeed, bytes32 hash)
         public
     {
@@ -444,15 +447,16 @@ contract DefaultAccountTest is KeystoreTest {
         // Authorize the actor with SENDER scope only (no POLICY) — it is operational and can validate signatures.
         _authorizeActorWithScope(account, ownerPk, bytes32(uint256(uint160(actor))), k1Authenticator, SCOPE_SENDER);
 
-        // verifySignature applies the account-scoped EIP-7739 wrap, so sign the replaySafeHash digest.
-        bytes memory authData = _buildK1Auth(actorPk, keystore.replaySafeHash(account, hash));
+        // Chain-local envelope over the account-scoped replaySafeHash digest.
+        bytes memory authData = _wrapLocal(_buildK1Auth(actorPk, keystore.replaySafeHash(account, hash)));
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, ERC1271_MAGIC);
     }
 
-    /// @notice A signature blob shorter than the 20-byte authenticator prefix returns the failure magic value.
-    /// @dev authenticateActor reverts InvalidAuthLength, which verifySignature catches and reports as false.
+    /// @notice A signature envelope too short to carry a 20-byte authenticator returns the failure magic value.
+    /// @dev An empty blob reverts EmptySignatureEnvelope; a 1..20-byte zero blob is a SIG_TYPE_LOCAL envelope whose
+    ///      remainder is under 20 bytes, so authenticateActor reverts InvalidAuthLength. Both are caught -> fail.
     function test_isValidSignature_success_returnsFailureForShortSignature(
         uint256 ownerSeed,
         uint8 lenSeed,
@@ -461,7 +465,7 @@ contract DefaultAccountTest is KeystoreTest {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         (address account,) = _createK1Account(ownerPk);
 
-        uint256 len = bound(lenSeed, 0, 19);
+        uint256 len = bound(lenSeed, 0, 20); // 0 = empty envelope; 1..20 = type byte + under-length authenticator
         bytes memory shortSig = new bytes(len);
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, shortSig);
@@ -473,13 +477,13 @@ contract DefaultAccountTest is KeystoreTest {
     // ══════════════════════════════════════════════
 
     /// @notice A valid signature from the unrestricted owner returns the ERC-1271 magic value.
-    /// @dev verifySignature is true because the owner actor has scope == 0 (unrestricted). Fuzzes key and hash.
+    /// @dev The owner actor has scope == 0 (unrestricted), which is operational. Fuzzes key and hash.
     function test_isValidSignature_success_validK1Owner(uint256 pkSeed, bytes32 hash) public {
         uint256 pk = _boundK1Pk(pkSeed);
         (address account,) = _createK1Account(pk);
 
-        // verifySignature applies the account-scoped EIP-7739 wrap, so sign the replaySafeHash digest.
-        bytes memory authData = _buildK1Auth(pk, keystore.replaySafeHash(account, hash));
+        // Chain-local envelope over the account-scoped replaySafeHash digest.
+        bytes memory authData = _wrapLocal(_buildK1Auth(pk, keystore.replaySafeHash(account, hash)));
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, ERC1271_MAGIC);
@@ -502,7 +506,8 @@ contract DefaultAccountTest is KeystoreTest {
             account, ownerPk, bytes32(uint256(uint160(actor))), k1Authenticator, SCOPE_SPONSOR_PAYER
         );
 
-        bytes memory authData = _buildK1Auth(actorPk, hash);
+        // Otherwise-valid local envelope: the sole failure reason is the non-operational scope.
+        bytes memory authData = _wrapLocal(_buildK1Auth(actorPk, keystore.replaySafeHash(account, hash)));
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, ERC1271_FAIL);

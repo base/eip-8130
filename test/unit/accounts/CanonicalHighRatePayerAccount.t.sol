@@ -221,8 +221,8 @@ contract CanonicalHighRatePayerAccountTest is KeystoreTest {
         (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
 
         bytes32 hash = keccak256("validate me");
-        // verifySignature applies the account-scoped EIP-7739 wrap, so sign the replaySafeHash digest.
-        bytes memory authData = _buildK1Auth(ACTOR_PK, keystore.replaySafeHash(account, hash));
+        // Chain-local signature envelope over the account-scoped replaySafeHash digest.
+        bytes memory authData = _wrapLocal(_buildK1Auth(ACTOR_PK, keystore.replaySafeHash(account, hash)));
 
         bytes4 result = CanonicalHighRatePayerAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0x1626ba7e));
@@ -232,7 +232,8 @@ contract CanonicalHighRatePayerAccountTest is KeystoreTest {
         (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
 
         bytes32 hash = keccak256("validate me");
-        bytes memory authData = _buildK1Auth(999, hash);
+        // Well-formed local envelope, but signed by a key that is not a registered actor.
+        bytes memory authData = _wrapLocal(_buildK1Auth(999, keystore.replaySafeHash(account, hash)));
 
         bytes4 result = CanonicalHighRatePayerAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0xFFFFFFFF));

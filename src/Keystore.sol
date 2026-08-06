@@ -761,68 +761,78 @@ contract Keystore {
     // VIEW FUNCTIONS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice Validates an account signature in `authenticator(20) || data` format; never reverts.
-    ///
-    /// @dev ERC-1271-style boolean check: returns false on any failure (invalid signature, unknown/revoked actor,
-    ///      actorId not bound to the presented authenticator, or a non-operational actor). authenticateActor
-    ///      reverts on failure, so it is called externally and the revert is caught.
-    ///
-    /// @param account The account the signature is validated against.
-    /// @param hash The raw digest; authenticated as replaySafeHash(account, hash).
-    /// @param signature Authenticator(20) || authenticator-specific data.
-    ///
-    /// @return verified True if the signature is valid and the resolved actor is operational (admin, or a SENDER
-    ///         actor that does not carry POLICY).
-    function verifySignature(address account, bytes32 hash, bytes calldata signature)
-        external
-        view
-        returns (bool verified)
-    {
-        // Authenticate against the account-scoped digest (see {replaySafeHash}), not the raw hash.
-        try this.authenticateActor(account, replaySafeHash(account, hash), signature) returns (bytes32, uint16 scope) {
-            // ERC-1271 signing is authorized for any operational actor (see {Scopes.isOperator}): signing encodes
-            // authority a SENDER actor already holds via calls, so it needs no dedicated grant, while a POLICY-gated
-            // actor is not operational because a signature would act outside its policy gate.
-            return Scopes.isOperator(scope);
-        } catch {
-            return false;
-        }
-    }
+    // Account signature validation: a user signature over an app `hash` is validated against an account- and
+    // chain-scoped envelope digest (see {replaySafeHash} / {multichainSafeHash}), binding the signature to a single
+    // account and channel. The registry's own signed messages (actor changes, import, lock) bind context in-struct and
+    // use their own typehashes.
 
-    // Account-scoped ERC-1271: signatures are authenticated against replaySafeHash(account, hash), an EIP-712
-    // digest with verifyingContract = account, binding a 1271 signature to a single account. This is the EIP-7739
-    // PersonalSign digest; TypedDataSign is not implemented. The registry's own signed messages (actor changes,
-    // import, lock) bind context in-struct and do not use this domain.
+    /// @notice Typehash binding a user signature to its account and chainId.
+    /// @dev NOT compliant with EIP-712, to mitigate eth_signTypedData phishing, consistent with the other 8130
+    ///      signed-message typehashes. First byte 0x9d: provably not a transaction encoding.
+    bytes32 public constant SIGNED_MESSAGE_TYPEHASH =
+        keccak256("EIP8130SignedMessage(address account,uint256 chainId,bytes32 hash)");
 
-    /// @dev EIP-712 domain typehash.
-    bytes32 private constant _EIP712_DOMAIN_TYPEHASH =
-        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+    /// @notice Signature envelope type: wrap against chainId = block.chainid (chain-local). Append-only.
+    uint8 public constant SIG_TYPE_LOCAL = 0x00;
 
-    /// @dev keccak256("PersonalSign(bytes prefixed)").
-    bytes32 private constant _PERSONAL_SIGN_TYPEHASH =
-        0x983e65e5148e570cd828ead231ee759a8d7958721a768f93bc4483ba005c32de;
+    /// @notice Signature envelope type: wrap against chainId = 0 (explicit all-chains channel). Append-only.
+    uint8 public constant SIG_TYPE_MULTICHAIN = 0x01;
 
-    /// @dev Account ERC-1271 domain name/version, fixed for all accounts.
-    bytes32 private constant _ACCOUNT_DOMAIN_NAME_HASH = keccak256("EIP8130Account");
-    bytes32 private constant _ACCOUNT_DOMAIN_VERSION_HASH = keccak256("1");
+    /// @notice The signature envelope's leading type byte is not a recognized SIG_TYPE_* value.
+    error UnknownSignatureType(uint8 sigType);
 
-    /// @notice Account-scoped digest to sign for `hash` to be accepted by {verifySignature}: `hash` wrapped in an
-    ///         EIP-712 domain with verifyingContract = `account` and the current chainId.
+    /// @notice The signature envelope is empty (missing its leading type byte).
+    error EmptySignatureEnvelope();
+
+    /// @notice Chain-local digest to sign for `hash` to be accepted for `account` on the current chain.
     /// @param account Account the signature is bound to.
     /// @param hash Raw message digest.
-    /// @return The digest to sign.
+    /// @return The chain-local digest to sign.
     function replaySafeHash(address account, bytes32 hash) public view returns (bytes32) {
-        bytes32 structHash = keccak256(abi.encode(_PERSONAL_SIGN_TYPEHASH, hash));
-        return keccak256(abi.encodePacked(hex"1901", _accountDomainSeparator(account), structHash));
+        return keccak256(abi.encode(SIGNED_MESSAGE_TYPEHASH, account, block.chainid, hash));
     }
 
-    /// @dev EIP-712 domain separator for `account`'s ERC-1271 domain (verifyingContract = account, current chainId).
-    function _accountDomainSeparator(address account) private view returns (bytes32) {
-        return keccak256(
-            abi.encode(
-                _EIP712_DOMAIN_TYPEHASH, _ACCOUNT_DOMAIN_NAME_HASH, _ACCOUNT_DOMAIN_VERSION_HASH, block.chainid, account
-            )
-        );
+    /// @notice Multichain digest: same construction with chainId = 0. Valid on every chain for `account`; mirrors the
+    ///         applySignedActorChanges multichain channel.
+    /// @param account Account the signature is bound to.
+    /// @param hash Raw message digest.
+    /// @return The all-chains digest to sign.
+    function multichainSafeHash(address account, bytes32 hash) public pure returns (bytes32) {
+        return keccak256(abi.encode(SIGNED_MESSAGE_TYPEHASH, account, uint256(0), hash));
+    }
+
+    /// @notice Canonical validation of a typed-envelope user signature over `hash` for `account`.
+    ///
+    /// @dev Reverts on an empty envelope, an unknown signature type, or any authentication failure. Never calls into
+    ///      account code, so an account's own ERC-1271 path can call this without recursion. Operational gating for
+    ///      ERC-1271 (which scopes may sign) is left to the caller, which reads the returned `scope`.
+    ///
+    /// @param account The account the signature is validated against.
+    /// @param hash The raw app digest; validated against the account/chain-scoped envelope digest.
+    /// @param auth sigType(1) || authenticator(20) || authenticator-specific data.
+    ///
+    /// @return actorId The identifier of the verified actor.
+    /// @return scope The scope of the verified actor (0x00 = unrestricted).
+    function validateSignature(address account, bytes32 hash, bytes calldata auth)
+        external
+        view
+        returns (bytes32 actorId, uint16 scope)
+    {
+        if (auth.length == 0) revert EmptySignatureEnvelope();
+
+        uint8 sigType = uint8(auth[0]);
+        bytes32 digest;
+        if (sigType == SIG_TYPE_LOCAL) {
+            digest = replaySafeHash(account, hash);
+        } else if (sigType == SIG_TYPE_MULTICHAIN) {
+            digest = multichainSafeHash(account, hash);
+        } else {
+            revert UnknownSignatureType(sigType);
+        }
+
+        // Strip the type byte; the remainder is the standard authenticator(20) || data blob, resolved exactly like
+        // every other authentication in the registry.
+        (actorId, scope) = authenticateActor(account, digest, auth[1:]);
     }
 
     /// @notice Authenticates that an account approved `hash` using auth in `authenticator(20) || data` format,

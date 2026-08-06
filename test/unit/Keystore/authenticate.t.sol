@@ -6,7 +6,7 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice Fuzzed, branch-complete suite for the authentication paths of Keystore:
 ///         authenticateActor -> _authenticate -> {_authenticateK1, IAuthenticator} -> _recoverSigner, plus the
-///         verifySignature / getActorConfig / getPolicy views that read the same actor resolution.
+///         validateSignature / getActorConfig / getPolicy views that read the same actor resolution.
 ///
 ///         Source-order revert coverage (as declared / hit through authenticateActor):
 ///           1. InvalidAuthLength      authenticateActor: auth.length < 20
@@ -703,15 +703,14 @@ contract AuthenticateTest is KeystoreTest {
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    // verifySignature (operational authority)
+    // validateSignature (typed envelope, scope-agnostic)
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice verifySignature returns true for any operational actor: the admin (scope == 0x00) or a SENDER actor
-    ///         without POLICY. Payer-only / nonce-only (non-SENDER) scopes are not operational and verify false.
-    /// @dev Fuzzes the (POLICY-cleared) scope space and asserts the boolean equals the operational predicate
-    ///      `scope == 0 || (scope & SCOPE_SENDER != 0)`, proving ERC-1271 signing is operational — not admin-only,
-    ///      and with no dedicated SIGNER grant.
-    function test_verifySignature_success_operationalAcrossScopes(
+    /// @notice validateSignature resolves a chain-local envelope to the actor's identity and raw scope, applying no
+    ///         operational gating (that is the caller's job — see DefaultAccount / Scopes.isOperational).
+    /// @dev Fuzzes the (POLICY-cleared) scope space and asserts the returned scope equals the authorized scope
+    ///      verbatim, proving the Keystore does not interpret scope for signing.
+    function test_validateSignature_success_localReturnsActorAndScope(
         uint256 ownerSeed,
         uint256 actorSeed,
         uint8 scopeSeed,
@@ -724,70 +723,18 @@ contract AuthenticateTest is KeystoreTest {
 
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(actorPk) != account);
-        _authorizeActorWithScope(
-            account, ownerPk, bytes32(uint256(uint160(vm.addr(actorPk)))), address(k1Authenticator), scope
-        );
+        bytes32 actorId = bytes32(bytes20(vm.addr(actorPk)));
+        _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), scope);
 
-        bool expected = scope == 0 || (scope & SCOPE_SENDER != 0);
-        // verifySignature applies the account-scoped EIP-7739 wrap.
-        bytes memory auth = _buildK1Auth(actorPk, keystore.replaySafeHash(account, hash));
-        assertEq(keystore.verifySignature(account, hash, auth), expected);
+        bytes memory auth = _wrapLocal(_buildK1Auth(actorPk, keystore.replaySafeHash(account, hash)));
+        (bytes32 outActorId, uint16 outScope) = keystore.validateSignature(account, hash, auth);
+        assertEq(outActorId, actorId);
+        assertEq(outScope, scope);
     }
 
-    /// @notice A SENDER actor without POLICY is operational and verifies true via verifySignature.
-    /// @dev Positive guard for the operational-authority path: signing is authority a SENDER key already holds via
-    ///      calls, so it does not require the admin scope. Covers SENDER alone and SENDER combined with the
-    ///      SELF_PAYER / NONCE capability bits (still no POLICY).
-    function test_verifySignature_success_trueForSenderWithoutPolicy(uint256 ownerSeed, uint256 actorSeed, bytes32 hash)
-        public
-    {
-        uint256 ownerPk = _boundK1Pk(ownerSeed);
-        uint256 actorPk = _boundK1Pk(actorSeed);
-        vm.assume(vm.addr(ownerPk) != vm.addr(actorPk));
-
-        (address account,) = _createK1Account(ownerPk);
-        vm.assume(vm.addr(actorPk) != account);
-        bytes32 actorId = bytes32(uint256(uint160(vm.addr(actorPk))));
-        // verifySignature applies the account-scoped EIP-7739 wrap; replaySafeHash(account, hash) is scope-independent.
-        bytes memory auth = _buildK1Auth(actorPk, keystore.replaySafeHash(account, hash));
-
-        _authorizeAtScope(account, ownerPk, actorId, SCOPE_SENDER);
-        assertTrue(keystore.verifySignature(account, hash, auth));
-
-        _authorizeAtScope(account, ownerPk, actorId, SCOPE_SENDER | SCOPE_SELF_PAYER);
-        assertTrue(keystore.verifySignature(account, hash, auth));
-
-        _authorizeAtScope(account, ownerPk, actorId, SCOPE_SENDER | SCOPE_NONCE);
-        assertTrue(keystore.verifySignature(account, hash, auth));
-    }
-
-    /// @notice A non-SENDER capability-only actor (SELF_PAYER-only, SPONSOR_PAYER-only, NONCE-only) is NOT
-    ///         operational and verifies false.
-    /// @dev Negative guard: only admin or SENDER-without-POLICY are operational.
-    function test_verifySignature_success_falseForNonSenderScopes(uint256 ownerSeed, uint256 actorSeed, bytes32 hash)
-        public
-    {
-        uint256 ownerPk = _boundK1Pk(ownerSeed);
-        uint256 actorPk = _boundK1Pk(actorSeed);
-        vm.assume(vm.addr(ownerPk) != vm.addr(actorPk));
-
-        (address account,) = _createK1Account(ownerPk);
-        vm.assume(vm.addr(actorPk) != account);
-        bytes32 actorId = bytes32(uint256(uint160(vm.addr(actorPk))));
-
-        _authorizeAtScope(account, ownerPk, actorId, SCOPE_SELF_PAYER);
-        assertFalse(keystore.verifySignature(account, hash, _buildK1Auth(actorPk, hash)));
-
-        _authorizeAtScope(account, ownerPk, actorId, SCOPE_SPONSOR_PAYER);
-        assertFalse(keystore.verifySignature(account, hash, _buildK1Auth(actorPk, hash)));
-
-        _authorizeAtScope(account, ownerPk, actorId, SCOPE_NONCE);
-        assertFalse(keystore.verifySignature(account, hash, _buildK1Auth(actorPk, hash)));
-    }
-
-    /// @notice A policy-bearing actor is NEVER a valid ERC-1271 signer (a POLICY actor is not operational).
-    /// @dev verifySignature must return false for a scoped SCOPE_POLICY actor.
-    function test_verifySignature_success_falseForPolicyActor(
+    /// @notice validateSignature returns a policy-gated actor's scope verbatim (POLICY bit set) and does not revert:
+    ///         operational gating for ERC-1271 lives in the account, not the Keystore.
+    function test_validateSignature_success_policyActorReturnsScope(
         uint256 ownerSeed,
         uint256 sessionSeed,
         address manager,
@@ -802,18 +749,44 @@ contract AuthenticateTest is KeystoreTest {
 
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(sessionPk) != account);
-        bytes32 sessionActorId = bytes32(uint256(uint160(vm.addr(sessionPk))));
-        _authorizeGatedActor(account, ownerPk, sessionActorId, SCOPE_POLICY, manager, commitment);
-        assertFalse(keystore.verifySignature(account, hash, _buildK1Auth(sessionPk, hash)));
-
-        // SENDER | POLICY is still not operational: the POLICY bit disqualifies it even though SENDER is set.
+        bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
         _authorizeGatedActor(account, ownerPk, sessionActorId, SCOPE_SENDER | SCOPE_POLICY, manager, commitment);
-        assertFalse(keystore.verifySignature(account, hash, _buildK1Auth(sessionPk, hash)));
+
+        bytes memory auth = _wrapLocal(_buildK1Auth(sessionPk, keystore.replaySafeHash(account, hash)));
+        (bytes32 outActorId, uint16 outScope) = keystore.validateSignature(account, hash, auth);
+        assertEq(outActorId, sessionActorId);
+        assertEq(outScope, SCOPE_SENDER | SCOPE_POLICY);
     }
 
-    /// @notice verifySignature returns false when authentication fails outright (unregistered signer).
-    /// @dev authenticateActor reverts (AuthenticatorMismatch) and the try/catch collapses it to false.
-    function test_verifySignature_success_falseOnUnauthenticated(uint256 ownerSeed, uint256 strangerSeed, bytes32 hash)
+    /// @notice A multichain envelope (SIG_TYPE_MULTICHAIN) validates against the chainId = 0 digest.
+    /// @dev The owner signs multichainSafeHash(account, hash); validateSignature resolves the same all-chains digest.
+    function test_validateSignature_success_multichainEnvelope(uint256 ownerSeed, bytes32 hash) public {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        (address account,) = _createK1Account(ownerPk);
+
+        bytes memory auth = _wrapMultichain(_buildK1Auth(ownerPk, keystore.multichainSafeHash(account, hash)));
+        (bytes32 outActorId, uint16 outScope) = keystore.validateSignature(account, hash, auth);
+        assertEq(outActorId, bytes32(bytes20(vm.addr(ownerPk))));
+        assertEq(outScope, 0);
+    }
+
+    /// @notice An empty envelope reverts EmptySignatureEnvelope (no leading type byte).
+    function test_validateSignature_revert_emptyEnvelope(address account, bytes32 hash) public {
+        vm.expectRevert(Keystore.EmptySignatureEnvelope.selector);
+        keystore.validateSignature(account, hash, "");
+    }
+
+    /// @notice An unrecognized leading type byte reverts UnknownSignatureType.
+    /// @dev 0x00 = LOCAL, 0x01 = MULTICHAIN; every other value is rejected before any authentication.
+    function test_validateSignature_revert_unknownType(address account, uint8 sigTypeSeed, bytes32 hash) public {
+        uint8 sigType = uint8(bound(uint256(sigTypeSeed), 2, 255));
+        vm.expectRevert(abi.encodeWithSelector(Keystore.UnknownSignatureType.selector, sigType));
+        keystore.validateSignature(account, hash, abi.encodePacked(sigType));
+    }
+
+    /// @notice validateSignature reverts when the envelope resolves to no authorized actor (unregistered signer).
+    /// @dev authenticateActor reverts (AuthenticatorMismatch/DefaultEoaRevoked); validateSignature propagates it.
+    function test_validateSignature_revert_onUnauthenticated(uint256 ownerSeed, uint256 strangerSeed, bytes32 hash)
         public
     {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
@@ -823,7 +796,9 @@ contract AuthenticateTest is KeystoreTest {
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(strangerPk) != account);
 
-        assertFalse(keystore.verifySignature(account, hash, _buildK1Auth(strangerPk, hash)));
+        bytes memory auth = _wrapLocal(_buildK1Auth(strangerPk, keystore.replaySafeHash(account, hash)));
+        vm.expectRevert();
+        keystore.validateSignature(account, hash, auth);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
