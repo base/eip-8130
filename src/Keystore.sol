@@ -774,11 +774,12 @@ contract Keystore {
 
     /// @notice The chain-scoping channel a signature envelope's leading type byte selects.
     ///
-    /// @dev Read from the envelope's leading byte (uint8), not ABI-decoded, so the wire values are fixed here:
-    ///      Local = 0x00 (block.chainid), Multichain = 0x01 (chainId = 0). Append-only. Unlike the ABI-decoded change
-    ///      enums there is no decoder guard, so {validateSignature} range-checks the byte and reverts
-    ///      {UnknownSignatureType} before casting.
+    /// @dev Read from the envelope's leading byte (uint8), not ABI-decoded: Local = 0x01 (block.chainid),
+    ///      Multichain = 0x02 (chainId = 0). Append-only. Invalid (0x00) is the reserved "unset" value; unlike the
+    ///      ABI-decoded change enums there is no decoder guard, so {validateSignature} rejects Invalid and any
+    ///      out-of-range byte with {UnknownSignatureType}.
     enum SignatureType {
+        Invalid,
         Local,
         Multichain
     }
@@ -822,9 +823,15 @@ contract Keystore {
         uint8 sigTypeByte = uint8(auth[0]);
         if (sigTypeByte > uint8(type(SignatureType).max)) revert UnknownSignatureType(sigTypeByte);
 
-        bytes32 digest = SignatureType(sigTypeByte) == SignatureType.Local
-            ? replaySafeHash(account, block.chainid, hash)
-            : replaySafeHash(account, 0, hash);
+        bytes32 digest;
+        SignatureType sigType = SignatureType(sigTypeByte);
+        if (sigType == SignatureType.Local) {
+            digest = replaySafeHash(account, block.chainid, hash);
+        } else if (sigType == SignatureType.Multichain) {
+            digest = replaySafeHash(account, 0, hash);
+        } else {
+            revert UnknownSignatureType(sigTypeByte); // Invalid (0x00)
+        }
 
         (actorId, scope) = authenticateActor(account, digest, auth[1:]);
     }

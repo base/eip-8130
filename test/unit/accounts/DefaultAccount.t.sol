@@ -455,8 +455,8 @@ contract DefaultAccountTest is KeystoreTest {
     }
 
     /// @notice A signature envelope too short to carry a 20-byte authenticator returns the failure magic value.
-    /// @dev An empty blob reverts EmptySignatureEnvelope; a 1..20-byte zero blob is a SignatureType.Local envelope whose
-    ///      remainder is under 20 bytes, so authenticateActor reverts InvalidAuthLength. Both are caught -> fail.
+    /// @dev An empty blob reverts EmptySignatureEnvelope; a Local envelope (0x01) with an under-20-byte remainder
+    ///      reverts InvalidAuthLength in authenticateActor. Both are caught -> fail.
     function test_isValidSignature_success_returnsFailureForShortSignature(
         uint256 ownerSeed,
         uint8 lenSeed,
@@ -465,8 +465,9 @@ contract DefaultAccountTest is KeystoreTest {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         (address account,) = _createK1Account(ownerPk);
 
-        uint256 len = bound(lenSeed, 0, 20); // 0 = empty envelope; 1..20 = type byte + under-length authenticator
+        uint256 len = bound(lenSeed, 0, 20); // 0 = empty envelope; 1..20 = Local type byte + under-length authenticator
         bytes memory shortSig = new bytes(len);
+        if (len > 0) shortSig[0] = 0x01; // SignatureType.Local; remainder (< 20 bytes) is an under-length authenticator
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, shortSig);
         assertEq(result, ERC1271_FAIL);

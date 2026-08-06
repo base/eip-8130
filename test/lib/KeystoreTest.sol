@@ -108,12 +108,12 @@ contract KeystoreTest is Test {
 
     /// @dev Wrap an authenticator(20)||data blob in a chain-local signature envelope: SignatureType.Local || inner.
     function _wrapLocal(bytes memory inner) internal pure returns (bytes memory) {
-        return abi.encodePacked(bytes1(0x00), inner); // 0x00 == Keystore.SignatureType.Local
+        return abi.encodePacked(bytes1(0x01), inner); // 0x01 == Keystore.SignatureType.Local
     }
 
     /// @dev Wrap an authenticator(20)||data blob in an all-chains signature envelope: SignatureType.Multichain || inner.
     function _wrapMultichain(bytes memory inner) internal pure returns (bytes memory) {
-        return abi.encodePacked(bytes1(0x01), inner); // 0x01 == Keystore.SignatureType.Multichain
+        return abi.encodePacked(bytes1(0x02), inner); // 0x02 == Keystore.SignatureType.Multichain
     }
 
     // ── Sequence-word helpers ──

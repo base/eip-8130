@@ -777,9 +777,14 @@ contract AuthenticateTest is KeystoreTest {
     }
 
     /// @notice An unrecognized leading type byte reverts UnknownSignatureType.
-    /// @dev 0x00 = Local, 0x01 = Multichain; every other value is rejected before any authentication.
+    /// @dev 0x01 = Local, 0x02 = Multichain; 0x00 (Invalid) and any value >= 3 are rejected before authentication.
     function test_validateSignature_revert_unknownType(address account, uint8 sigTypeSeed, bytes32 hash) public {
-        uint8 sigType = uint8(bound(uint256(sigTypeSeed), 2, 255));
+        // 0x00 (Invalid) is the reserved "unset" value and is rejected.
+        vm.expectRevert(abi.encodeWithSelector(Keystore.UnknownSignatureType.selector, uint8(0)));
+        keystore.validateSignature(account, hash, abi.encodePacked(uint8(0)));
+
+        // Any value past the last defined type (>= 3) is rejected before the enum cast.
+        uint8 sigType = uint8(bound(uint256(sigTypeSeed), 3, 255));
         vm.expectRevert(abi.encodeWithSelector(Keystore.UnknownSignatureType.selector, sigType));
         keystore.validateSignature(account, hash, abi.encodePacked(sigType));
     }
