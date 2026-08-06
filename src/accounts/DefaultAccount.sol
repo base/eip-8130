@@ -4,6 +4,7 @@ pragma solidity 0.8.36;
 import {Receiver} from "solady/accounts/Receiver.sol";
 
 import {Keystore} from "../Keystore.sol";
+import {Scopes} from "../libraries/Scopes.sol";
 
 /// @notice A single call in an execution batch.
 struct Call {
@@ -42,12 +43,6 @@ address constant TRUSTED_EXECUTOR = address(uint160(uint256(keccak256("trustedEx
 contract DefaultAccount is Receiver {
     /// @notice The Keystore system contract that owns this account's authorization state.
     Keystore public immutable KEYSTORE;
-
-    /// @dev Local mirrors of {Keystore.SCOPE_SENDER} / {Keystore.SCOPE_POLICY}: a contract's
-    ///      public constants are not accessible via its type, and reading the getters would add external calls to the
-    ///      execution hot path. Kept in sync with Keystore.
-    uint16 private constant SCOPE_SENDER = 0x0001;
-    uint16 private constant SCOPE_POLICY = 0x0002;
 
     /// @notice The caller is neither the account itself nor a registered TRUSTED_EXECUTOR actor.
     error UnauthorizedCaller();
@@ -131,8 +126,8 @@ contract DefaultAccount is Receiver {
     /// @dev Authorized if `caller` is the account itself, or holds the TRUSTED_EXECUTOR authenticator with an
     ///      unexpired config AND operational (sender) authority. Expiry: 0 means none; a non-zero expiry is enforced
     ///      so a user-set expiry is honored on the execution path. Scope: driving execution requires sender
-    ///      authority — the unrestricted admin (scope == 0x00) or an actor with SCOPE_SENDER that is not gated by a
-    ///      policy (SCOPE_POLICY unset). A POLICY-gated actor must route every call through its manager, so granting
+    ///      authority — the unrestricted admin (scope == 0x00) or an actor with Scopes.SENDER that is not gated by a
+    ///      policy (Scopes.POLICY unset). A POLICY-gated actor must route every call through its manager, so granting
     ///      it direct executeBatch would bypass that gate; fail closed. This mirrors the operational-actor definition
     ///      in Keystore.verifySignature, keeping the execution and signing authorization surfaces aligned.
     function _isAuthorizedCaller(address caller) internal view virtual returns (bool) {
@@ -141,6 +136,6 @@ contract DefaultAccount is Receiver {
         if (config.authenticator != TRUSTED_EXECUTOR) return false;
         if (config.expiry != 0 && block.timestamp > config.expiry) return false;
         uint16 scope = config.scope;
-        return scope == 0 || ((scope & SCOPE_SENDER != 0) && (scope & SCOPE_POLICY == 0));
+        return scope == 0 || ((scope & Scopes.SENDER != 0) && (scope & Scopes.POLICY == 0));
     }
 }

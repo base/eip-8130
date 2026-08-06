@@ -2,6 +2,7 @@
 pragma solidity ^0.8.30;
 
 import {Keystore} from "../../../src/Keystore.sol";
+import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice Fully-fuzzed unit tests for the policy accessors on `Keystore`:
@@ -372,13 +373,13 @@ contract PolicyAccessorsTest is KeystoreTest {
         (address account,) = _createK1Account(rootPk);
         actorId = _boundExplicitActorId(account, rootPk, actorId);
 
-        _authorizePolicyActor(account, rootPk, actorId, keystore.SCOPE_POLICY(), address(0), bytes32(0));
+        _authorizePolicyActor(account, rootPk, actorId, Scopes.POLICY, address(0), bytes32(0));
 
         // Slots are zero, yet the actor is gated by the SCOPE_POLICY bit.
         assertEq(keystore.getPolicyManager(account, actorId), address(0));
         assertEq(keystore.getPolicyCommitment(account, actorId), bytes32(0));
         Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, actorId);
-        assertTrue(cfg.scope & keystore.SCOPE_POLICY() != 0);
+        assertTrue(cfg.scope & Scopes.POLICY != 0);
     }
 
     /// @notice This contract does not reject scope combinations: an actor may carry SCOPE_POLICY alongside any
@@ -393,13 +394,12 @@ contract PolicyAccessorsTest is KeystoreTest {
         address manager = _boundNonZeroAddress(managerSeed);
         bytes32 commitment = _boundNonZeroWord(commitmentSeed);
 
-        uint16[4] memory otherScopes =
-            [uint8(0), keystore.SCOPE_SELF_PAYER(), keystore.SCOPE_SPONSOR_PAYER(), keystore.SCOPE_NONCE()];
+        uint16[4] memory otherScopes = [uint16(0), Scopes.SELF_PAYER, Scopes.SPONSOR_PAYER, Scopes.NONCE];
         for (uint256 i; i < otherScopes.length; i++) {
             // Policy actors are keyed by actorId only; no signing key is needed, so a distinct address-shaped id
             // avoids the vm.addr curve-order bound on an unbounded rootPk + i.
             bytes32 actorId = bytes32(bytes20(address(uint160(1000 + i))));
-            uint16 scope = otherScopes[i] | keystore.SCOPE_POLICY();
+            uint16 scope = otherScopes[i] | Scopes.POLICY;
             _authorizePolicyActor(account, rootPk, actorId, scope, manager, commitment);
 
             assertEq(keystore.getPolicyManager(account, actorId), manager);
@@ -511,7 +511,7 @@ contract PolicyAccessorsTest is KeystoreTest {
         );
 
         (, uint16 outScope) = keystore.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
-        assertTrue(outScope & keystore.SCOPE_POLICY() != 0);
+        assertTrue(outScope & Scopes.POLICY != 0);
         assertEq(keystore.getPolicyManager(account, sessionActorId), manager);
     }
 
@@ -569,9 +569,9 @@ contract PolicyAccessorsTest is KeystoreTest {
     // Fuzz-input bounding helpers
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @dev A policy-bearing actor's scope: always carries SCOPE_POLICY, with arbitrary other bits mixed in.
-    function _boundGatedScope(uint8 seed) internal view returns (uint16) {
-        return uint16(seed) | keystore.SCOPE_POLICY();
+    /// @dev A policy-bearing actor's scope: always carries Scopes.POLICY, with arbitrary other bits mixed in.
+    function _boundGatedScope(uint8 seed) internal pure returns (uint16) {
+        return uint16(seed) | Scopes.POLICY;
     }
 
     /// @dev A non-zero policy manager address (so a written slot is distinguishable from an unwritten one).

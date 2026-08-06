@@ -20,7 +20,7 @@ import {PolicyManager} from "./PolicyManager.sol";
 ///      Mutable execution state (e.g. spend counters) is the exception that belongs in storage, keyed by
 ///      commitment.
 ///
-///      This is the example/reference shape for an EIP-8130 actor policy (`scope & SCOPE_POLICY != 0`): the
+///      This is the example/reference shape for an EIP-8130 actor policy (`scope & Scopes.POLICY != 0`): the
 ///      manager is the single call target a restricted actor may reach, and policies express *what* that actor
 ///      may do. All hooks are callable only by the configured {PolicyManager}.
 abstract contract Policy {

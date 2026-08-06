@@ -2,6 +2,7 @@
 pragma solidity ^0.8.30;
 
 import {Keystore} from "../../../src/Keystore.sol";
+import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice Branch-complete, fuzz-by-default suite for the account lock surface: applySignedLockChanges (op = lock /
@@ -70,7 +71,7 @@ contract AccountLockTest is KeystoreTest {
         address scopedSigner = vm.addr(scopedPk);
         vm.assume(scopedSigner != account);
 
-        _authorizeK1ActorWithScope(account, ownerPk, scopedSigner, keystore.SCOPE_SENDER());
+        _authorizeK1ActorWithScope(account, ownerPk, scopedSigner, Scopes.SENDER);
 
         bytes memory auth = _lockAuth(scopedPk, account, delay);
         vm.expectRevert(Keystore.UnauthorizedLockChange.selector);
