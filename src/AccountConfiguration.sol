@@ -656,7 +656,7 @@ contract AccountConfiguration {
     ///      signed-message typehashes. `account` closes cross-account replay; the current chainId closes cross-chain
     ///      replay.
     bytes32 public constant SIGNED_MESSAGE_TYPEHASH =
-        keccak256("SignedMessage(address account,uint256 chainId,bytes32 hash)");
+        keccak256("EIP8130SignedMessage(address account,uint256 chainId,bytes32 hash)");
 
     /// @notice Account-scoped digest to sign for `hash` to be accepted by {verifySignature}: `hash` bound to
     ///         `account` and the current chainId under {SIGNED_MESSAGE_TYPEHASH}.
