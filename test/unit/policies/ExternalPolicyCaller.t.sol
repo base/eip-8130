@@ -336,8 +336,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         bytes32 commitment,
         uint48 expiry
     ) internal {
-        // A zero expiry (the old "no expiry") maps to UNBOUNDED, granted on a sequenced local batch (unbounded
-        // grants are sequenced-only), signed by the root owner.
+        // A zero expiry (the old "no expiry") maps to UNBOUNDED, signed by the root owner.
         uint48 grant = expiry == 0 ? UNBOUNDED : expiry;
         _applyLocal(
             ROOT_PK,

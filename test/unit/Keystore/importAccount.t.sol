@@ -223,7 +223,7 @@ contract ImportAccountTest is KeystoreTest {
 
         // Multichain channel advanced; local channel untouched.
         assertEq(keystore.getChangeSequences(eoa).multichain, 1);
-        assertEq(keystore.getChangeSequences(eoa).local, 0);
+        assertEq(keystore.getChangeSequences(eoa).localSequence, 0);
 
         Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(device);
         bytes32 importDigest = _computeImportDigest(eoa, actors);
@@ -394,7 +394,7 @@ contract ImportAccountTest is KeystoreTest {
 
         keystore.importAccount(address(wallet), block.chainid, actors, sig);
 
-        assertEq(keystore.getChangeSequences(address(wallet)).local, 1);
+        assertEq(keystore.getChangeSequences(address(wallet)).localSequence, 1);
         assertTrue(_isActor(address(wallet), bytes32(bytes20(vm.addr(ownerPk)))));
     }
 
@@ -408,7 +408,7 @@ contract ImportAccountTest is KeystoreTest {
 
         keystore.importAccount(address(wallet), 0, actors, sig);
 
-        assertEq(keystore.getChangeSequences(address(wallet)).local, 1);
+        assertEq(keystore.getChangeSequences(address(wallet)).localSequence, 1);
         assertEq(keystore.getChangeSequences(address(wallet)).multichain, 0);
         assertTrue(_isActor(address(wallet), bytes32(bytes20(vm.addr(ownerPk)))));
     }
@@ -459,7 +459,7 @@ contract ImportAccountTest is KeystoreTest {
 
         keystore.importAccount(address(wallet), block.chainid, actors, sig);
 
-        assertEq(keystore.getChangeSequences(address(wallet)).local, 1);
+        assertEq(keystore.getChangeSequences(address(wallet)).localSequence, 1);
         for (uint256 i; i < count; i++) {
             bytes32 actorId = actors[i].actorId;
             assertTrue(_isActor(address(wallet), actorId));
@@ -490,7 +490,7 @@ contract ImportAccountTest is KeystoreTest {
 
         keystore.importAccount(eoa, uint64(block.chainid), actors, sig);
 
-        assertEq(keystore.getChangeSequences(eoa).local, 1);
+        assertEq(keystore.getChangeSequences(eoa).localSequence, 1);
         assertTrue(_isActor(eoa, bytes32(bytes20(device))));
         assertFalse(_isActor(eoa, bytes32(bytes20(eoa))));
     }
@@ -514,7 +514,7 @@ contract ImportAccountTest is KeystoreTest {
             eoa, uint64(block.chainid), actors, _buildK1Auth(eoaPk, keystore.replaySafeHash(eoa, digest))
         );
 
-        assertEq(keystore.getChangeSequences(eoa).local, 1);
+        assertEq(keystore.getChangeSequences(eoa).localSequence, 1);
         assertTrue(_isActor(eoa, bytes32(bytes20(device))));
         assertFalse(_isActor(eoa, bytes32(bytes20(eoa))));
 
@@ -543,7 +543,7 @@ contract ImportAccountTest is KeystoreTest {
             eoa, uint64(block.chainid), actors, _buildK1Auth(eoaPk, keystore.replaySafeHash(eoa, digest))
         );
 
-        assertEq(keystore.getChangeSequences(eoa).local, 1);
+        assertEq(keystore.getChangeSequences(eoa).localSequence, 1);
         // The self-actorId is a live explicit owner.
         assertTrue(_isActor(eoa, bytes32(bytes20(eoa))));
 

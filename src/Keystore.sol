@@ -17,8 +17,9 @@ contract Keystore {
 
     /// @notice Per-account replay counters for signed changes.
     struct ChangeSequences {
-        uint64 multichain; // chain_id 0
-        uint64 local; // chain_id == block.chainid; starts at 1 once initialized (created/imported), 0 = uninitialized
+        uint64 multichain; // chain_id 0 (multichain channel)
+        uint32 localEpoch; // local channel epoch; bumped by BumpLocalEpoch, invalidates unlanded local signatures
+        uint32 localSequence; // local channel counter; starts at 1 once initialized (created/imported), 0 = uninitialized
     }
 
     /// @notice An actor's authorization: authenticator, expiry, and scope. Field order matches the normative
@@ -108,7 +109,7 @@ contract Keystore {
     ///      defaultEOAScope, then 1 reserved byte that MUST stay zero.
     ///      The local replay counter is stored as two adjacent uint32 fields — `localSequence` (low) then `localEpoch`
     ///      (high) — which occupy the same 8 bytes as, and read identically to, the single `localEpoch(32)||
-    ///      localSequence(32)` word committed in a signed batch's `sequence` (see {getLocalEpochAndSequence}). Storing
+    ///      localSequence(32)` word committed in a signed batch's `sequence` (see {getChangeSequences}). Storing
     ///      them split keeps the layout size-neutral (still one slot) while removing the pack/unpack math from the hot
     ///      path. `localSequence` non-zero doubles as the account initialized flag — bootstrap writes it to 1 (epoch
     ///      0), and it is never zeroed for a live account except by a {BumpLocalEpoch}, which simultaneously advances
@@ -326,17 +327,6 @@ contract Keystore {
 
     /// @notice An AuthorizeActor's granted expiry is not strictly in the future (self-expired on arrival).
     error ExpiredChange();
-
-    /// @notice An unsequenced AuthorizeActor tried to change an occupied slot's scope. Scope changes are sequenced-only.
-    error ScopeChangeRequiresSequencing();
-
-    /// @notice An unsequenced AuthorizeActor's expiry was not strictly greater than the occupied slot's expiry.
-    ///         Unsequenced grants may only extend expiry monotonically upward.
-    error NonMonotoneExpiry();
-
-    /// @notice An unsequenced AuthorizeActor requested the unbounded (type(uint48).max) expiry. Unbounded grants are
-    ///         sequenced-only.
-    error UnboundedGrantRequiresSequencing();
 
     /// @notice A BumpLocalEpoch was submitted on the Multichain channel. The local epoch is a local-mode concept.
     error EpochOpRequiresLocalChannel();
@@ -565,30 +555,27 @@ contract Keystore {
         AccountState storage a = _accountState[account];
         bool isLocal = s.channel == AccountChangeChannel.Local;
 
-        // (1)-(3) Epoch / sequence gate. A batch is "sequenced" when it consumes a counter; unsequenced (JIT) batches
-        // exist only on the local channel (low half == UNSEQUENCED) and do not consume one.
-        bool sequenced;
+        // Epoch / sequence gate. An unsequenced (JIT) batch exists only on the local channel (low half ==
+        // UNSEQUENCED) and does not consume a counter; every other batch consumes its channel's counter.
         if (isLocal) {
             uint32 epoch = uint32(s.sequence >> 32);
             uint32 seq = uint32(s.sequence);
             if (epoch != a.localEpoch) revert StaleEpoch();
             if (seq != UNSEQUENCED) {
-                sequenced = true;
                 if (seq != a.localSequence) revert BadSequence();
                 if (seq >= UNSEQUENCED - 1) revert SequenceSaturated();
                 // Advance the local sequence before apply (the epoch is untouched by a sequenced batch).
                 a.localSequence = seq + 1;
             }
         } else {
-            // Multichain: a plain monotonic counter, always sequenced, never epoch-bearing or UNSEQUENCED.
-            sequenced = true;
+            // Multichain: a plain monotonic counter, never epoch-bearing or UNSEQUENCED.
             uint64 seq = s.sequence;
             if (seq != a.multichainSequence) revert BadSequence();
             if (seq == type(uint64).max) revert SequenceSaturated();
             a.multichainSequence = seq + 1;
         }
 
-        // (4) Authenticate over the relocatable digest. Authorization is flat: every signed account change is
+        // Authenticate over the relocatable digest. Authorization is flat: every signed account change is
         // admin-only, so a single scope check up front replaces any per-op authorization.
         bytes32 digest = _changesDigest(account, s.channel, s.sequence, s.changes);
         (, uint16 scope) = authenticateActor(account, digest, s.signature);
@@ -597,7 +584,7 @@ contract Keystore {
         // Lock policy is evaluated against the account's lock state at entry (lazily clearing an elapsed unlock).
         bool locked = _checkAndClearLock(account);
 
-        // (5) Iterate. Track only whether an environment op has been seen, for the ordering fence.
+        // Iterate. Track only whether an environment op has been seen, for the ordering fence.
         bool sawEnvOp;
         uint256 n = s.changes.length;
         for (uint256 i; i < n; i++) {
@@ -614,7 +601,7 @@ contract Keystore {
             if (locked && !env) revert AccountIsLocked();
 
             if (t == ChangeType.AuthorizeActor) {
-                _applyAuthorize(account, sequenced, s.changes[i].payload);
+                _applyAuthorize(account, s.changes[i].payload);
             } else if (t == ChangeType.RevokeActor) {
                 _applyRevoke(account, s.changes[i].payload);
             } else if (t == ChangeType.BumpLocalEpoch) {
@@ -636,54 +623,35 @@ contract Keystore {
     // ----------------------------------------------------------------------------------------------------------------
 
     /// @dev AuthorizeActor. `payload = abi.encode(bytes32 actorId, ActorConfig cfg, bytes policyData)`; `cfg.expiry`
-    ///      is the granted expiry and the signature self-expires at it.
-    ///
-    ///      Note on durability of reductions: a sequenced upsert may freely shorten a slot's expiry or narrow its
-    ///      scope, and the contract does NOT force a batching epoch bump. If an unsequenced (replayable) grant with
-    ///      the older, longer expiry / broader scope is still outstanding, it can be replayed to undo the reduction
-    ///      until the slot lapses or the caller separately bumps the epoch. Durable reduction is a wallet
-    ///      responsibility: batch the reducing op with a {BumpLocalEpoch} (which retires all unlanded local grants).
-    function _applyAuthorize(address account, bool sequenced, bytes calldata payload) private {
+    ///      is the granted expiry and the signature self-expires at it. A plain upsert on both channels and both
+    ///      sequencing modes — the only gate is that the grant be strictly in the future (self-expiring). An
+    ///      unsequenced grant is replayable (it consumes no counter) and last-write-wins on its slot until the grant
+    ///      lapses or the epoch is bumped; durable reduction (revoke, shorter expiry, narrower scope) is therefore a
+    ///      wallet responsibility — batch the reducing op with a {BumpLocalEpoch} to retire outstanding grants.
+    function _applyAuthorize(address account, bytes calldata payload) private {
         (bytes32 actorId, ActorConfig memory cfg, bytes memory policyData) =
             abi.decode(payload, (bytes32, ActorConfig, bytes));
 
-        // The grant must be strictly in the future (a zero/no-expiry grant is caught here: 0 <= now). Unsequenced
-        // grants additionally cannot be unbounded — that is sequenced-only.
-        uint48 chExpiry = cfg.expiry;
-        if (chExpiry <= block.timestamp) revert ExpiredChange();
-        if (!sequenced && chExpiry == type(uint48).max) revert UnboundedGrantRequiresSequencing();
+        // The grant must be strictly in the future (a zero/past expiry is caught here: 0 <= now).
+        if (cfg.expiry <= block.timestamp) revert ExpiredChange();
 
-        (bool occupied, uint16 oldScope, uint48 oldExpiry) = _rawSlot(account, actorId);
-
-        if (!occupied) {
-            // Empty slot: plain install. Both channels, both sequencing modes.
-            _authorizeActor(account, actorId, cfg, policyData);
-            return;
-        }
-
-        // Occupied slot. Authenticator equality is structural: actorId derives from the authenticator, so a different
-        // authenticator is a different slot (the empty-slot case above); no explicit check is needed here.
-        if (!sequenced) {
-            // Unsequenced upsert is extend-by-upsert only: scope frozen, expiry strictly monotone up. This is the
-            // Replay defense for the unsequenced channel — re-applying a landed grant (same/lower expiry) must fail.
-            // Treat a stored no-expiry (0) as unbounded so an infinite grant cannot be silently re-applied.
-            uint48 effectiveOld = oldExpiry == 0 ? type(uint48).max : oldExpiry;
-            if (cfg.scope != oldScope) revert ScopeChangeRequiresSequencing();
-            if (chExpiry <= effectiveOld) revert NonMonotoneExpiry();
-        }
-
-        // Sequenced upsert: any expiry, any scope (including a reduction). See the durability note above — the
-        // contract does not force a batching bump; that is left to the caller.
         _authorizeActor(account, actorId, cfg, policyData);
     }
 
-    /// @dev RevokeActor. `payload = abi.encode(bytes32 actorId)`. Clears the slot unconditionally. Note this alone is
-    ///      not durable against an outstanding replayable unsequenced grant for the same actorId (which would
-    ///      re-install into the emptied slot); to durably revoke, the caller batches a {BumpLocalEpoch}. This is a
-    ///      wallet responsibility, not contract-enforced.
+    /// @dev RevokeActor. `payload = abi.encode(bytes32 actorId)`. Clears the actor's config and policy slots (and
+    ///      disables the inline k1 self for the self-actorId), emitting ActorRevoked; reverts UnknownActor if the
+    ///      actor is not currently live. Not durable against an outstanding replayable unsequenced grant for the same
+    ///      actorId (which would re-install into the emptied slot); batch a {BumpLocalEpoch} for durable teardown.
     function _applyRevoke(address account, bytes calldata payload) private {
         bytes32 actorId = abi.decode(payload, (bytes32));
-        _revokeActor(account, actorId);
+        if (!_isAuthorized(account, actorId)) revert UnknownActor();
+        delete _actorConfig[actorId][account];
+        delete _policyCommitment[actorId][account];
+        delete _policyManager[actorId][account];
+        if (actorId == bytes32(bytes20(account))) {
+            _disableInlineSelf(_accountState[account]);
+        }
+        emit ActorRevoked(account, actorId);
     }
 
     /// @dev BumpLocalEpoch. Empty payload. Strict increment of the local epoch, resetting the local sequence to 0
@@ -742,17 +710,6 @@ contract Keystore {
             return (true, st.defaultEOAScope, st.defaultEOAExpiry);
         }
         return (false, 0, 0);
-    }
-
-    /// @dev Clears an actor's config and policy slots, disabling the inline k1 self for the self-actorId. Used by
-    ///      {_revokeActor} (which additionally requires the actor be present).
-    function _clearActor(address account, bytes32 actorId) private {
-        delete _actorConfig[actorId][account];
-        delete _policyCommitment[actorId][account];
-        delete _policyManager[actorId][account];
-        if (actorId == bytes32(bytes20(account))) {
-            _disableInlineSelf(_accountState[account]);
-        }
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -921,7 +878,7 @@ contract Keystore {
     ///      target validates presented parameters against. The policy manager/commitment are keyed by actorId, so
     ///      the inline k1 self and a non-k1 self share that keyspace; mutual exclusion guarantees at most one is
     ///      live, so the active gate is read by actorId. Both slots are non-zero only when the actor's scope carries
-    ///      Scopes.POLICY (see _authorizeActor / _revokeActor); either MAY still be zero for an actor deliberately
+    ///      Scopes.POLICY (see _authorizeActor / _applyRevoke); either MAY still be zero for an actor deliberately
     ///      gated to a zero manager or a zero (no-params) commitment. On-chain consumers should prefer the
     ///      single-SLOAD `getPolicyCommitment` / `getPolicyManager` accessors directly.
     ///
@@ -938,7 +895,7 @@ contract Keystore {
     ///
     /// @dev Single SLOAD. Intended for a policy manager's per-tx validation read on the protocol-dispatched
     ///      8130 tx path. This slot is non-zero only when the actor's scope carries Scopes.POLICY (see _authorizeActor /
-    ///      _revokeActor), but MAY be zero for a policy-gated actor with a zero (no-params) commitment; gating is
+    ///      _applyRevoke), but MAY be zero for a policy-gated actor with a zero (no-params) commitment; gating is
     ///      therefore determined by the Scopes.POLICY bit, not by this slot being non-zero.
     ///
     /// @param account The account to read.
@@ -961,30 +918,17 @@ contract Keystore {
         return _policyManager[actorId][account];
     }
 
-    /// @notice Returns the account's multichain and local change sequences (replay counters).
-    ///
-    /// @dev The `local` field is the raw 64-bit word: localEpoch(32, high) || localSequence(32, low). Use
-    ///      {getLocalEpochAndSequence} to read the two halves split out.
+    /// @notice Returns the account's replay counters: the multichain counter and the local channel's epoch and
+    ///         sequence.
     ///
     /// @param account The account to read.
     ///
-    /// @return The account's ChangeSequences (multichain counter and the raw local epoch||sequence word).
+    /// @return The account's ChangeSequences (multichain counter, local epoch, local sequence).
     function getChangeSequences(address account) external view returns (ChangeSequences memory) {
         AccountState storage state = _accountState[account];
-        // Recompose the split storage fields into the single localEpoch(32, high)||localSequence(32, low) word.
-        uint64 local = (uint64(state.localEpoch) << 32) | uint64(state.localSequence);
-        return ChangeSequences({multichain: state.multichainSequence, local: local});
-    }
-
-    /// @notice Returns the account's local epoch and local sequence, split from the packed 64-bit word.
-    ///
-    /// @param account The account to read.
-    ///
-    /// @return epoch The account's current local epoch (high 32 bits of the local word).
-    /// @return sequence The account's current local sequence (low 32 bits of the local word).
-    function getLocalEpochAndSequence(address account) external view returns (uint32 epoch, uint32 sequence) {
-        AccountState storage state = _accountState[account];
-        return (state.localEpoch, state.localSequence);
+        return ChangeSequences({
+            multichain: state.multichainSequence, localEpoch: state.localEpoch, localSequence: state.localSequence
+        });
     }
 
     /// @notice Returns whether the account is currently locked (configuration frozen).
@@ -1199,7 +1143,7 @@ contract Keystore {
 
     /// @dev Returns whether `actorId` has an authorization entry on `account` (a stored actor config, or the inline
     ///      k1 self is enabled), IGNORING expiry: an expired-but-not-revoked actor still returns true — intentional,
-    ///      since _revokeActor relies on it to revoke expired actors and reclaim their slots. Callers that want
+    ///      since _applyRevoke relies on it to revoke expired actors and reclaim their slots. Callers that want
     ///      liveness (expiry-aware) read {getActorConfig} (authenticator != 0) instead.
     function _isAuthorized(address account, bytes32 actorId) private view returns (bool) {
         // A populated _actorConfig entry is always live: any non-self actor, or a non-k1 self authenticator.
@@ -1207,17 +1151,6 @@ contract Keystore {
         // No _actorConfig entry: the self-actorId's k1 key lives inline in AccountState, live unless the flag is set.
         if (actorId == bytes32(bytes20(account))) return !_isDefaultEoaRevoked(account);
         return false;
-    }
-
-    /// @dev Revokes `actorId` from `account`, clearing its config and policy slots and emitting ActorRevoked. For the
-    ///      self-actorId it also disables the inline k1 self (sets FLAG_REVOKE_DEFAULT_EOA and zeroes the inline
-    ///      fields). Reverts with UnknownActor when the actor is not currently live.
-    function _revokeActor(address account, bytes32 actorId) internal nonZeroAccount(account) {
-        if (!_isAuthorized(account, actorId)) revert UnknownActor();
-        // Clears the config and policy slots, and disables the inline k1 self for the self-actorId (covers both
-        // homes; never auto-resurrected).
-        _clearActor(account, actorId);
-        emit ActorRevoked(account, actorId);
     }
 
     /// @dev Derives the CREATE2 inputs once for both {createAccount} and {computeAddress}: the effective salt, the

@@ -110,18 +110,24 @@ contract KeystoreTest is Test {
 
     /// @dev The account's current local sequence WORD (localEpoch(32) || localSequence(32)) for a sequenced batch.
     function _localSeqWord(address account) internal view returns (uint64) {
-        return keystore.getChangeSequences(account).local;
+        Keystore.ChangeSequences memory cs = keystore.getChangeSequences(account);
+        return (uint64(cs.localEpoch) << 32) | uint64(cs.localSequence);
     }
 
     /// @dev An unsequenced (JIT) local sequence word at the account's current epoch: epoch || UNSEQUENCED.
     function _unseqWord(address account) internal view returns (uint64) {
-        (uint32 epoch,) = keystore.getLocalEpochAndSequence(account);
-        return (uint64(epoch) << 32) | uint64(keystore.UNSEQUENCED());
+        return (uint64(keystore.getChangeSequences(account).localEpoch) << 32) | uint64(keystore.UNSEQUENCED());
     }
 
     /// @dev The account's current multichain sequence.
     function _multichainSeq(address account) internal view returns (uint64) {
         return keystore.getChangeSequences(account).multichain;
+    }
+
+    /// @dev The account's current local epoch and local sequence (split), for terse test assertions.
+    function _localEpochSeq(address account) internal view returns (uint32 epoch, uint32 sequence) {
+        Keystore.ChangeSequences memory cs = keystore.getChangeSequences(account);
+        return (cs.localEpoch, cs.localSequence);
     }
 
     // ── Change builders ──
@@ -326,13 +332,13 @@ contract KeystoreTest is Test {
 
     /// @dev Force the account's local epoch (high 32 bits), keeping the current low sequence.
     function _forceLocalEpoch(address account, uint32 epoch) internal {
-        (, uint32 seq) = keystore.getLocalEpochAndSequence(account);
+        uint32 seq = keystore.getChangeSequences(account).localSequence;
         _forceLocalWord(account, (uint64(epoch) << 32) | uint64(seq));
     }
 
     /// @dev Force the account's local sequence (low 32 bits), keeping the current epoch.
     function _forceLocalSequence(address account, uint32 seq) internal {
-        (uint32 epoch,) = keystore.getLocalEpochAndSequence(account);
+        uint32 epoch = keystore.getChangeSequences(account).localEpoch;
         _forceLocalWord(account, (uint64(epoch) << 32) | uint64(seq));
     }
 

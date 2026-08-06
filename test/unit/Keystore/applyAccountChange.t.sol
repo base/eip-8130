@@ -168,7 +168,7 @@ contract AccountEnvironmentTest is KeystoreTest {
 
         // Bump under lock: allowed.
         _applyLocal(pk, account, _one(_bumpChange()));
-        (uint32 epoch,) = keystore.getLocalEpochAndSequence(account);
+        (uint32 epoch,) = _localEpochSeq(account);
         assertEq(epoch, 1);
 
         // Authorize under lock: rejected.
@@ -258,10 +258,10 @@ contract AccountEnvironmentTest is KeystoreTest {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
 
-        (uint32 epoch, uint32 seq) = keystore.getLocalEpochAndSequence(account);
+        (uint32 epoch, uint32 seq) = _localEpochSeq(account);
         assertEq(epoch, 0);
         assertEq(seq, 1);
-        assertEq(keystore.getChangeSequences(account).local, 1);
+        assertEq(keystore.getChangeSequences(account).localSequence, 1);
         assertEq(keystore.getChangeSequences(account).multichain, 0);
     }
 

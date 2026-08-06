@@ -49,21 +49,25 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         assertEq(_localSeqWord(account), seqBefore);
     }
 
-    /// @notice Replaying an unsequenced grant after it landed reverts NonMonotoneExpiry (same expiry, occupied slot).
-    function test_authorizeUnsequenced_revert_replayAfterLanding(uint256 pk) public {
+    /// @notice Replaying an unsequenced grant that is still in the future is idempotent — it re-lands the same config
+    ///         (no monotonicity gate; a grant is valid while its own expiry has not passed).
+    function test_authorizeUnsequenced_success_replayIdempotent(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
+        uint48 expiry = _future(1 days);
         Keystore.SignedAccountChanges memory s = _signBatch(
             pk,
             account,
             Keystore.AccountChangeChannel.Local,
             _unseqWord(account),
-            _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
+            _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, expiry, ""))
         );
         keystore.applySignedAccountChanges(account, s);
-
-        vm.expectRevert(Keystore.NonMonotoneExpiry.selector);
         keystore.applySignedAccountChanges(account, s);
+
+        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, ACTOR_A);
+        assertEq(cfg.scope, SENDER);
+        assertEq(cfg.expiry, expiry);
     }
 
     /// @notice Replaying an unsequenced grant after its granted expiry has passed reverts ExpiredChange (the fixed
@@ -117,53 +121,47 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         keystore.applySignedAccountChanges(account, s);
     }
 
-    /// @notice An unsequenced grant may not request the unbounded (max) expiry — that is sequenced-only.
-    function test_authorizeUnsequenced_revert_unboundedExpiry(uint256 pk) public {
+    /// @notice An unsequenced grant may request the unbounded (max) expiry.
+    function test_authorizeUnsequenced_success_unboundedExpiry(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
 
-        Keystore.SignedAccountChanges memory s =
-            _unseqBatch(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, UNBOUNDED, "")));
-        vm.expectRevert(Keystore.UnboundedGrantRequiresSequencing.selector);
-        keystore.applySignedAccountChanges(account, s);
+        _applyUnsequenced(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, UNBOUNDED, "")));
+        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, UNBOUNDED);
     }
 
-    /// @notice An unsequenced upsert may not change an occupied slot's scope.
-    function test_authorizeUnsequenced_revert_scopeChangeOnOccupied(uint256 pk) public {
+    /// @notice An unsequenced upsert may change an occupied slot's scope (last-write-wins, no sequencing gate).
+    function test_authorizeUnsequenced_success_scopeChangeOnOccupied(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
         _applyUnsequenced(
             pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
         );
 
-        Keystore.SignedAccountChanges memory s = _unseqBatch(
+        _applyUnsequenced(
             pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), NONCE, _future(2 days), ""))
         );
-        vm.expectRevert(Keystore.ScopeChangeRequiresSequencing.selector);
-        keystore.applySignedAccountChanges(account, s);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).scope, NONCE);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, _future(2 days));
     }
 
-    /// @notice Extend-by-upsert is order-independent: applying two grants (T1 < T2) in either order settles at the
-    ///         max expiry (the lower one either lands-then-is-overwritten or reverts NonMonotoneExpiry).
-    function test_authorizeUnsequenced_extendByUpsert_bothOrdersSettleAtMax(uint256 pk) public {
+    /// @notice Unsequenced upserts are last-write-wins: the final applied grant's expiry stands, regardless of order.
+    function test_authorizeUnsequenced_lastWriteWins(uint256 pk) public {
         pk = _boundK1Pk(pk);
         uint48 t1 = _future(1 days);
         uint48 t2 = _future(2 days);
 
-        // Order (T1, T2): both land, expiry ends at T2.
+        // Order (T1, T2): ends at T2.
         (address accA,) = _createK1Account(pk);
         _applyUnsequenced(pk, accA, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, t1, "")));
         _applyUnsequenced(pk, accA, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, t2, "")));
         assertEq(keystore.getActorConfig(accA, ACTOR_A).expiry, t2);
 
-        // Order (T2, T1): T2 lands, T1 reverts NonMonotoneExpiry, expiry still at T2.
+        // Order (T2, T1): ends at T1 (last write wins; a shorter expiry is allowed).
         (address accB,) = _createK1AccountWithSalt(pk, bytes32(uint256(1)));
         _applyUnsequenced(pk, accB, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, t2, "")));
-        Keystore.SignedAccountChanges memory low =
-            _unseqBatch(pk, accB, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, t1, "")));
-        vm.expectRevert(Keystore.NonMonotoneExpiry.selector);
-        keystore.applySignedAccountChanges(accB, low);
-        assertEq(keystore.getActorConfig(accB, ACTOR_A).expiry, t2);
+        _applyUnsequenced(pk, accB, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, t1, "")));
+        assertEq(keystore.getActorConfig(accB, ACTOR_A).expiry, t1);
     }
 
     /// @notice A different authenticator under the same actorId is not possible (id derives from the authenticator);
@@ -191,11 +189,11 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
     function test_authorizeSequenced_success_consumesSequence(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
-        (uint32 epoch0, uint32 seq0) = keystore.getLocalEpochAndSequence(account);
+        (uint32 epoch0, uint32 seq0) = _localEpochSeq(account);
 
         _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
 
-        (uint32 epoch1, uint32 seq1) = keystore.getLocalEpochAndSequence(account);
+        (uint32 epoch1, uint32 seq1) = _localEpochSeq(account);
         assertEq(epoch1, epoch0);
         assertEq(seq1, seq0 + 1);
     }
@@ -273,7 +271,7 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         _applyLocal(pk, account, ch);
 
         assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, lower);
-        (uint32 epoch,) = keystore.getLocalEpochAndSequence(account);
+        (uint32 epoch,) = _localEpochSeq(account);
         assertEq(epoch, 1);
     }
 
@@ -365,11 +363,11 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         (address account,) = _createK1Account(pk);
         // Consume a sequence first so we can observe the reset.
         _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
-        (uint32 epoch0,) = keystore.getLocalEpochAndSequence(account);
+        (uint32 epoch0,) = _localEpochSeq(account);
 
         _applyUnsequenced(pk, account, _one(_bumpChange()));
 
-        (uint32 epoch1, uint32 seq1) = keystore.getLocalEpochAndSequence(account);
+        (uint32 epoch1, uint32 seq1) = _localEpochSeq(account);
         assertEq(epoch1, epoch0 + 1);
         assertEq(seq1, 0);
     }
@@ -385,7 +383,7 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         _applyUnsequenced(pk, account, ch);
 
         assertTrue(_isActor(account, ACTOR_A));
-        (uint32 epoch, uint32 seq) = keystore.getLocalEpochAndSequence(account);
+        (uint32 epoch, uint32 seq) = _localEpochSeq(account);
         assertEq(epoch, 1);
         assertEq(seq, 0);
     }
@@ -492,7 +490,7 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
 
         assertFalse(_isActor(account, ACTOR_A));
         assertTrue(keystore.isLocked(account));
-        (uint32 epoch,) = keystore.getLocalEpochAndSequence(account);
+        (uint32 epoch,) = _localEpochSeq(account);
         assertEq(epoch, 1);
     }
 
@@ -511,7 +509,7 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
 
         (, bool init,,) = keystore.getLockStatus(account);
         assertTrue(init);
-        (uint32 epoch,) = keystore.getLocalEpochAndSequence(account);
+        (uint32 epoch,) = _localEpochSeq(account);
         assertEq(epoch, 1);
     }
 

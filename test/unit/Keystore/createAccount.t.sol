@@ -183,7 +183,7 @@ contract CreateAccountTest is KeystoreTest {
         keystore.createAccount(salt, bytecode, actors);
 
         assertEq(predicted.code.length, 0);
-        assertEq(keystore.getChangeSequences(predicted).local, 0);
+        assertEq(keystore.getChangeSequences(predicted).localSequence, 0);
         assertEq(keystore.getChangeSequences(predicted).multichain, 0);
         assertFalse(_isActor(predicted, actorId));
 
@@ -272,7 +272,7 @@ contract CreateAccountTest is KeystoreTest {
         assertEq(cfg.scope, 0x00);
         assertEq(cfg.expiry, 0);
 
-        assertEq(keystore.getChangeSequences(account).local, 1);
+        assertEq(keystore.getChangeSequences(account).localSequence, 1);
         assertEq(keystore.getChangeSequences(account).multichain, 0);
 
         (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 unlockDelay) = keystore.getLockStatus(account);
