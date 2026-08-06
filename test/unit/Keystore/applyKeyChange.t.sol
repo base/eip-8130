@@ -109,7 +109,7 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         keystore.applySignedAccountChanges(account, s);
     }
 
-    /// @notice A grant whose expiry is not strictly in the future reverts ExpiredChange (covers expiry == now and 0).
+    /// @notice A non-zero grant expiry that is not strictly in the future reverts ExpiredChange (expiry == now).
     function test_authorizeUnsequenced_revert_pastExpiry(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
@@ -128,6 +128,20 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
 
         _applyUnsequenced(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, UNBOUNDED, "")));
         assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, UNBOUNDED);
+    }
+
+    /// @notice A grant may use expiry 0, the "no expiry" sentinel: it lands and never lapses.
+    function test_authorizeUnsequenced_success_zeroExpiryUnlimited(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+
+        _applyUnsequenced(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, 0, "")));
+        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, 0);
+
+        // Never lapses: still authorized far in the future.
+        vm.warp(block.timestamp + 3650 days);
+        assertTrue(_isActor(account, ACTOR_A));
+        assertEq(keystore.getActorConfig(account, ACTOR_A).authenticator, address(k1Authenticator));
     }
 
     /// @notice An unsequenced upsert may change an occupied slot's scope (last-write-wins, no sequencing gate).

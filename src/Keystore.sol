@@ -325,7 +325,8 @@ contract Keystore {
     ///         the normative op ordering (authority ops first, environment ops last).
     error AuthorityOpAfterEnvOp();
 
-    /// @notice An AuthorizeActor's granted expiry is not strictly in the future (self-expired on arrival).
+    /// @notice An AuthorizeActor's granted expiry is non-zero and not strictly in the future (self-expired on
+    ///         arrival). A zero expiry is the "no expiry" sentinel and is accepted.
     error ExpiredChange();
 
     /// @notice A BumpLocalEpoch was submitted on the Multichain channel. The local epoch is a local-mode concept.
@@ -528,8 +529,8 @@ contract Keystore {
     ///         revoke, bump-local-epoch, lock, unlock) authenticated by `s.signature`.
     ///
     /// @dev The governing axiom is Replay: a signed local change is valid only while it could still be validly
-    ///      applied — the committed local epoch must match, grants self-expire (`cfg.expiry > now`), and (on the
-    ///      unsequenced channel) the state they commit to must still hold (extend-by-upsert monotonicity).
+    ///      applied — the committed local epoch must match and grants self-expire (`cfg.expiry > now`, unless
+    ///      `cfg.expiry == 0` which is the never-expiring sentinel).
     ///
     ///      Reduction is NOT contract-enforced. Removing authority durably (revoke, shorter expiry, narrower scope)
     ///      requires retiring the signatures that granted it, which on the local channel means a {BumpLocalEpoch};
@@ -623,8 +624,9 @@ contract Keystore {
     // ----------------------------------------------------------------------------------------------------------------
 
     /// @dev AuthorizeActor. `payload = abi.encode(bytes32 actorId, ActorConfig cfg, bytes policyData)`; `cfg.expiry`
-    ///      is the granted expiry and the signature self-expires at it. A plain upsert on both channels and both
-    ///      sequencing modes — the only gate is that the grant be strictly in the future (self-expiring). An
+    ///      is the granted expiry and the signature self-expires at it (or never, if `cfg.expiry == 0`). A plain
+    ///      upsert on both channels and both sequencing modes — the only gate is that a non-zero expiry be in the
+    ///      future. An
     ///      unsequenced grant is replayable (it consumes no counter) and last-write-wins on its slot until the grant
     ///      lapses or the epoch is bumped; durable reduction (revoke, shorter expiry, narrower scope) is therefore a
     ///      wallet responsibility — batch the reducing op with a {BumpLocalEpoch} to retire outstanding grants.
@@ -632,8 +634,9 @@ contract Keystore {
         (bytes32 actorId, ActorConfig memory cfg, bytes memory policyData) =
             abi.decode(payload, (bytes32, ActorConfig, bytes));
 
-        // The grant must be strictly in the future (a zero/past expiry is caught here: 0 <= now).
-        if (cfg.expiry <= block.timestamp) revert ExpiredChange();
+        // A grant must not be already-expired: reject a non-zero expiry that is not strictly in the future. A zero
+        // expiry is the canonical "no expiry" sentinel (unlimited, per {ActorConfig}) and is accepted.
+        if (cfg.expiry != 0 && cfg.expiry <= block.timestamp) revert ExpiredChange();
 
         _authorizeActor(account, actorId, cfg, policyData);
     }
