@@ -337,6 +337,11 @@ contract Keystore {
     ///         BumpLocalEpoch / Unlock).
     error InvalidChangePayload();
 
+    /// @notice Defensive guard for an unhandled ChangeType in the apply loop. Unreachable in practice — out-of-range
+    ///         wire values are rejected by the enum decoder during ABI-decoding — but forces any future ChangeType to
+    ///         be dispatched explicitly instead of silently falling through.
+    error UnknownActorChangeType();
+
     /// @notice The auth blob is shorter than the 20-byte authenticator selector prefix.
     error InvalidAuthLength();
 
@@ -611,10 +616,13 @@ contract Keystore {
                 _applyBumpLocalEpoch(account, isLocal, s.changes[i].payload);
             } else if (t == ChangeType.Lock) {
                 _applyLock(account, s.changes[i].payload);
-            } else {
-                // ChangeType.Unlock (the only remaining member; out-of-range values are rejected by the enum decoder
-                // while ABI-decoding the calldata).
+            } else if (t == ChangeType.Unlock) {
                 _applyUnlock(account, s.changes[i].payload);
+            } else {
+                // Defensive guard: every ChangeType must be dispatched explicitly. Unreachable today — out-of-range
+                // wire values are rejected by the enum decoder while ABI-decoding the calldata — so this forces any
+                // future ChangeType to be wired in here rather than silently falling through.
+                revert UnknownActorChangeType();
             }
         }
     }
