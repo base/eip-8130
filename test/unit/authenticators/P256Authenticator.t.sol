@@ -5,12 +5,12 @@ import {Math} from "openzeppelin/utils/math/Math.sol";
 import {P256} from "openzeppelin/utils/cryptography/P256.sol";
 
 import {P256Authenticator} from "../../../src/authenticators/P256Authenticator.sol";
-import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
+import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice P256Authenticator tests. Data layout: r(32) ‖ s(32) ‖ x(32) ‖ y(32) ‖ preHash(1) = 129 bytes.
 ///         The authenticator reverts on wrong length, returns actorId = keccak256(x‖y) on a valid signature, and
 ///         returns bytes32(0) on any verification failure (it never reverts on a bad-but-well-formed signature).
-contract P256AuthenticatorTest is AccountConfigurationTest {
+contract P256AuthenticatorTest is KeystoreTest {
     // ── revert: length guard (InvalidDataLength) ──
 
     /// @notice Reverts for any calldata whose length is not exactly 129 bytes.

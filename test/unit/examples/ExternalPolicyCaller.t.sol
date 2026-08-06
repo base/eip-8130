@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
+import {Keystore} from "../../../src/Keystore.sol";
 import {TRUSTED_EXECUTOR} from "../../../src/accounts/DefaultAccount.sol";
 
 import {PolicyManager, EXTERNAL_POLICY_AUTHENTICATOR} from "../../../src/policies/PolicyManager.sol";
 import {SessionPolicy} from "../../../src/policies/SessionPolicy.sol";
 import {RecurringAllowance} from "../../../src/policies/RecurringAllowance.sol";
 
-import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
+import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 contract ExtMockERC20 {
     mapping(address => uint256) public balanceOf;
@@ -29,7 +29,7 @@ contract ExtMockERC20 {
 ///         via {PolicyManager.executeFor} / {executeForMany}. Identity is the caller itself
 ///         (`actorId == bytes20(msg.sender)`); the provider actor is registered with `EXTERNAL_POLICY_AUTHENTICATOR`
 ///         so it can only act through the manager, never directly.
-contract ExternalPolicyCallerTest is AccountConfigurationTest {
+contract ExternalPolicyCallerTest is KeystoreTest {
     PolicyManager internal manager;
     SessionPolicy internal policy;
     ExtMockERC20 internal token;
@@ -52,7 +52,7 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
         super.setUp();
         vm.warp(1_700_000_000);
 
-        manager = new PolicyManager(address(accountConfiguration));
+        manager = new PolicyManager(address(keystore));
         policy = new SessionPolicy(address(manager));
         token = new ExtMockERC20();
     }
@@ -191,7 +191,7 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
         (, bytes32 victimCommitment) = _binding(victim, 1, 100e6, MONTH);
 
         // Attacker points its OWN actor (actorId = bytes20(provider)) at the victim's opaque commitment + this
-        // manager. AccountConfiguration stores the commitment verbatim, so nothing stops this registration.
+        // manager. Keystore stores the commitment verbatim, so nothing stops this registration.
         address attacker = _createAccount(bytes32(uint256(2)));
         _authorizeProvider(attacker, address(manager), victimCommitment);
 
@@ -284,20 +284,20 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
     }
 
     function _createAccount(bytes32 salt) internal returns (address account) {
-        AccountConfiguration.InitialActor memory root = AccountConfiguration.InitialActor({
+        Keystore.InitialActor memory root = Keystore.InitialActor({
             actorId: bytes32(bytes20(vm.addr(ROOT_PK))),
             authenticator: address(k1Authenticator),
             scope: 0,
             policyData: ""
         });
-        AccountConfiguration.InitialActor memory mgr = AccountConfiguration.InitialActor({
+        Keystore.InitialActor memory mgr = Keystore.InitialActor({
             actorId: bytes32(bytes20(address(manager))), authenticator: TRUSTED_EXECUTOR, scope: 0, policyData: ""
         });
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](2);
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](2);
         (actors[0], actors[1]) = root.actorId < mgr.actorId ? (root, mgr) : (mgr, root);
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        account = accountConfiguration.createAccount(salt, bytecode, actors);
+        account = keystore.createAccount(salt, bytecode, actors);
         token.mint(account, 1_000e6);
     }
 
@@ -308,11 +308,10 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
     }
 
     function _authorizeProvider(address account, address policyManager, bytes32 commitment, uint48 expiry) internal {
-        AccountConfiguration.ActorConfig memory cfg = AccountConfiguration.ActorConfig({
-            authenticator: EXTERNAL_POLICY_AUTHENTICATOR, scope: SCOPE_POLICY, expiry: expiry
-        });
-        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
-        changes[0] = AccountConfiguration.ActorChange({
+        Keystore.ActorConfig memory cfg =
+            Keystore.ActorConfig({authenticator: EXTERNAL_POLICY_AUTHENTICATOR, scope: SCOPE_POLICY, expiry: expiry});
+        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
+        changes[0] = Keystore.ActorChange({
             actorId: bytes32(bytes20(provider)),
             changeType: AUTHORIZE_ACTOR,
             data: abi.encode(cfg, abi.encodePacked(policyManager, commitment))
@@ -321,16 +320,15 @@ contract ExternalPolicyCallerTest is AccountConfigurationTest {
     }
 
     function _revokeProvider(address account) internal {
-        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
-        changes[0] =
-            AccountConfiguration.ActorChange({actorId: bytes32(bytes20(provider)), changeType: REVOKE_ACTOR, data: ""});
+        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
+        changes[0] = Keystore.ActorChange({actorId: bytes32(bytes20(provider)), changeType: REVOKE_ACTOR, data: ""});
         _applyAsRoot(account, changes);
     }
 
-    function _applyAsRoot(address account, AccountConfiguration.ActorChange[] memory changes) internal {
+    function _applyAsRoot(address account, Keystore.ActorChange[] memory changes) internal {
         uint64 chainId = uint64(block.chainid);
-        uint64 sequence = accountConfiguration.getChangeSequences(account).local;
+        uint64 sequence = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, chainId, sequence, changes);
-        accountConfiguration.applySignedActorChanges(account, chainId, changes, _buildK1Auth(ROOT_PK, digest));
+        keystore.applySignedActorChanges(account, chainId, changes, _buildK1Auth(ROOT_PK, digest));
     }
 }

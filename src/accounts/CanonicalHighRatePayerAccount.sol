@@ -17,7 +17,7 @@ contract CanonicalHighRatePayerAccount is DefaultAccount {
     /// @notice A value-bearing call was attempted while the account is locked.
     error AccountLocked();
 
-    constructor(address accountConfiguration) DefaultAccount(accountConfiguration) {}
+    constructor(address keystore) DefaultAccount(keystore) {}
 
     /// @notice Executes a batch of calls from the account, blocking outbound value transfers while locked.
     ///
@@ -30,7 +30,7 @@ contract CanonicalHighRatePayerAccount is DefaultAccount {
         if (!_isAuthorizedCaller(msg.sender)) revert UnauthorizedCaller();
         for (uint256 i; i < calls.length; i++) {
             if (calls[i].value > 0) {
-                (bool locked,,,) = ACCOUNT_CONFIGURATION.getLockStatus(address(this));
+                (bool locked,,,) = KEYSTORE.getLockStatus(address(this));
                 if (locked) revert AccountLocked();
             }
             (bool success,) = calls[i].target.call{value: calls[i].value}(calls[i].data);
@@ -50,7 +50,7 @@ contract CanonicalHighRatePayerAccount is DefaultAccount {
     function execute(address target, uint256 value, bytes calldata data) external override {
         if (!_isAuthorizedCaller(msg.sender)) revert UnauthorizedCaller();
         if (value > 0) {
-            (bool locked,,,) = ACCOUNT_CONFIGURATION.getLockStatus(address(this));
+            (bool locked,,,) = KEYSTORE.getLockStatus(address(this));
             if (locked) revert AccountLocked();
         }
         (bool success,) = target.call{value: value}(data);

@@ -1,30 +1,28 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
-import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
+import {Keystore} from "../../../src/Keystore.sol";
+import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
-/// @dev Fully fuzzed, branch-complete suite for AccountConfiguration.createAccount and the pure/view
+/// @dev Fully fuzzed, branch-complete suite for Keystore.createAccount and the pure/view
 ///      machinery it drives: computeAddress, _buildDeploymentCode, _computeEffectiveSalt / _computeActorsCommitment,
 ///      and _initializeAccount. Reverts are ordered to mirror createAccount's source control flow; happy paths and
 ///      the computeAddress determinism/sensitivity checks follow.
-contract CreateAccountTest is AccountConfigurationTest {
+contract CreateAccountTest is KeystoreTest {
     // ── local builders ──
 
     function _initialActor(bytes32 actorId, address authenticator)
         internal
         pure
-        returns (AccountConfiguration.InitialActor memory)
+        returns (Keystore.InitialActor memory)
     {
-        return AccountConfiguration.InitialActor({
-            actorId: actorId, authenticator: authenticator, scope: 0, policyData: ""
-        });
+        return Keystore.InitialActor({actorId: actorId, authenticator: authenticator, scope: 0, policyData: ""});
     }
 
     /// @dev A one-element k1 actor set with a caller-chosen actorId. actorId must be strictly > 0 (the sort guard
     ///      seeds previousActorId at 0 and rejects the first id if it is <= 0).
-    function _oneK1Actor(bytes32 actorId) internal view returns (AccountConfiguration.InitialActor[] memory actors) {
-        actors = new AccountConfiguration.InitialActor[](1);
+    function _oneK1Actor(bytes32 actorId) internal view returns (Keystore.InitialActor[] memory actors) {
+        actors = new Keystore.InitialActor[](1);
         actors[0] = _initialActor(actorId, address(k1Authenticator));
     }
 
@@ -34,9 +32,9 @@ contract CreateAccountTest is AccountConfigurationTest {
     function _ascendingK1Actors(uint256 count, uint256 base)
         internal
         view
-        returns (AccountConfiguration.InitialActor[] memory actors)
+        returns (Keystore.InitialActor[] memory actors)
     {
-        actors = new AccountConfiguration.InitialActor[](count);
+        actors = new Keystore.InitialActor[](count);
         for (uint256 i; i < count; i++) {
             bytes32 actorId = bytes32(bytes20(address(uint160(base + i))));
             actors[i] = _initialActor(actorId, address(k1Authenticator));
@@ -66,10 +64,10 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes memory bytecode = new bytes(len);
         bytecode[0] = fill;
 
-        AccountConfiguration.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(1))));
+        Keystore.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(1))));
 
-        vm.expectRevert(AccountConfiguration.BytecodeTooLarge.selector);
-        accountConfiguration.createAccount(salt, bytecode, actors);
+        vm.expectRevert(Keystore.BytecodeTooLarge.selector);
+        keystore.createAccount(salt, bytecode, actors);
     }
 
     /// @notice Verifies re-creating an account at an address that already holds 8130 state reverts
@@ -78,23 +76,23 @@ contract CreateAccountTest is AccountConfigurationTest {
         public
     {
         pk = _boundK1Pk(pk);
-        AccountConfiguration.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(pk))));
+        Keystore.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(pk))));
         bytes memory bytecode = _validBytecode(lenSeed, content);
 
-        accountConfiguration.createAccount(salt, bytecode, actors);
+        keystore.createAccount(salt, bytecode, actors);
 
-        vm.expectRevert(AccountConfiguration.AlreadyInitialized.selector);
-        accountConfiguration.createAccount(salt, bytecode, actors);
+        vm.expectRevert(Keystore.AlreadyInitialized.selector);
+        keystore.createAccount(salt, bytecode, actors);
     }
 
     /// @notice Verifies createAccount reverts when the initial actor set is empty
     /// @dev _initializeAccount rejects a zero-length initialActors with NoInitialActors before any actor is written
     function test_createAccount_revert_noInitialActors(bytes32 salt, uint256 lenSeed, bytes32 content) public {
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](0);
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](0);
         bytes memory bytecode = _validBytecode(lenSeed, content);
 
-        vm.expectRevert(AccountConfiguration.NoInitialActors.selector);
-        accountConfiguration.createAccount(salt, bytecode, actors);
+        vm.expectRevert(Keystore.NoInitialActors.selector);
+        keystore.createAccount(salt, bytecode, actors);
     }
 
     /// @notice Verifies createAccount reverts when initial actors are not in strictly ascending actorId order
@@ -105,13 +103,13 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes32 smaller = idA < idB ? idA : idB;
         bytes32 larger = idA < idB ? idB : idA;
 
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](2);
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](2);
         actors[0] = _initialActor(larger, address(k1Authenticator));
         actors[1] = _initialActor(smaller, address(k1Authenticator));
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        vm.expectRevert(AccountConfiguration.ActorsNotSortedOrDuplicate.selector);
-        accountConfiguration.createAccount(salt, bytecode, actors);
+        vm.expectRevert(Keystore.ActorsNotSortedOrDuplicate.selector);
+        keystore.createAccount(salt, bytecode, actors);
     }
 
     /// @notice Verifies createAccount reverts when the initial actor set contains a duplicate actorId
@@ -119,13 +117,13 @@ contract CreateAccountTest is AccountConfigurationTest {
     function test_createAccount_revert_actorsDuplicate(bytes32 id, bytes32 salt) public {
         vm.assume(id != 0);
 
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](2);
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](2);
         actors[0] = _initialActor(id, address(k1Authenticator));
         actors[1] = _initialActor(id, address(k1Authenticator));
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        vm.expectRevert(AccountConfiguration.ActorsNotSortedOrDuplicate.selector);
-        accountConfiguration.createAccount(salt, bytecode, actors);
+        vm.expectRevert(Keystore.ActorsNotSortedOrDuplicate.selector);
+        keystore.createAccount(salt, bytecode, actors);
     }
 
     /// @notice Verifies createAccount reverts when an initial actor names an authenticator below the K1 sentinel
@@ -133,12 +131,12 @@ contract CreateAccountTest is AccountConfigurationTest {
     function test_createAccount_revert_invalidAuthenticator(bytes32 actorId, bytes32 salt) public {
         vm.assume(actorId != 0);
 
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](1);
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
         actors[0] = _initialActor(actorId, address(0));
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        vm.expectRevert(AccountConfiguration.InvalidAuthenticator.selector);
-        accountConfiguration.createAccount(salt, bytecode, actors);
+        vm.expectRevert(Keystore.InvalidAuthenticator.selector);
+        keystore.createAccount(salt, bytecode, actors);
     }
 
     /// @notice Verifies createAccount reverts when CREATE2 rejects the runtime code for a leading 0xEF byte
@@ -153,10 +151,10 @@ contract CreateAccountTest is AccountConfigurationTest {
             bytecode[i] = bytes1(uint8(uint256(keccak256(abi.encodePacked(content, i)))));
         }
 
-        AccountConfiguration.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(1))));
+        Keystore.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(1))));
 
-        vm.expectRevert(AccountConfiguration.AccountDeploymentFailed.selector);
-        accountConfiguration.createAccount(salt, bytecode, actors);
+        vm.expectRevert(Keystore.AccountDeploymentFailed.selector);
+        keystore.createAccount(salt, bytecode, actors);
     }
 
     /// @notice A failed CREATE2 unwinds every state write, leaving no initialized-but-codeless account
@@ -167,23 +165,23 @@ contract CreateAccountTest is AccountConfigurationTest {
         pk = _boundK1Pk(pk);
         bytes32 actorId = bytes32(bytes20(vm.addr(pk)));
 
-        AccountConfiguration.InitialActor[] memory actors = _oneK1Actor(actorId);
+        Keystore.InitialActor[] memory actors = _oneK1Actor(actorId);
         bytes memory bytecode = hex"EF";
 
-        address predicted = accountConfiguration.computeAddress(salt, bytecode, actors);
+        address predicted = keystore.computeAddress(salt, bytecode, actors);
 
-        vm.expectRevert(AccountConfiguration.AccountDeploymentFailed.selector);
-        accountConfiguration.createAccount(salt, bytecode, actors);
+        vm.expectRevert(Keystore.AccountDeploymentFailed.selector);
+        keystore.createAccount(salt, bytecode, actors);
 
         assertEq(predicted.code.length, 0);
-        assertEq(accountConfiguration.getChangeSequences(predicted).local, 0);
-        assertEq(accountConfiguration.getChangeSequences(predicted).multichain, 0);
-        assertFalse(accountConfiguration.isActor(predicted, actorId));
+        assertEq(keystore.getChangeSequences(predicted).local, 0);
+        assertEq(keystore.getChangeSequences(predicted).multichain, 0);
+        assertFalse(keystore.isActor(predicted, actorId));
 
         // The writes were unwound, so the re-init guard is not tripped: the retry re-attempts the deploy and fails
         // again on the same invalid bytecode rather than reverting AlreadyInitialized.
-        vm.expectRevert(AccountConfiguration.AccountDeploymentFailed.selector);
-        accountConfiguration.createAccount(salt, bytecode, actors);
+        vm.expectRevert(Keystore.AccountDeploymentFailed.selector);
+        keystore.createAccount(salt, bytecode, actors);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -196,14 +194,14 @@ contract CreateAccountTest is AccountConfigurationTest {
         pk = _boundK1Pk(pk);
         bytes32 actorId = bytes32(bytes20(vm.addr(pk)));
 
-        AccountConfiguration.InitialActor[] memory actors = _oneK1Actor(actorId);
+        Keystore.InitialActor[] memory actors = _oneK1Actor(actorId);
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
 
-        address account = accountConfiguration.createAccount(salt, bytecode, actors);
+        address account = keystore.createAccount(salt, bytecode, actors);
 
         assertTrue(account != address(0));
         assertGt(account.code.length, 0);
-        assertTrue(accountConfiguration.isActor(account, actorId));
+        assertTrue(keystore.isActor(account, actorId));
     }
 
     /// @notice Verifies an account with many sorted initial actors deploys and registers every actor as live
@@ -213,14 +211,14 @@ contract CreateAccountTest is AccountConfigurationTest {
         count = bound(count, 2, 8);
         base = bound(base, 1, type(uint160).max - count);
 
-        AccountConfiguration.InitialActor[] memory actors = _ascendingK1Actors(count, base);
+        Keystore.InitialActor[] memory actors = _ascendingK1Actors(count, base);
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
 
-        address account = accountConfiguration.createAccount(salt, bytecode, actors);
+        address account = keystore.createAccount(salt, bytecode, actors);
 
         assertGt(account.code.length, 0);
         for (uint256 i; i < count; i++) {
-            assertTrue(accountConfiguration.isActor(account, actors[i].actorId));
+            assertTrue(keystore.isActor(account, actors[i].actorId));
         }
     }
 
@@ -235,17 +233,17 @@ contract CreateAccountTest is AccountConfigurationTest {
         // home rather than the inline-self path, which would report the K1 sentinel instead of the fuzzed address.
         vm.assume(uint96(uint256(actorId)) != 0);
 
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](1);
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
         actors[0] = _initialActor(actorId, authenticator);
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
 
-        address account = accountConfiguration.createAccount(salt, bytecode, actors);
+        address account = keystore.createAccount(salt, bytecode, actors);
 
-        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, actorId);
+        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, actorId);
         assertEq(cfg.authenticator, authenticator);
         assertEq(cfg.scope, 0x00);
         assertEq(cfg.expiry, 0);
-        assertTrue(accountConfiguration.isActor(account, actorId));
+        assertTrue(keystore.isActor(account, actorId));
     }
 
     /// @notice Verifies initial actors are unrestricted owners and the account is initialized with safe lock defaults
@@ -255,21 +253,20 @@ contract CreateAccountTest is AccountConfigurationTest {
         pk = _boundK1Pk(pk);
         bytes32 actorId = bytes32(bytes20(vm.addr(pk)));
 
-        AccountConfiguration.InitialActor[] memory actors = _oneK1Actor(actorId);
+        Keystore.InitialActor[] memory actors = _oneK1Actor(actorId);
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
 
-        address account = accountConfiguration.createAccount(salt, bytecode, actors);
+        address account = keystore.createAccount(salt, bytecode, actors);
 
-        AccountConfiguration.ActorConfig memory cfg = accountConfiguration.getActorConfig(account, actorId);
+        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, actorId);
         assertEq(cfg.authenticator, address(k1Authenticator));
         assertEq(cfg.scope, 0x00);
         assertEq(cfg.expiry, 0);
 
-        assertEq(accountConfiguration.getChangeSequences(account).local, 1);
-        assertEq(accountConfiguration.getChangeSequences(account).multichain, 0);
+        assertEq(keystore.getChangeSequences(account).local, 1);
+        assertEq(keystore.getChangeSequences(account).multichain, 0);
 
-        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 unlockDelay) =
-            accountConfiguration.getLockStatus(account);
+        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 unlockDelay) = keystore.getLockStatus(account);
         assertFalse(locked);
         assertFalse(hasInitiatedUnlock);
         assertEq(unlocksAt, 0);
@@ -283,14 +280,14 @@ contract CreateAccountTest is AccountConfigurationTest {
         pk = _boundK1Pk(pk);
         bytes32 actorId = bytes32(bytes20(vm.addr(pk)));
 
-        AccountConfiguration.InitialActor[] memory actors = _oneK1Actor(actorId);
+        Keystore.InitialActor[] memory actors = _oneK1Actor(actorId);
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
 
-        address account = accountConfiguration.createAccount(salt, bytecode, actors);
+        address account = keystore.createAccount(salt, bytecode, actors);
 
         // The account's own self-actorId is not the seeded actor, so the inline k1 self stays disabled.
         vm.assume(bytes32(bytes20(account)) != actorId);
-        assertFalse(accountConfiguration.isActor(account, bytes32(bytes20(account))));
+        assertFalse(keystore.isActor(account, bytes32(bytes20(account))));
     }
 
     /// @notice Verifies arbitrary valid runtime bytecode of a fuzzed length/content deploys successfully
@@ -300,10 +297,10 @@ contract CreateAccountTest is AccountConfigurationTest {
         public
     {
         pk = _boundK1Pk(pk);
-        AccountConfiguration.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(pk))));
+        Keystore.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(pk))));
         bytes memory bytecode = _validBytecode(lenSeed, content);
 
-        address account = accountConfiguration.createAccount(salt, bytecode, actors);
+        address account = keystore.createAccount(salt, bytecode, actors);
 
         assertEq(account.code.length, bytecode.length);
     }
@@ -316,9 +313,9 @@ contract CreateAccountTest is AccountConfigurationTest {
     function test_createAccount_success_bytecodeAtEncodableMax(bytes32 salt) public {
         bytes memory bytecode = new bytes(0xFFFF); // zero-filled: EIP-3541-clean (no leading 0xEF)
 
-        AccountConfiguration.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(1))));
+        Keystore.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(1))));
 
-        address account = accountConfiguration.createAccount(salt, bytecode, actors);
+        address account = keystore.createAccount(salt, bytecode, actors);
         assertEq(account.code.length, 0xFFFF);
     }
 
@@ -328,14 +325,14 @@ contract CreateAccountTest is AccountConfigurationTest {
         public
     {
         pk = _boundK1Pk(pk);
-        AccountConfiguration.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(pk))));
+        Keystore.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(pk))));
         bytes memory bytecode = _validBytecode(lenSeed, content);
 
-        address predicted = accountConfiguration.computeAddress(salt, bytecode, actors);
+        address predicted = keystore.computeAddress(salt, bytecode, actors);
 
-        vm.expectEmit(true, false, false, true, address(accountConfiguration));
-        emit AccountConfiguration.AccountCreated(predicted, salt, keccak256(bytecode));
-        accountConfiguration.createAccount(salt, bytecode, actors);
+        vm.expectEmit(true, false, false, true, address(keystore));
+        emit Keystore.AccountCreated(predicted, salt, keccak256(bytecode));
+        keystore.createAccount(salt, bytecode, actors);
     }
 
     /// @notice Verifies the deployed account address equals the counterfactual computeAddress for fuzzed inputs
@@ -344,11 +341,11 @@ contract CreateAccountTest is AccountConfigurationTest {
         public
     {
         pk = _boundK1Pk(pk);
-        AccountConfiguration.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(pk))));
+        Keystore.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(pk))));
         bytes memory bytecode = _validBytecode(lenSeed, content);
 
-        address predicted = accountConfiguration.computeAddress(salt, bytecode, actors);
-        address actual = accountConfiguration.createAccount(salt, bytecode, actors);
+        address predicted = keystore.computeAddress(salt, bytecode, actors);
+        address actual = keystore.createAccount(salt, bytecode, actors);
 
         assertEq(actual, predicted);
         assertGt(predicted.code.length, 0);
@@ -365,10 +362,10 @@ contract CreateAccountTest is AccountConfigurationTest {
         bytes memory bytecode = new bytes(len);
         bytecode[0] = fill;
 
-        AccountConfiguration.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(1))));
+        Keystore.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(1))));
 
-        vm.expectRevert(AccountConfiguration.BytecodeTooLarge.selector);
-        accountConfiguration.computeAddress(salt, bytecode, actors);
+        vm.expectRevert(Keystore.BytecodeTooLarge.selector);
+        keystore.computeAddress(salt, bytecode, actors);
     }
 
     /// @notice Verifies computeAddress accepts bytecode of exactly 0xFFFF bytes without reverting
@@ -376,9 +373,9 @@ contract CreateAccountTest is AccountConfigurationTest {
     ///      _buildDeploymentCode but never deploys, so 0xFFFF returns an address while n == 0x10000 reverts (above)
     function test_computeAddress_success_bytecodeAtEncodableMax(bytes32 salt) public view {
         bytes memory bytecode = new bytes(0xFFFF);
-        AccountConfiguration.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(1))));
+        Keystore.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(1))));
 
-        address predicted = accountConfiguration.computeAddress(salt, bytecode, actors);
+        address predicted = keystore.computeAddress(salt, bytecode, actors);
         assertTrue(predicted != address(0));
     }
 
@@ -387,11 +384,11 @@ contract CreateAccountTest is AccountConfigurationTest {
     function test_computeAddress_success_differentSalts(uint256 pk, bytes32 saltA, bytes32 saltB) public view {
         vm.assume(saltA != saltB);
         pk = _boundK1Pk(pk);
-        AccountConfiguration.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(pk))));
+        Keystore.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(pk))));
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
 
-        address addrA = accountConfiguration.computeAddress(saltA, bytecode, actors);
-        address addrB = accountConfiguration.computeAddress(saltB, bytecode, actors);
+        address addrA = keystore.computeAddress(saltA, bytecode, actors);
+        address addrB = keystore.computeAddress(saltB, bytecode, actors);
 
         assertTrue(addrA != addrB);
     }
@@ -403,8 +400,8 @@ contract CreateAccountTest is AccountConfigurationTest {
         vm.assume(idA != 0 && idB != 0 && idA != idB);
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
 
-        address addrA = accountConfiguration.computeAddress(salt, bytecode, _oneK1Actor(idA));
-        address addrB = accountConfiguration.computeAddress(salt, bytecode, _oneK1Actor(idB));
+        address addrA = keystore.computeAddress(salt, bytecode, _oneK1Actor(idA));
+        address addrB = keystore.computeAddress(salt, bytecode, _oneK1Actor(idB));
 
         assertTrue(addrA != addrB);
     }
@@ -416,14 +413,14 @@ contract CreateAccountTest is AccountConfigurationTest {
         view
     {
         pk = _boundK1Pk(pk);
-        AccountConfiguration.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(pk))));
+        Keystore.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(pk))));
 
         bytes memory bytecodeA = _validBytecode(lenSeed, content);
         bytes memory bytecodeB = _computeERC1167Bytecode(defaultAccountImplementation);
         vm.assume(keccak256(bytecodeA) != keccak256(bytecodeB));
 
-        address addrA = accountConfiguration.computeAddress(salt, bytecodeA, actors);
-        address addrB = accountConfiguration.computeAddress(salt, bytecodeB, actors);
+        address addrA = keystore.computeAddress(salt, bytecodeA, actors);
+        address addrB = keystore.computeAddress(salt, bytecodeB, actors);
 
         assertTrue(addrA != addrB);
     }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.36;
 
-import {AccountConfiguration} from "../AccountConfiguration.sol";
+import {Keystore} from "../Keystore.sol";
 import {IAuthenticator} from "../interfaces/IAuthenticator.sol";
 
 /// @notice Delegates authentication to another account's actor configuration; a single hop only.
@@ -14,8 +14,8 @@ import {IAuthenticator} from "../interfaces/IAuthenticator.sol";
 ///
 /// @author Coinbase
 contract DelegateAuthenticator is IAuthenticator {
-    /// @notice The AccountConfiguration system contract used to validate the nested (delegate) signature.
-    AccountConfiguration public immutable ACCOUNT_CONFIGURATION;
+    /// @notice The Keystore system contract used to validate the nested (delegate) signature.
+    Keystore public immutable KEYSTORE;
 
     /// @notice The auth data is shorter than the 40-byte delegate + nested-authenticator prefix.
     error InvalidDataLength();
@@ -26,10 +26,10 @@ contract DelegateAuthenticator is IAuthenticator {
     /// @notice The nested signer is not authorized to sign for the delegate account.
     error InvalidNestedSignature();
 
-    /// @notice Deploys the authenticator bound to an AccountConfiguration instance.
-    /// @param accountConfiguration Address of the AccountConfiguration system contract.
-    constructor(address accountConfiguration) {
-        ACCOUNT_CONFIGURATION = AccountConfiguration(accountConfiguration);
+    /// @notice Deploys the authenticator bound to an Keystore instance.
+    /// @param keystore Address of the Keystore system contract.
+    constructor(address keystore) {
+        KEYSTORE = Keystore(keystore);
     }
 
     /// @notice Authenticates by delegating to another account's actor configuration; only one hop is permitted.
@@ -59,9 +59,7 @@ contract DelegateAuthenticator is IAuthenticator {
         // vouch requires admin to preserve non-escalation): an operational SENDER key can sign for its own account,
         // yet it must NOT be able to vouch as a delegate here. authenticateActor reverts on any auth failure and
         // otherwise returns the resolved scope, so we require scope == 0x00 explicitly.
-        try ACCOUNT_CONFIGURATION.authenticateActor(delegate, hash, nestedAuth) returns (
-            bytes32, uint8 nestedScope, address
-        ) {
+        try KEYSTORE.authenticateActor(delegate, hash, nestedAuth) returns (bytes32, uint8 nestedScope, address) {
             if (nestedScope != 0) revert InvalidNestedSignature();
         } catch {
             revert InvalidNestedSignature();

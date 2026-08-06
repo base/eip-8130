@@ -3,10 +3,10 @@
 Reference, **unaudited** example of a policy manager for EIP-8130 restricted actors.
 
 In EIP-8130, a restricted actor (e.g. a session key) is configured with `scope & SCOPE_POLICY != 0`, which stores a
-`policy_manager` address and an opaque `policy_commitment` in the Account Configuration contract. The protocol
+`policy_manager` address and an opaque `policy_commitment` in the Keystore contract. The protocol
 gate forces every call that actor makes to land on that single manager. These contracts are an example of what
 that manager can be: one that enforces application-specific limits and then drives the account. `SCOPE_POLICY`
-(`0x02`) may be combined with other scope bits (e.g. `SCOPE_POLICY | SCOPE_SELF_PAYER`) — `AccountConfiguration` does
+(`0x02`) may be combined with other scope bits (e.g. `SCOPE_POLICY | SCOPE_SELF_PAYER`) — `Keystore` does
 not reject scope combinations; use-time exclusivity between policy gating and an actor's other capabilities is
 protocol-side, not enforced by this contract.
 
@@ -14,8 +14,8 @@ protocol-side, not enforced by this contract.
 
 1. **Authorize + commit.** The account authorizes the session key with `scope = SCOPE_POLICY`,
    `policy_manager = PolicyManager`, and `policy_commitment = keccak256` of an account-authorized
-   [`PolicyBinding`](./PolicyManager.sol). The Account Configuration contract exposes this via
-   [`getPolicy(account, actorId)`](../../AccountConfiguration.sol). That signed actor change *is* the
+   [`PolicyBinding`](./PolicyManager.sol). The Keystore contract exposes this via
+   [`getPolicy(account, actorId)`](../../Keystore.sol). That signed actor change *is* the
    authorization — there is no separate install step on the manager.
 2. **Use.** When the session key transacts, the protocol gate resolves the key's allowed target
    (`policy_manager(account, actorId)`) and reverts any call whose `call.to` isn't that address before dispatch, so
@@ -41,7 +41,7 @@ session key ──(8130 gate: only PolicyManager)──▶ PolicyManager.execute
 
 | Contract | Role |
 |----------|------|
-| `PolicyManager` | Stateless manager: `execute(binding, …)` / `executeFor(binding, …)` / `executeForMany(bindings[], …)` re-authenticate the full binding against the live signed commitment in AccountConfiguration, then run policy → account call → `onPostExecute`. |
+| `PolicyManager` | Stateless manager: `execute(binding, …)` / `executeFor(binding, …)` / `executeForMany(bindings[], …)` re-authenticate the full binding against the live signed commitment in Keystore, then run policy → account call → `onPostExecute`. |
 | `Policy` | Base hook: `onExecute` → `(accountCallData, postCallData)` + `onPostExecute` (default no-op). |
 | `SessionPolicy` | Unified "session key" policy: target / selector / recipient / spend limits enforced by linear scan over calldata config. Stores only spend usage. Validates config shape at execute. |
 | `RecurringAllowance` | Periodic-allowance accounting library (ported from base/account-policies); used by `SessionPolicy` for spend accounting. |
@@ -132,7 +132,7 @@ then `executeFor` — so the account never needs to send a transaction. The acco
 
 ```solidity
 // actorId = bytes20(provider). The provider never signs an 8130 tx; it acts by being msg.sender.
-AccountConfiguration.ActorConfig({
+Keystore.ActorConfig({
     authenticator: EXTERNAL_POLICY_AUTHENTICATOR, // recognized actor; NO direct executeBatch; not 8130-usable
     scope:         0x02,                          // SCOPE_POLICY — gated initiation only (MAY also OR SCOPE_SELF_PAYER
                                                   //   for self-pay; SHOULD NOT combine with SENDER — POLICY gates

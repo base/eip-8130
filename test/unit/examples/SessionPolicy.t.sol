@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
+import {Keystore} from "../../../src/Keystore.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../../src/interfaces/ITransactionContext.sol";
 import {TRUSTED_EXECUTOR} from "../../../src/accounts/DefaultAccount.sol";
 
@@ -9,7 +9,7 @@ import {PolicyManager} from "../../../src/policies/PolicyManager.sol";
 import {SessionPolicy} from "../../../src/policies/SessionPolicy.sol";
 import {RecurringAllowance} from "../../../src/policies/RecurringAllowance.sol";
 
-import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
+import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 contract SessionMockERC20 {
     mapping(address => uint256) public balanceOf;
@@ -57,7 +57,7 @@ contract SessionMockTarget {
 /// @notice Exercises the unified {SessionPolicy}: target allowlist, per-target selector rules, recipient
 ///         allowlists, per-token recurring/one-time spend limits, native-ETH limits, and the atomic
 ///         multi-dimension check on a single call.
-contract SessionPolicyTest is AccountConfigurationTest {
+contract SessionPolicyTest is KeystoreTest {
     PolicyManager internal manager;
     SessionPolicy internal policy;
     SessionMockERC20 internal token;
@@ -83,7 +83,7 @@ contract SessionPolicyTest is AccountConfigurationTest {
         super.setUp();
         vm.warp(1_700_000_000);
 
-        manager = new PolicyManager(address(accountConfiguration));
+        manager = new PolicyManager(address(keystore));
         policy = new SessionPolicy(address(manager));
         token = new SessionMockERC20();
         target = new SessionMockTarget();
@@ -462,7 +462,7 @@ contract SessionPolicyTest is AccountConfigurationTest {
         SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
         scopes[0] = _anySelectorScope(address(target));
         bytes32 actorId = _authorize(_config(_noLimits(), scopes));
-        bytes32 commitment = accountConfiguration.getPolicyCommitment(account, actorId);
+        bytes32 commitment = keystore.getPolicyCommitment(account, actorId);
 
         PolicyManager.PolicyBinding memory wrong = lastBinding;
         wrong.policyConfig = _config(_noLimits(), _anySelectorScopes(address(token)));
@@ -700,21 +700,21 @@ contract SessionPolicyTest is AccountConfigurationTest {
     }
 
     function _createAccountWithRootAndManager() internal returns (address) {
-        AccountConfiguration.InitialActor memory root = AccountConfiguration.InitialActor({
+        Keystore.InitialActor memory root = Keystore.InitialActor({
             actorId: bytes32(bytes20(vm.addr(ROOT_PK))),
             authenticator: address(k1Authenticator),
             scope: 0,
             policyData: ""
         });
-        AccountConfiguration.InitialActor memory mgr = AccountConfiguration.InitialActor({
+        Keystore.InitialActor memory mgr = Keystore.InitialActor({
             actorId: bytes32(bytes20(address(manager))), authenticator: TRUSTED_EXECUTOR, scope: 0, policyData: ""
         });
 
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](2);
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](2);
         (actors[0], actors[1]) = root.actorId < mgr.actorId ? (root, mgr) : (mgr, root);
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        return accountConfiguration.createAccount(bytes32(0), bytecode, actors);
+        return keystore.createAccount(bytes32(0), bytecode, actors);
     }
 
     /// @dev Authorize a fresh session-key actor gated to the manager committing to `policyConfig`. Returns the
@@ -746,17 +746,17 @@ contract SessionPolicyTest is AccountConfigurationTest {
         });
         bytes32 commitment = manager.commitmentOf(binding);
 
-        AccountConfiguration.ActorConfig memory cfg =
-            AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: 0});
-        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
-        changes[0] = AccountConfiguration.ActorChange({
+        Keystore.ActorConfig memory cfg =
+            Keystore.ActorConfig({authenticator: address(k1Authenticator), scope: SCOPE_POLICY, expiry: 0});
+        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
+        changes[0] = Keystore.ActorChange({
             actorId: actorId,
             changeType: AUTHORIZE_ACTOR,
             data: abi.encode(cfg, abi.encodePacked(address(manager), commitment))
         });
         uint64 chainId = uint64(block.chainid);
-        uint64 sequence = accountConfiguration.getChangeSequences(account).local;
+        uint64 sequence = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, chainId, sequence, changes);
-        accountConfiguration.applySignedActorChanges(account, chainId, changes, _buildK1Auth(ROOT_PK, digest));
+        keystore.applySignedActorChanges(account, chainId, changes, _buildK1Auth(ROOT_PK, digest));
     }
 }

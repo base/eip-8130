@@ -3,8 +3,8 @@ pragma solidity ^0.8.30;
 
 import {ECDSA} from "openzeppelin/utils/cryptography/ECDSA.sol";
 
-import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
-import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
+import {Keystore} from "../../../src/Keystore.sol";
+import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @dev Minimal ERC-1271 wallet that validates an owner ECDSA signature over the presented hash. Returns the
 ///      0x1626ba7e magic for a valid owner signature and 0xFFFFFFFF otherwise (the wrong-selector branch).
@@ -40,12 +40,12 @@ contract ShortReturnERC1271Wallet {
     }
 }
 
-/// @dev Fully fuzzed, branch-complete suite for AccountConfiguration.importAccount and the pure digest machinery it
+/// @dev Fully fuzzed, branch-complete suite for Keystore.importAccount and the pure digest machinery it
 ///      drives (_computeImportDigest), plus the _initializeAccount reverts it inherits. Reverts are ordered to
 ///      mirror importAccount's source control flow (onlyUnlocked → InvalidChainId → AlreadyInitialized →
 ///      InvalidImportSignature → _initializeAccount reverts); happy/branch paths follow.
-contract ImportAccountTest is AccountConfigurationTest {
-    // ERC-1271 magic value (matches AccountConfiguration.ERC1271_SELECTOR).
+contract ImportAccountTest is KeystoreTest {
+    // ERC-1271 magic value (matches Keystore.ERC1271_SELECTOR).
     bytes4 constant ERC1271_MAGIC = 0x1626ba7e;
 
     // Independent reimplementation of the contract's typed import digest (see _computeImportDigest). The digest
@@ -62,7 +62,7 @@ contract ImportAccountTest is AccountConfigurationTest {
     // ── digest helpers ──
 
     /// @dev Convenience: bind the digest to the current chain (the common per-chain import).
-    function _computeImportDigest(address account, AccountConfiguration.InitialActor[] memory initialActors)
+    function _computeImportDigest(address account, Keystore.InitialActor[] memory initialActors)
         internal
         view
         returns (bytes32)
@@ -70,11 +70,11 @@ contract ImportAccountTest is AccountConfigurationTest {
         return _computeImportDigest(account, block.chainid, initialActors);
     }
 
-    function _computeImportDigest(
-        address account,
-        uint256 chainId,
-        AccountConfiguration.InitialActor[] memory initialActors
-    ) internal pure returns (bytes32) {
+    function _computeImportDigest(address account, uint256 chainId, Keystore.InitialActor[] memory initialActors)
+        internal
+        pure
+        returns (bytes32)
+    {
         bytes32[] memory actorHashes = new bytes32[](initialActors.length);
         for (uint256 i; i < initialActors.length; i++) {
             // Hash the actor's real scope; expiry is always 0 at import. policyData is hashed into the Actor hash.
@@ -97,13 +97,9 @@ contract ImportAccountTest is AccountConfigurationTest {
 
     // ── actor-set builders ──
 
-    function _singleUnrestrictedActor(address signer)
-        internal
-        view
-        returns (AccountConfiguration.InitialActor[] memory actors)
-    {
-        actors = new AccountConfiguration.InitialActor[](1);
-        actors[0] = AccountConfiguration.InitialActor({
+    function _singleUnrestrictedActor(address signer) internal view returns (Keystore.InitialActor[] memory actors) {
+        actors = new Keystore.InitialActor[](1);
+        actors[0] = Keystore.InitialActor({
             actorId: bytes32(bytes20(signer)), authenticator: address(k1Authenticator), scope: 0, policyData: ""
         });
     }
@@ -113,11 +109,11 @@ contract ImportAccountTest is AccountConfigurationTest {
     function _ascendingK1Actors(uint256 count, uint256 base)
         internal
         view
-        returns (AccountConfiguration.InitialActor[] memory actors)
+        returns (Keystore.InitialActor[] memory actors)
     {
-        actors = new AccountConfiguration.InitialActor[](count);
+        actors = new Keystore.InitialActor[](count);
         for (uint256 i; i < count; i++) {
-            actors[i] = AccountConfiguration.InitialActor({
+            actors[i] = Keystore.InitialActor({
                 actorId: bytes32(bytes20(address(uint160(base + i)))),
                 authenticator: address(k1Authenticator),
                 scope: 0,
@@ -133,7 +129,7 @@ contract ImportAccountTest is AccountConfigurationTest {
 
     /// @dev Deploy a MockERC1271Wallet owned by vm.addr(ownerPk) and return it with a valid import signature over the
     ///      given actors/chainId. The signature is a raw 65-byte r‖s‖v ECDSA blob (what ERC-1271 recover expects).
-    function _walletAndSig(uint256 ownerPk, uint256 chainId, AccountConfiguration.InitialActor[] memory actors)
+    function _walletAndSig(uint256 ownerPk, uint256 chainId, Keystore.InitialActor[] memory actors)
         internal
         returns (MockERC1271Wallet wallet, bytes memory sig)
     {
@@ -156,13 +152,13 @@ contract ImportAccountTest is AccountConfigurationTest {
         vm.assume(delay != 0);
         address account = vm.addr(ownerPk);
 
-        AccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(account);
+        Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(account);
         uint256 chainId = _acceptedChainId(multichain);
 
         _signedLock(ownerPk, account, delay);
 
-        vm.expectRevert(AccountConfiguration.AccountIsLocked.selector);
-        accountConfiguration.importAccount(account, chainId, actors, "");
+        vm.expectRevert(Keystore.AccountIsLocked.selector);
+        keystore.importAccount(account, chainId, actors, "");
     }
 
     /// @notice Verifies importAccount reverts for a chainId that is neither 0 (multichain) nor the current chain.
@@ -171,11 +167,11 @@ contract ImportAccountTest is AccountConfigurationTest {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         vm.assume(chainIdSeed != 0 && chainIdSeed != block.chainid);
 
-        AccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(ownerPk));
+        Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(ownerPk));
         (MockERC1271Wallet wallet, bytes memory sig) = _walletAndSig(ownerPk, chainIdSeed, actors);
 
-        vm.expectRevert(AccountConfiguration.InvalidChainId.selector);
-        accountConfiguration.importAccount(address(wallet), chainIdSeed, actors, sig);
+        vm.expectRevert(Keystore.InvalidChainId.selector);
+        keystore.importAccount(address(wallet), chainIdSeed, actors, sig);
     }
 
     /// @notice Verifies importAccount reverts on an already-created account (localSequence == 1).
@@ -185,11 +181,11 @@ contract ImportAccountTest is AccountConfigurationTest {
         uint256 pk = _boundK1Pk(pkSeed);
         (address account,) = _createK1Account(pk);
 
-        AccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(pk));
+        Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(pk));
         uint256 chainId = _acceptedChainId(multichain);
 
-        vm.expectRevert(AccountConfiguration.AlreadyInitialized.selector);
-        accountConfiguration.importAccount(account, chainId, actors, "");
+        vm.expectRevert(Keystore.AlreadyInitialized.selector);
+        keystore.importAccount(account, chainId, actors, "");
     }
 
     /// @notice Verifies a second importAccount on the same account reverts (localSequence == 1 after first import).
@@ -198,13 +194,13 @@ contract ImportAccountTest is AccountConfigurationTest {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         uint256 chainId = _acceptedChainId(multichain);
 
-        AccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(ownerPk));
+        Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(ownerPk));
         (MockERC1271Wallet wallet, bytes memory sig) = _walletAndSig(ownerPk, chainId, actors);
 
-        accountConfiguration.importAccount(address(wallet), chainId, actors, sig);
+        keystore.importAccount(address(wallet), chainId, actors, sig);
 
-        vm.expectRevert(AccountConfiguration.AlreadyInitialized.selector);
-        accountConfiguration.importAccount(address(wallet), chainId, actors, sig);
+        vm.expectRevert(Keystore.AlreadyInitialized.selector);
+        keystore.importAccount(address(wallet), chainId, actors, sig);
     }
 
     /// @notice Verifies importAccount reverts when the multichain channel is non-zero even though localSequence == 0.
@@ -220,27 +216,26 @@ contract ImportAccountTest is AccountConfigurationTest {
         address device = vm.addr(devicePk);
         vm.assume(eoa != device);
 
-        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
-        changes[0] = AccountConfiguration.ActorChange({
+        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
+        changes[0] = Keystore.ActorChange({
             actorId: bytes32(bytes20(device)),
             changeType: 0x01,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
-                bytes("")
+                Keystore.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}), bytes("")
             )
         });
-        uint64 seq = accountConfiguration.getChangeSequences(eoa).multichain;
+        uint64 seq = keystore.getChangeSequences(eoa).multichain;
         bytes32 changeDigest = _computeActorChangeBatchDigest(eoa, 0, seq, changes);
-        accountConfiguration.applySignedActorChanges(eoa, 0, changes, _buildK1Auth(eoaPk, changeDigest));
+        keystore.applySignedActorChanges(eoa, 0, changes, _buildK1Auth(eoaPk, changeDigest));
 
         // Multichain channel advanced; local channel untouched.
-        assertEq(accountConfiguration.getChangeSequences(eoa).multichain, 1);
-        assertEq(accountConfiguration.getChangeSequences(eoa).local, 0);
+        assertEq(keystore.getChangeSequences(eoa).multichain, 1);
+        assertEq(keystore.getChangeSequences(eoa).local, 0);
 
-        AccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(device);
+        Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(device);
         bytes32 importDigest = _computeImportDigest(eoa, actors);
-        vm.expectRevert(AccountConfiguration.AlreadyInitialized.selector);
-        accountConfiguration.importAccount(eoa, uint64(block.chainid), actors, _buildK1Auth(eoaPk, importDigest));
+        vm.expectRevert(Keystore.AlreadyInitialized.selector);
+        keystore.importAccount(eoa, uint64(block.chainid), actors, _buildK1Auth(eoaPk, importDigest));
     }
 
     /// @notice Verifies importAccount reverts when the ERC-1271 signer is wrong (magic value not returned).
@@ -256,13 +251,13 @@ contract ImportAccountTest is AccountConfigurationTest {
         vm.assume(vm.addr(ownerPk) != vm.addr(wrongPk));
 
         MockERC1271Wallet wallet = new MockERC1271Wallet(vm.addr(ownerPk));
-        AccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(ownerPk));
+        Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(ownerPk));
         uint256 chainId = _acceptedChainId(multichain);
         bytes32 digest = _computeImportDigest(address(wallet), chainId, actors);
         bytes memory sig = _signDigest(wrongPk, digest);
 
-        vm.expectRevert(AccountConfiguration.InvalidImportSignature.selector);
-        accountConfiguration.importAccount(address(wallet), chainId, actors, sig);
+        vm.expectRevert(Keystore.InvalidImportSignature.selector);
+        keystore.importAccount(address(wallet), chainId, actors, sig);
     }
 
     /// @notice Verifies importAccount reverts when the account's isValidSignature reverts (staticcall fails).
@@ -273,13 +268,13 @@ contract ImportAccountTest is AccountConfigurationTest {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         RevertingERC1271Wallet wallet = new RevertingERC1271Wallet();
 
-        AccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(ownerPk));
+        Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(ownerPk));
         uint256 chainId = _acceptedChainId(multichain);
         bytes32 digest = _computeImportDigest(address(wallet), chainId, actors);
         bytes memory sig = _signDigest(ownerPk, digest);
 
-        vm.expectRevert(AccountConfiguration.InvalidImportSignature.selector);
-        accountConfiguration.importAccount(address(wallet), chainId, actors, sig);
+        vm.expectRevert(Keystore.InvalidImportSignature.selector);
+        keystore.importAccount(address(wallet), chainId, actors, sig);
     }
 
     /// @notice Verifies importAccount reverts against a code-less account (staticcall returns empty returndata).
@@ -289,13 +284,13 @@ contract ImportAccountTest is AccountConfigurationTest {
         uint256 accountPk = _boundK1Pk(accountSeed);
         address account = vm.addr(accountPk);
 
-        AccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(account);
+        Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(account);
         uint256 chainId = _acceptedChainId(multichain);
         bytes32 digest = _computeImportDigest(account, chainId, actors);
         bytes memory sig = _signDigest(accountPk, digest);
 
-        vm.expectRevert(AccountConfiguration.InvalidImportSignature.selector);
-        accountConfiguration.importAccount(account, chainId, actors, sig);
+        vm.expectRevert(Keystore.InvalidImportSignature.selector);
+        keystore.importAccount(account, chainId, actors, sig);
     }
 
     /// @notice Verifies importAccount reverts when isValidSignature returns non-32-byte returndata.
@@ -307,13 +302,13 @@ contract ImportAccountTest is AccountConfigurationTest {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         ShortReturnERC1271Wallet wallet = new ShortReturnERC1271Wallet();
 
-        AccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(ownerPk));
+        Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(ownerPk));
         uint256 chainId = _acceptedChainId(multichain);
         bytes32 digest = _computeImportDigest(address(wallet), chainId, actors);
         bytes memory sig = _signDigest(ownerPk, digest);
 
-        vm.expectRevert(AccountConfiguration.InvalidImportSignature.selector);
-        accountConfiguration.importAccount(address(wallet), chainId, actors, sig);
+        vm.expectRevert(Keystore.InvalidImportSignature.selector);
+        keystore.importAccount(address(wallet), chainId, actors, sig);
     }
 
     /// @notice Verifies importAccount reverts with NoInitialActors when the actor set is empty.
@@ -321,12 +316,12 @@ contract ImportAccountTest is AccountConfigurationTest {
     ///      `initialActors.length == 0` guard reached only after a valid ERC-1271 signature.
     function test_importAccount_revert_noInitialActors(uint256 ownerSeed, bool multichain) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](0);
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](0);
         uint256 chainId = _acceptedChainId(multichain);
         (MockERC1271Wallet wallet, bytes memory sig) = _walletAndSig(ownerPk, chainId, actors);
 
-        vm.expectRevert(AccountConfiguration.NoInitialActors.selector);
-        accountConfiguration.importAccount(address(wallet), chainId, actors, sig);
+        vm.expectRevert(Keystore.NoInitialActors.selector);
+        keystore.importAccount(address(wallet), chainId, actors, sig);
     }
 
     /// @notice Verifies importAccount reverts when initial actors are not strictly ascending by actorId.
@@ -340,19 +335,18 @@ contract ImportAccountTest is AccountConfigurationTest {
         bytes32 smaller = idA < idB ? idA : idB;
         bytes32 larger = idA < idB ? idB : idA;
 
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](2);
-        actors[0] = AccountConfiguration.InitialActor({
-            actorId: larger, authenticator: address(k1Authenticator), scope: 0, policyData: ""
-        });
-        actors[1] = AccountConfiguration.InitialActor({
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](2);
+        actors[0] =
+            Keystore.InitialActor({actorId: larger, authenticator: address(k1Authenticator), scope: 0, policyData: ""});
+        actors[1] = Keystore.InitialActor({
             actorId: smaller, authenticator: address(k1Authenticator), scope: 0, policyData: ""
         });
 
         uint256 chainId = _acceptedChainId(multichain);
         (MockERC1271Wallet wallet, bytes memory sig) = _walletAndSig(ownerPk, chainId, actors);
 
-        vm.expectRevert(AccountConfiguration.ActorsNotSortedOrDuplicate.selector);
-        accountConfiguration.importAccount(address(wallet), chainId, actors, sig);
+        vm.expectRevert(Keystore.ActorsNotSortedOrDuplicate.selector);
+        keystore.importAccount(address(wallet), chainId, actors, sig);
     }
 
     /// @notice Verifies importAccount reverts when the initial actor set contains a duplicate actorId.
@@ -362,19 +356,17 @@ contract ImportAccountTest is AccountConfigurationTest {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         vm.assume(id != 0);
 
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](2);
-        actors[0] = AccountConfiguration.InitialActor({
-            actorId: id, authenticator: address(k1Authenticator), scope: 0, policyData: ""
-        });
-        actors[1] = AccountConfiguration.InitialActor({
-            actorId: id, authenticator: address(k1Authenticator), scope: 0, policyData: ""
-        });
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](2);
+        actors[0] =
+            Keystore.InitialActor({actorId: id, authenticator: address(k1Authenticator), scope: 0, policyData: ""});
+        actors[1] =
+            Keystore.InitialActor({actorId: id, authenticator: address(k1Authenticator), scope: 0, policyData: ""});
 
         uint256 chainId = _acceptedChainId(multichain);
         (MockERC1271Wallet wallet, bytes memory sig) = _walletAndSig(ownerPk, chainId, actors);
 
-        vm.expectRevert(AccountConfiguration.ActorsNotSortedOrDuplicate.selector);
-        accountConfiguration.importAccount(address(wallet), chainId, actors, sig);
+        vm.expectRevert(Keystore.ActorsNotSortedOrDuplicate.selector);
+        keystore.importAccount(address(wallet), chainId, actors, sig);
     }
 
     /// @notice Verifies importAccount reverts when an initial actor names an authenticator below the K1 sentinel.
@@ -386,15 +378,14 @@ contract ImportAccountTest is AccountConfigurationTest {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         vm.assume(actorId != 0);
 
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](1);
-        actors[0] =
-            AccountConfiguration.InitialActor({actorId: actorId, authenticator: address(0), scope: 0, policyData: ""});
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
+        actors[0] = Keystore.InitialActor({actorId: actorId, authenticator: address(0), scope: 0, policyData: ""});
 
         uint256 chainId = _acceptedChainId(multichain);
         (MockERC1271Wallet wallet, bytes memory sig) = _walletAndSig(ownerPk, chainId, actors);
 
-        vm.expectRevert(AccountConfiguration.InvalidAuthenticator.selector);
-        accountConfiguration.importAccount(address(wallet), chainId, actors, sig);
+        vm.expectRevert(Keystore.InvalidAuthenticator.selector);
+        keystore.importAccount(address(wallet), chainId, actors, sig);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -405,13 +396,13 @@ contract ImportAccountTest is AccountConfigurationTest {
     /// @dev Sets localSequence to 1 and registers the imported actor as live.
     function test_importAccount_success_validSignatureLocalChain(uint256 ownerSeed) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
-        AccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(ownerPk));
+        Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(ownerPk));
         (MockERC1271Wallet wallet, bytes memory sig) = _walletAndSig(ownerPk, block.chainid, actors);
 
-        accountConfiguration.importAccount(address(wallet), block.chainid, actors, sig);
+        keystore.importAccount(address(wallet), block.chainid, actors, sig);
 
-        assertEq(accountConfiguration.getChangeSequences(address(wallet)).local, 1);
-        assertTrue(accountConfiguration.isActor(address(wallet), bytes32(bytes20(vm.addr(ownerPk)))));
+        assertEq(keystore.getChangeSequences(address(wallet)).local, 1);
+        assertTrue(keystore.isActor(address(wallet), bytes32(bytes20(vm.addr(ownerPk)))));
     }
 
     /// @notice Verifies a chainId == 0 (multichain) import signature authorizes import and still sets localSequence.
@@ -419,43 +410,43 @@ contract ImportAccountTest is AccountConfigurationTest {
     ///      (the local initialized flag) while the multichain channel stays 0 — the source always writes local.
     function test_importAccount_success_multichainSignature(uint256 ownerSeed) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
-        AccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(ownerPk));
+        Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(ownerPk));
         (MockERC1271Wallet wallet, bytes memory sig) = _walletAndSig(ownerPk, 0, actors);
 
-        accountConfiguration.importAccount(address(wallet), 0, actors, sig);
+        keystore.importAccount(address(wallet), 0, actors, sig);
 
-        assertEq(accountConfiguration.getChangeSequences(address(wallet)).local, 1);
-        assertEq(accountConfiguration.getChangeSequences(address(wallet)).multichain, 0);
-        assertTrue(accountConfiguration.isActor(address(wallet), bytes32(bytes20(vm.addr(ownerPk)))));
+        assertEq(keystore.getChangeSequences(address(wallet)).local, 1);
+        assertEq(keystore.getChangeSequences(address(wallet)).multichain, 0);
+        assertTrue(keystore.isActor(address(wallet), bytes32(bytes20(vm.addr(ownerPk)))));
     }
 
     /// @notice Verifies importAccount emits AccountImported(account) exactly once on the happy path.
     /// @dev The event is asserted here (and only here) per the one-event-per-test convention.
     function test_importAccount_success_emitsAccountImported(uint256 ownerSeed, bool multichain) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
-        AccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(ownerPk));
+        Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(ownerPk));
         uint256 chainId = _acceptedChainId(multichain);
         (MockERC1271Wallet wallet, bytes memory sig) = _walletAndSig(ownerPk, chainId, actors);
 
-        vm.expectEmit(true, true, true, true, address(accountConfiguration));
-        emit AccountConfiguration.AccountImported(address(wallet));
-        accountConfiguration.importAccount(address(wallet), chainId, actors, sig);
+        vm.expectEmit(true, true, true, true, address(keystore));
+        emit Keystore.AccountImported(address(wallet));
+        keystore.importAccount(address(wallet), chainId, actors, sig);
     }
 
     /// @notice Verifies FLAG_REVOKE_DEFAULT_EOA is set after import (the implicit default-EOA self key is disabled).
     /// @dev With the flag set and no explicit self actor, the account's own self-actorId is not a live actor.
     function test_importAccount_success_defaultEoaRevokedFlagSet(uint256 ownerSeed, bool multichain) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
-        AccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(ownerPk));
+        Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(vm.addr(ownerPk));
         uint256 chainId = _acceptedChainId(multichain);
         (MockERC1271Wallet wallet, bytes memory sig) = _walletAndSig(ownerPk, chainId, actors);
 
-        accountConfiguration.importAccount(address(wallet), chainId, actors, sig);
+        keystore.importAccount(address(wallet), chainId, actors, sig);
 
         // The implicit default EOA (self-actorId) is disabled by default on import.
-        assertFalse(accountConfiguration.isActor(address(wallet), bytes32(bytes20(address(wallet)))));
-        AccountConfiguration.ActorConfig memory selfConfig =
-            accountConfiguration.getActorConfig(address(wallet), bytes32(bytes20(address(wallet))));
+        assertFalse(keystore.isActor(address(wallet), bytes32(bytes20(address(wallet)))));
+        Keystore.ActorConfig memory selfConfig =
+            keystore.getActorConfig(address(wallet), bytes32(bytes20(address(wallet))));
         assertEq(selfConfig.authenticator, address(0));
     }
 
@@ -470,17 +461,16 @@ contract ImportAccountTest is AccountConfigurationTest {
         // Keep the ascending block clear of 0 and clear of the low address range that could collide with sentinels.
         uint256 base = bound(baseSeed, 1000, type(uint32).max);
 
-        AccountConfiguration.InitialActor[] memory actors = _ascendingK1Actors(count, base);
+        Keystore.InitialActor[] memory actors = _ascendingK1Actors(count, base);
         (MockERC1271Wallet wallet, bytes memory sig) = _walletAndSig(ownerPk, block.chainid, actors);
 
-        accountConfiguration.importAccount(address(wallet), block.chainid, actors, sig);
+        keystore.importAccount(address(wallet), block.chainid, actors, sig);
 
-        assertEq(accountConfiguration.getChangeSequences(address(wallet)).local, 1);
+        assertEq(keystore.getChangeSequences(address(wallet)).local, 1);
         for (uint256 i; i < count; i++) {
             bytes32 actorId = actors[i].actorId;
-            assertTrue(accountConfiguration.isActor(address(wallet), actorId));
-            AccountConfiguration.ActorConfig memory config =
-                accountConfiguration.getActorConfig(address(wallet), actorId);
+            assertTrue(keystore.isActor(address(wallet), actorId));
+            Keystore.ActorConfig memory config = keystore.getActorConfig(address(wallet), actorId);
             assertEq(config.authenticator, address(k1Authenticator));
             assertEq(config.scope, 0);
             assertEq(config.expiry, 0);
@@ -501,15 +491,15 @@ contract ImportAccountTest is AccountConfigurationTest {
         // Delegate the EOA's code to the ERC-1271 implementation (code = 0xef0100 || delegate).
         vm.etch(eoa, abi.encodePacked(hex"ef0100", address(impl)));
 
-        AccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(device);
+        Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(device);
         bytes32 digest = _computeImportDigest(eoa, actors);
         bytes memory sig = _signDigest(ownerPk, digest);
 
-        accountConfiguration.importAccount(eoa, uint64(block.chainid), actors, sig);
+        keystore.importAccount(eoa, uint64(block.chainid), actors, sig);
 
-        assertEq(accountConfiguration.getChangeSequences(eoa).local, 1);
-        assertTrue(accountConfiguration.isActor(eoa, bytes32(bytes20(device))));
-        assertFalse(accountConfiguration.isActor(eoa, bytes32(bytes20(eoa))));
+        assertEq(keystore.getChangeSequences(eoa).local, 1);
+        assertTrue(keystore.isActor(eoa, bytes32(bytes20(device))));
+        assertFalse(keystore.isActor(eoa, bytes32(bytes20(eoa))));
     }
 
     /// @notice Verifies a real EIP-7702 EOA delegated to DefaultAccount can self-import with its own k1 signature.
@@ -524,21 +514,21 @@ contract ImportAccountTest is AccountConfigurationTest {
         vm.assume(eoa != device);
         vm.etch(eoa, abi.encodePacked(hex"ef0100", defaultAccountImplementation));
 
-        AccountConfiguration.InitialActor[] memory actors = _singleUnrestrictedActor(device);
+        Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(device);
         bytes32 digest = _computeImportDigest(eoa, actors);
         // importAccount validates via the account's ERC-1271, which wraps: sign replaySafeHash(eoa, digest).
-        accountConfiguration.importAccount(
-            eoa, uint64(block.chainid), actors, _buildK1Auth(eoaPk, accountConfiguration.replaySafeHash(eoa, digest))
+        keystore.importAccount(
+            eoa, uint64(block.chainid), actors, _buildK1Auth(eoaPk, keystore.replaySafeHash(eoa, digest))
         );
 
-        assertEq(accountConfiguration.getChangeSequences(eoa).local, 1);
-        assertTrue(accountConfiguration.isActor(eoa, bytes32(bytes20(device))));
-        assertFalse(accountConfiguration.isActor(eoa, bytes32(bytes20(eoa))));
+        assertEq(keystore.getChangeSequences(eoa).local, 1);
+        assertTrue(keystore.isActor(eoa, bytes32(bytes20(device))));
+        assertFalse(keystore.isActor(eoa, bytes32(bytes20(eoa))));
 
         // The implicit default EOA is disabled after import: its own k1 sig now finds no config.
         bytes32 h = keccak256("post import");
-        vm.expectRevert(AccountConfiguration.DefaultEoaRevoked.selector);
-        accountConfiguration.authenticateActor(eoa, h, _buildK1Auth(eoaPk, h));
+        vm.expectRevert(Keystore.DefaultEoaRevoked.selector);
+        keystore.authenticateActor(eoa, h, _buildK1Auth(eoaPk, h));
     }
 
     /// @notice Verifies a live 7702 EOA that lists its self-actorId as an explicit k1 owner keeps its key past import.
@@ -549,28 +539,25 @@ contract ImportAccountTest is AccountConfigurationTest {
         address eoa = vm.addr(eoaPk);
         vm.etch(eoa, abi.encodePacked(hex"ef0100", defaultAccountImplementation));
 
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](1);
-        actors[0] = AccountConfiguration.InitialActor({
-            actorId: bytes32(bytes20(eoa)),
-            authenticator: accountConfiguration.K1_AUTHENTICATOR(),
-            scope: 0,
-            policyData: ""
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
+        actors[0] = Keystore.InitialActor({
+            actorId: bytes32(bytes20(eoa)), authenticator: keystore.K1_AUTHENTICATOR(), scope: 0, policyData: ""
         });
 
         bytes32 digest = _computeImportDigest(eoa, actors);
         // importAccount validates via the account's ERC-1271, which wraps: sign replaySafeHash(eoa, digest).
-        accountConfiguration.importAccount(
-            eoa, uint64(block.chainid), actors, _buildK1Auth(eoaPk, accountConfiguration.replaySafeHash(eoa, digest))
+        keystore.importAccount(
+            eoa, uint64(block.chainid), actors, _buildK1Auth(eoaPk, keystore.replaySafeHash(eoa, digest))
         );
 
-        assertEq(accountConfiguration.getChangeSequences(eoa).local, 1);
+        assertEq(keystore.getChangeSequences(eoa).local, 1);
         // The self-actorId is a live explicit owner.
-        assertTrue(accountConfiguration.isActor(eoa, bytes32(bytes20(eoa))));
+        assertTrue(keystore.isActor(eoa, bytes32(bytes20(eoa))));
 
         // The same key still authenticates as a full owner — now via its explicit self config, not the (disabled)
         // implicit fallback.
         bytes32 h = keccak256("post import");
-        (, uint8 scope,) = accountConfiguration.authenticateActor(eoa, h, _buildK1Auth(eoaPk, h));
+        (, uint8 scope,) = keystore.authenticateActor(eoa, h, _buildK1Auth(eoaPk, h));
         assertEq(scope, 0);
     }
 }

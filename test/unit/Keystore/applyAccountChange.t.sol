@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
-import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
+import {Keystore} from "../../../src/Keystore.sol";
+import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice Branch-complete, fuzz-by-default suite for the account lock surface: applySignedLockChanges (op = lock /
 ///         unlock), isLocked, getLockStatus, the onlyUnlocked modifier and _checkAndClearLock. Lock state changes
@@ -10,31 +10,26 @@ import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 ///         tests use a controllable key: an uninitialized EOA at vm.addr(pk) signs with its inline default-EOA self
 ///         (scope 0 admin), and anyone (here the test) relays. Tests that must drive an onlyUnlocked-guarded config
 ///         path (applySignedActorChanges) create a real k1 account so the authenticated actor can change actors.
-contract AccountLockTest is AccountConfigurationTest {
+contract AccountLockTest is KeystoreTest {
     // ── Local fuzz-bound helpers ──
 
     /// @dev Keep a fuzzed account out of the zero address, the system contract, and the forge-std cheatcode /
     ///      console addresses so it acts as a clean, code-free account.
     function _assumeSafeAccount(address account) internal view {
         vm.assume(account != address(0));
-        vm.assume(account != address(accountConfiguration));
+        vm.assume(account != address(keystore));
         vm.assume(account != VM_ADDRESS);
         vm.assume(account != CONSOLE);
     }
 
     /// @dev A single authorize-actor change granting an unrestricted k1 owner (scope 0, no expiry, no policy).
-    function _oneAuthorizeChange(bytes32 actorId)
-        internal
-        view
-        returns (AccountConfiguration.ActorChange[] memory changes)
-    {
-        changes = new AccountConfiguration.ActorChange[](1);
-        changes[0] = AccountConfiguration.ActorChange({
+    function _oneAuthorizeChange(bytes32 actorId) internal view returns (Keystore.ActorChange[] memory changes) {
+        changes = new Keystore.ActorChange[](1);
+        changes[0] = Keystore.ActorChange({
             changeType: 0x01,
             actorId: actorId,
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}),
-                bytes("")
+                Keystore.ActorConfig({authenticator: address(k1Authenticator), scope: 0x00, expiry: 0}), bytes("")
             )
         });
     }
@@ -42,20 +37,19 @@ contract AccountLockTest is AccountConfigurationTest {
     /// @dev Authorize a k1 actor (actorId = bytes32(bytes20(newSigner))) with `scope` on `account`, signed by the
     ///      account's admin owner `ownerPk`.
     function _authorizeK1ActorWithScope(address account, uint256 ownerPk, address newSigner, uint8 scope) internal {
-        AccountConfiguration.ActorChange[] memory changes = new AccountConfiguration.ActorChange[](1);
-        changes[0] = AccountConfiguration.ActorChange({
+        Keystore.ActorChange[] memory changes = new Keystore.ActorChange[](1);
+        changes[0] = Keystore.ActorChange({
             changeType: 0x01,
             actorId: bytes32(bytes20(newSigner)),
             data: abi.encode(
-                AccountConfiguration.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0}),
-                bytes("")
+                Keystore.ActorConfig({authenticator: address(k1Authenticator), scope: scope, expiry: 0}), bytes("")
             )
         });
         uint64 chainId = uint64(block.chainid);
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        uint64 seq = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, chainId, seq, changes);
         bytes memory auth = _buildK1Auth(ownerPk, digest);
-        accountConfiguration.applySignedActorChanges(account, chainId, changes, auth);
+        keystore.applySignedActorChanges(account, chainId, changes, auth);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -76,11 +70,11 @@ contract AccountLockTest is AccountConfigurationTest {
         address scopedSigner = vm.addr(scopedPk);
         vm.assume(scopedSigner != account);
 
-        _authorizeK1ActorWithScope(account, ownerPk, scopedSigner, accountConfiguration.SCOPE_SENDER());
+        _authorizeK1ActorWithScope(account, ownerPk, scopedSigner, keystore.SCOPE_SENDER());
 
         bytes memory auth = _lockAuth(scopedPk, account, delay);
-        vm.expectRevert(AccountConfiguration.UnauthorizedLockChange.selector);
-        accountConfiguration.applySignedLockChanges(account, LOCK_OP, delay, auth);
+        vm.expectRevert(Keystore.UnauthorizedLockChange.selector);
+        keystore.applySignedLockChanges(account, LOCK_OP, delay, auth);
     }
 
     /// @notice applySignedLockChanges reverts UnknownLockOp for any op other than LOCK_OP / UNLOCK_OP.
@@ -90,12 +84,12 @@ contract AccountLockTest is AccountConfigurationTest {
         _assumeSafeAccount(account);
         vm.assume(op != LOCK_OP && op != UNLOCK_OP);
 
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        uint64 seq = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeLockChangeDigest(account, block.chainid, op, delay, seq);
         bytes memory auth = _buildK1Auth(pk, digest);
 
-        vm.expectRevert(AccountConfiguration.UnknownLockOp.selector);
-        accountConfiguration.applySignedLockChanges(account, op, delay, auth);
+        vm.expectRevert(Keystore.UnknownLockOp.selector);
+        keystore.applySignedLockChanges(account, op, delay, auth);
     }
 
     /// @notice A lock op (op = 1) with a zero unlock delay reverts ZeroUnlockDelay.
@@ -106,8 +100,8 @@ contract AccountLockTest is AccountConfigurationTest {
         _assumeSafeAccount(account);
 
         bytes memory auth = _lockAuth(pk, account, 0);
-        vm.expectRevert(AccountConfiguration.ZeroUnlockDelay.selector);
-        accountConfiguration.applySignedLockChanges(account, LOCK_OP, 0, auth);
+        vm.expectRevert(Keystore.ZeroUnlockDelay.selector);
+        keystore.applySignedLockChanges(account, LOCK_OP, 0, auth);
     }
 
     /// @notice A lock op reverts AccountIsLocked when the account is already hard-locked.
@@ -122,8 +116,8 @@ contract AccountLockTest is AccountConfigurationTest {
         _signedLock(pk, account, firstDelay);
 
         bytes memory auth = _lockAuth(pk, account, secondDelay);
-        vm.expectRevert(AccountConfiguration.AccountIsLocked.selector);
-        accountConfiguration.applySignedLockChanges(account, LOCK_OP, secondDelay, auth);
+        vm.expectRevert(Keystore.AccountIsLocked.selector);
+        keystore.applySignedLockChanges(account, LOCK_OP, secondDelay, auth);
     }
 
     /// @notice An unlock op (op = 2) with a non-zero unlock delay reverts InvalidUnlockDelay.
@@ -134,12 +128,12 @@ contract AccountLockTest is AccountConfigurationTest {
         _assumeSafeAccount(account);
         delay = uint16(bound(delay, 1, type(uint16).max));
 
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        uint64 seq = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeLockChangeDigest(account, block.chainid, UNLOCK_OP, delay, seq);
         bytes memory auth = _buildK1Auth(pk, digest);
 
-        vm.expectRevert(AccountConfiguration.InvalidUnlockDelay.selector);
-        accountConfiguration.applySignedLockChanges(account, UNLOCK_OP, delay, auth);
+        vm.expectRevert(Keystore.InvalidUnlockDelay.selector);
+        keystore.applySignedLockChanges(account, UNLOCK_OP, delay, auth);
     }
 
     /// @notice An unlock op reverts NotLocked when the account has never been locked (FLAG_LOCKED clear).
@@ -149,8 +143,8 @@ contract AccountLockTest is AccountConfigurationTest {
         _assumeSafeAccount(account);
 
         bytes memory auth = _unlockAuth(pk, account);
-        vm.expectRevert(AccountConfiguration.NotLocked.selector);
-        accountConfiguration.applySignedLockChanges(account, UNLOCK_OP, 0, auth);
+        vm.expectRevert(Keystore.NotLocked.selector);
+        keystore.applySignedLockChanges(account, UNLOCK_OP, 0, auth);
     }
 
     /// @notice An unlock op reverts NotLocked once an unlock has already been initiated.
@@ -167,8 +161,8 @@ contract AccountLockTest is AccountConfigurationTest {
         _signedUnlock(pk, account);
 
         bytes memory auth = _unlockAuth(pk, account);
-        vm.expectRevert(AccountConfiguration.NotLocked.selector);
-        accountConfiguration.applySignedLockChanges(account, UNLOCK_OP, 0, auth);
+        vm.expectRevert(Keystore.NotLocked.selector);
+        keystore.applySignedLockChanges(account, UNLOCK_OP, 0, auth);
     }
 
     /// @notice A replayed lock auth fails: the local sequence advanced on the first success, so the signed digest no
@@ -180,10 +174,10 @@ contract AccountLockTest is AccountConfigurationTest {
         delay = uint16(bound(delay, 1, type(uint16).max));
 
         bytes memory auth = _lockAuth(pk, account, delay); // signed over sequence 0
-        accountConfiguration.applySignedLockChanges(account, LOCK_OP, delay, auth); // sequence 0 -> 1
+        keystore.applySignedLockChanges(account, LOCK_OP, delay, auth); // sequence 0 -> 1
 
         vm.expectRevert();
-        accountConfiguration.applySignedLockChanges(account, LOCK_OP, delay, auth);
+        keystore.applySignedLockChanges(account, LOCK_OP, delay, auth);
     }
 
     /// @notice A lock auth signed over a sequence other than the account's current one fails to authenticate.
@@ -196,12 +190,12 @@ contract AccountLockTest is AccountConfigurationTest {
         delay = uint16(bound(delay, 1, type(uint16).max));
         seqOffset = uint64(bound(seqOffset, 1, type(uint64).max - 1));
 
-        uint64 wrongSeq = accountConfiguration.getChangeSequences(account).local + seqOffset;
+        uint64 wrongSeq = keystore.getChangeSequences(account).local + seqOffset;
         bytes32 digest = _computeLockChangeDigest(account, block.chainid, LOCK_OP, delay, wrongSeq);
         bytes memory auth = _buildK1Auth(pk, digest);
 
         vm.expectRevert();
-        accountConfiguration.applySignedLockChanges(account, LOCK_OP, delay, auth);
+        keystore.applySignedLockChanges(account, LOCK_OP, delay, auth);
     }
 
     /// @notice applySignedActorChanges reverts AccountIsLocked while the target account is hard-locked.
@@ -213,14 +207,14 @@ contract AccountLockTest is AccountConfigurationTest {
 
         _signedLock(pk, account, delay);
 
-        AccountConfiguration.ActorChange[] memory changes = _oneAuthorizeChange(bytes32(bytes20(vm.addr(pk))));
+        Keystore.ActorChange[] memory changes = _oneAuthorizeChange(bytes32(bytes20(vm.addr(pk))));
         uint64 chainId = uint64(block.chainid);
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        uint64 seq = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, chainId, seq, changes);
         bytes memory auth = _buildK1Auth(pk, digest);
 
-        vm.expectRevert(AccountConfiguration.AccountIsLocked.selector);
-        accountConfiguration.applySignedActorChanges(account, chainId, changes, auth);
+        vm.expectRevert(Keystore.AccountIsLocked.selector);
+        keystore.applySignedActorChanges(account, chainId, changes, auth);
     }
 
     /// @notice importAccount reverts AccountIsLocked while the target account is hard-locked.
@@ -234,9 +228,9 @@ contract AccountLockTest is AccountConfigurationTest {
 
         _signedLock(pk, account, delay);
 
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](0);
-        vm.expectRevert(AccountConfiguration.AccountIsLocked.selector);
-        accountConfiguration.importAccount(account, block.chainid, actors, "");
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](0);
+        vm.expectRevert(Keystore.AccountIsLocked.selector);
+        keystore.importAccount(account, block.chainid, actors, "");
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -254,13 +248,12 @@ contract AccountLockTest is AccountConfigurationTest {
 
         _signedLock(pk, account, delay);
 
-        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 storedDelay) =
-            accountConfiguration.getLockStatus(account);
+        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 storedDelay) = keystore.getLockStatus(account);
         assertTrue(locked);
         assertFalse(hasInitiatedUnlock);
         assertEq(unlocksAt, type(uint40).max);
         assertEq(storedDelay, delay);
-        assertTrue(accountConfiguration.isLocked(account));
+        assertTrue(keystore.isLocked(account));
     }
 
     /// @notice A lock op emits AccountLocked(account, unlockDelay) exactly once. Sole assertion of this event.
@@ -271,9 +264,9 @@ contract AccountLockTest is AccountConfigurationTest {
         delay = uint16(bound(delay, 1, type(uint16).max));
 
         bytes memory auth = _lockAuth(pk, account, delay);
-        vm.expectEmit(true, false, false, true, address(accountConfiguration));
-        emit AccountConfiguration.AccountLocked(account, delay);
-        accountConfiguration.applySignedLockChanges(account, LOCK_OP, delay, auth);
+        vm.expectEmit(true, false, false, true, address(keystore));
+        emit Keystore.AccountLocked(account, delay);
+        keystore.applySignedLockChanges(account, LOCK_OP, delay, auth);
     }
 
     /// @notice An account can be re-locked after a prior unlock delay has fully elapsed.
@@ -299,12 +292,11 @@ contract AccountLockTest is AccountConfigurationTest {
         _signedUnlock(pk, account);
 
         vm.warp(t0 + firstDelay + extra); // at or past unlocksAt: account is unlocked
-        assertFalse(accountConfiguration.isLocked(account));
+        assertFalse(keystore.isLocked(account));
 
         _signedLock(pk, account, secondDelay);
 
-        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 storedDelay) =
-            accountConfiguration.getLockStatus(account);
+        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 storedDelay) = keystore.getLockStatus(account);
         assertTrue(locked);
         assertFalse(hasInitiatedUnlock);
         assertEq(unlocksAt, type(uint40).max);
@@ -324,13 +316,12 @@ contract AccountLockTest is AccountConfigurationTest {
         vm.warp(t0);
         _signedUnlock(pk, account);
 
-        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 storedDelay) =
-            accountConfiguration.getLockStatus(account);
+        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 storedDelay) = keystore.getLockStatus(account);
         assertTrue(locked); // block.timestamp (t0) < unlocksAt (t0 + delay)
         assertTrue(hasInitiatedUnlock);
         assertEq(unlocksAt, uint40(t0 + delay));
         assertEq(storedDelay, 0);
-        assertTrue(accountConfiguration.isLocked(account));
+        assertTrue(keystore.isLocked(account));
     }
 
     /// @notice An unlock op emits AccountUnlockInitiated(account, unlocksAt) exactly once. Sole assertion.
@@ -345,16 +336,16 @@ contract AccountLockTest is AccountConfigurationTest {
         vm.warp(t0);
 
         bytes memory auth = _unlockAuth(pk, account);
-        vm.expectEmit(true, false, false, true, address(accountConfiguration));
-        emit AccountConfiguration.AccountUnlockInitiated(account, uint40(t0 + delay));
-        accountConfiguration.applySignedLockChanges(account, UNLOCK_OP, 0, auth);
+        vm.expectEmit(true, false, false, true, address(keystore));
+        emit Keystore.AccountUnlockInitiated(account, uint40(t0 + delay));
+        keystore.applySignedLockChanges(account, UNLOCK_OP, 0, auth);
     }
 
     /// @notice isLocked is false for an account that has never been locked (FLAG_LOCKED clear).
     function test_isLocked_success_falseWhenNeverLocked(address account, uint256 ts) public {
         _assumeSafeAccount(account);
         vm.warp(bound(ts, 1, 1e12));
-        assertFalse(accountConfiguration.isLocked(account));
+        assertFalse(keystore.isLocked(account));
     }
 
     /// @notice isLocked stays true for a hard-locked account at any timestamp (FLAG_LOCKED set, no pending unlock —
@@ -368,7 +359,7 @@ contract AccountLockTest is AccountConfigurationTest {
         _signedLock(pk, account, delay);
 
         vm.warp(bound(ts, 1, 1e12)); // hard-lock ignores the clock: FLAG_LOCKED set with no pending unlock
-        assertTrue(accountConfiguration.isLocked(account));
+        assertTrue(keystore.isLocked(account));
     }
 
     /// @notice isLocked remains true after an unlock is initiated while block.timestamp is strictly before unlocksAt.
@@ -389,7 +380,7 @@ contract AccountLockTest is AccountConfigurationTest {
         _signedUnlock(pk, account);
 
         vm.warp(bound(within, t0, t0 + delay - 1)); // strictly before unlocksAt == t0 + delay
-        assertTrue(accountConfiguration.isLocked(account));
+        assertTrue(keystore.isLocked(account));
     }
 
     /// @notice isLocked flips to false once block.timestamp reaches or passes unlocksAt after an initiated unlock.
@@ -409,13 +400,12 @@ contract AccountLockTest is AccountConfigurationTest {
         _signedUnlock(pk, account);
 
         vm.warp(t0 + delay + extra); // at or past unlocksAt
-        assertFalse(accountConfiguration.isLocked(account));
+        assertFalse(keystore.isLocked(account));
     }
 
     /// @notice getLockStatus reports all-clear for a never-locked account: unlocked, not initiated, zeroed fields.
     function test_getLockStatus_success_whenNeverLocked(address account) public view {
-        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 unlockDelay) =
-            accountConfiguration.getLockStatus(account);
+        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 unlockDelay) = keystore.getLockStatus(account);
         assertFalse(locked);
         assertFalse(hasInitiatedUnlock);
         assertEq(unlocksAt, 0);
@@ -445,8 +435,7 @@ contract AccountLockTest is AccountConfigurationTest {
 
         vm.warp(t0 + delay + extra); // past unlocksAt, but no onlyUnlocked call to clear it
 
-        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 storedDelay) =
-            accountConfiguration.getLockStatus(account);
+        (bool locked, bool hasInitiatedUnlock, uint40 unlocksAt, uint16 storedDelay) = keystore.getLockStatus(account);
         assertFalse(locked);
         assertTrue(hasInitiatedUnlock);
         assertEq(unlocksAt, uint40(t0 + delay));
@@ -478,19 +467,19 @@ contract AccountLockTest is AccountConfigurationTest {
         vm.warp(t0);
         _signedUnlock(pk, account);
         vm.warp(t0 + delay + extra); // at or past unlocksAt: unlocked
-        assertFalse(accountConfiguration.isLocked(account));
+        assertFalse(keystore.isLocked(account));
 
-        AccountConfiguration.ActorChange[] memory changes = _oneAuthorizeChange(newActorId);
+        Keystore.ActorChange[] memory changes = _oneAuthorizeChange(newActorId);
         uint64 chainId = uint64(block.chainid);
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        uint64 seq = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, chainId, seq, changes);
         bytes memory auth = _buildK1Auth(pk, digest);
 
-        accountConfiguration.applySignedActorChanges(account, chainId, changes, auth);
+        keystore.applySignedActorChanges(account, chainId, changes, auth);
 
-        assertTrue(accountConfiguration.isActor(account, newActorId));
+        assertTrue(keystore.isActor(account, newActorId));
         // The onlyUnlocked prelude cleared the stale unlock timestamp back to 0.
-        (,, uint40 unlocksAt,) = accountConfiguration.getLockStatus(account);
+        (,, uint40 unlocksAt,) = keystore.getLockStatus(account);
         assertEq(unlocksAt, 0);
     }
 
@@ -514,13 +503,13 @@ contract AccountLockTest is AccountConfigurationTest {
         _signedUnlock(pk, account);
         vm.warp(bound(within, t0, t0 + delay - 1)); // strictly before unlocksAt == t0 + delay: still frozen
 
-        AccountConfiguration.ActorChange[] memory changes = _oneAuthorizeChange(bytes32(bytes20(vm.addr(pk))));
+        Keystore.ActorChange[] memory changes = _oneAuthorizeChange(bytes32(bytes20(vm.addr(pk))));
         uint64 chainId = uint64(block.chainid);
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        uint64 seq = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeActorChangeBatchDigest(account, chainId, seq, changes);
         bytes memory auth = _buildK1Auth(pk, digest);
 
-        vm.expectRevert(AccountConfiguration.AccountIsLocked.selector);
-        accountConfiguration.applySignedActorChanges(account, chainId, changes, auth);
+        vm.expectRevert(Keystore.AccountIsLocked.selector);
+        keystore.applySignedActorChanges(account, chainId, changes, auth);
     }
 }

@@ -3,8 +3,8 @@ pragma solidity ^0.8.30;
 
 import {CanonicalHighRatePayerAccount} from "../../../src/accounts/CanonicalHighRatePayerAccount.sol";
 import {Call, DefaultAccount} from "../../../src/accounts/DefaultAccount.sol";
-import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
-import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
+import {Keystore} from "../../../src/Keystore.sol";
+import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 contract HighRatePayerMockTarget {
     uint256 public value;
@@ -18,7 +18,7 @@ contract HighRatePayerMockTarget {
     }
 }
 
-contract CanonicalHighRatePayerAccountTest is AccountConfigurationTest {
+contract CanonicalHighRatePayerAccountTest is KeystoreTest {
     uint256 constant ACTOR_PK = 100;
     HighRatePayerMockTarget public target;
     address public highRatePayerImplementation;
@@ -26,21 +26,21 @@ contract CanonicalHighRatePayerAccountTest is AccountConfigurationTest {
     function setUp() public override {
         super.setUp();
         target = new HighRatePayerMockTarget();
-        highRatePayerImplementation = address(new CanonicalHighRatePayerAccount(address(accountConfiguration)));
+        highRatePayerImplementation = address(new CanonicalHighRatePayerAccount(address(keystore)));
     }
 
     function _createHighRatePayerK1Account(uint256 pk) internal returns (address account, bytes32 actorId) {
         address signer = vm.addr(pk);
         actorId = bytes32(bytes20(signer));
 
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](1);
-        actors[0] = AccountConfiguration.InitialActor({
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
+        actors[0] = Keystore.InitialActor({
             actorId: actorId, authenticator: address(k1Authenticator), scope: 0, policyData: ""
         });
 
         // ERC-1167 clone of CanonicalHighRatePayerAccount — the fixed delegation required for high-rate paying.
         bytes memory bytecode = _computeERC1167Bytecode(highRatePayerImplementation);
-        account = accountConfiguration.createAccount(bytes32(uint256(0xbeef)), bytecode, actors);
+        account = keystore.createAccount(bytes32(uint256(0xbeef)), bytecode, actors);
     }
 
     /// @dev Hard-lock `account` via the signed lock path, authorized by its admin owner key `pk`.
@@ -222,7 +222,7 @@ contract CanonicalHighRatePayerAccountTest is AccountConfigurationTest {
 
         bytes32 hash = keccak256("validate me");
         // verifySignature applies the account-scoped EIP-7739 wrap, so sign the replaySafeHash digest.
-        bytes memory authData = _buildK1Auth(ACTOR_PK, accountConfiguration.replaySafeHash(account, hash));
+        bytes memory authData = _buildK1Auth(ACTOR_PK, keystore.replaySafeHash(account, hash));
 
         bytes4 result = CanonicalHighRatePayerAccount(payable(account)).isValidSignature(hash, authData);
         assertEq(result, bytes4(0x1626ba7e));

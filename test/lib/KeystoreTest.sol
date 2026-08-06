@@ -8,15 +8,15 @@ import {Math} from "openzeppelin/utils/math/Math.sol";
 import {P256} from "openzeppelin/utils/cryptography/P256.sol";
 import {WebAuthn} from "openzeppelin/utils/cryptography/WebAuthn.sol";
 
-import {AccountConfiguration} from "../../src/AccountConfiguration.sol";
+import {Keystore} from "../../src/Keystore.sol";
 import {DefaultAccount} from "../../src/accounts/DefaultAccount.sol";
 import {DelegateAuthenticator} from "../../src/authenticators/DelegateAuthenticator.sol";
 import {IAuthenticator} from "../../src/interfaces/IAuthenticator.sol";
 import {P256Authenticator} from "../../src/authenticators/P256Authenticator.sol";
 import {WebAuthnAuthenticator} from "../../src/authenticators/WebAuthnAuthenticator.sol";
 
-contract AccountConfigurationTest is Test {
-    AccountConfiguration public accountConfiguration;
+contract KeystoreTest is Test {
+    Keystore public keystore;
     // The single canonical secp256k1 authenticator (internal ecrecover). Not a deployed contract — it's the
     // K1_AUTHENTICATOR sentinel (address(1)); k1 auth blobs are K1_AUTHENTICATOR(20) || r‖s‖v.
     address public k1Authenticator;
@@ -44,12 +44,12 @@ contract AccountConfigurationTest is Test {
     uint8 constant UNLOCK_OP = 0x02;
 
     function setUp() public virtual {
-        accountConfiguration = new AccountConfiguration();
-        k1Authenticator = accountConfiguration.K1_AUTHENTICATOR();
+        keystore = new Keystore();
+        k1Authenticator = keystore.K1_AUTHENTICATOR();
         p256Authenticator = IAuthenticator(new P256Authenticator());
         webAuthnAuthenticator = IAuthenticator(new WebAuthnAuthenticator());
-        delegateAuthenticator = IAuthenticator(new DelegateAuthenticator(address(accountConfiguration)));
-        defaultAccountImplementation = address(new DefaultAccount(address(accountConfiguration)));
+        delegateAuthenticator = IAuthenticator(new DelegateAuthenticator(address(keystore)));
+        defaultAccountImplementation = address(new DefaultAccount(address(keystore)));
     }
 
     // ── Bytecode helpers ──
@@ -64,26 +64,26 @@ contract AccountConfigurationTest is Test {
         address signer = vm.addr(pk);
         actorId = bytes32(bytes20(signer));
 
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](1);
-        actors[0] = AccountConfiguration.InitialActor({
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
+        actors[0] = Keystore.InitialActor({
             actorId: actorId, authenticator: address(k1Authenticator), scope: 0, policyData: ""
         });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        account = accountConfiguration.createAccount(bytes32(0), bytecode, actors);
+        account = keystore.createAccount(bytes32(0), bytecode, actors);
     }
 
     function _createK1AccountWithSalt(uint256 pk, bytes32 salt) internal returns (address account, bytes32 actorId) {
         address signer = vm.addr(pk);
         actorId = bytes32(bytes20(signer));
 
-        AccountConfiguration.InitialActor[] memory actors = new AccountConfiguration.InitialActor[](1);
-        actors[0] = AccountConfiguration.InitialActor({
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
+        actors[0] = Keystore.InitialActor({
             actorId: actorId, authenticator: address(k1Authenticator), scope: 0, policyData: ""
         });
 
         bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
-        account = accountConfiguration.createAccount(salt, bytecode, actors);
+        account = keystore.createAccount(salt, bytecode, actors);
     }
 
     // ── K1 signature helpers ──
@@ -105,7 +105,7 @@ contract AccountConfigurationTest is Test {
         address account,
         uint256 chainId,
         uint64 sequence,
-        AccountConfiguration.ActorChange[] memory actorChanges
+        Keystore.ActorChange[] memory actorChanges
     ) internal pure returns (bytes32) {
         bytes32[] memory actorChangeHash = new bytes32[](actorChanges.length);
         for (uint256 i; i < actorChanges.length; i++) {
@@ -141,26 +141,26 @@ contract AccountConfigurationTest is Test {
 
     /// @dev Admin auth blob for a lock op (op = 1) at the account's current local sequence.
     function _lockAuth(uint256 pk, address account, uint16 unlockDelay) internal view returns (bytes memory) {
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        uint64 seq = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeLockChangeDigest(account, block.chainid, LOCK_OP, unlockDelay, seq);
         return _buildK1Auth(pk, digest);
     }
 
     /// @dev Admin auth blob for an unlock op (op = 2) at the account's current local sequence.
     function _unlockAuth(uint256 pk, address account) internal view returns (bytes memory) {
-        uint64 seq = accountConfiguration.getChangeSequences(account).local;
+        uint64 seq = keystore.getChangeSequences(account).local;
         bytes32 digest = _computeLockChangeDigest(account, block.chainid, UNLOCK_OP, 0, seq);
         return _buildK1Auth(pk, digest);
     }
 
     /// @dev Relay a signed lock op (op = 1) authorized by `pk`.
     function _signedLock(uint256 pk, address account, uint16 unlockDelay) internal {
-        accountConfiguration.applySignedLockChanges(account, LOCK_OP, unlockDelay, _lockAuth(pk, account, unlockDelay));
+        keystore.applySignedLockChanges(account, LOCK_OP, unlockDelay, _lockAuth(pk, account, unlockDelay));
     }
 
     /// @dev Relay a signed unlock op (op = 2) authorized by `pk`.
     function _signedUnlock(uint256 pk, address account) internal {
-        accountConfiguration.applySignedLockChanges(account, UNLOCK_OP, 0, _unlockAuth(pk, account));
+        keystore.applySignedLockChanges(account, UNLOCK_OP, 0, _unlockAuth(pk, account));
     }
 
     // ── Fuzzed key bounding ──

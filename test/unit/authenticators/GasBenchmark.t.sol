@@ -3,7 +3,7 @@ pragma solidity ^0.8.30;
 
 import {Test, console} from "forge-std/Test.sol";
 
-import {AccountConfiguration} from "../../../src/AccountConfiguration.sol";
+import {Keystore} from "../../../src/Keystore.sol";
 import {DefaultAccount} from "../../../src/accounts/DefaultAccount.sol";
 import {IAuthenticator} from "../../../src/interfaces/IAuthenticator.sol";
 import {P256Authenticator} from "../../../src/authenticators/P256Authenticator.sol";
@@ -20,7 +20,7 @@ contract GasBenchmarkTest is Test {
     P256Authenticator p256;
     WebAuthnAuthenticator webAuthn;
     DelegateAuthenticator delegate;
-    AccountConfiguration config;
+    Keystore config;
     address defaultImpl;
 
     bytes32 testHash;
@@ -31,7 +31,7 @@ contract GasBenchmarkTest is Test {
     function setUp() public {
         p256 = new P256Authenticator();
         webAuthn = new WebAuthnAuthenticator();
-        config = new AccountConfiguration();
+        config = new Keystore();
         delegate = new DelegateAuthenticator(address(config));
         defaultImpl = address(new DefaultAccount(address(config)));
 
@@ -51,8 +51,8 @@ contract GasBenchmarkTest is Test {
             uint256 pkA = 0xA001;
             address signerA = vm.addr(pkA);
             bytes32 actorIdA = bytes32(bytes20(signerA));
-            AccountConfiguration.InitialActor[] memory actorsA = new AccountConfiguration.InitialActor[](1);
-            actorsA[0] = AccountConfiguration.InitialActor({
+            Keystore.InitialActor[] memory actorsA = new Keystore.InitialActor[](1);
+            actorsA[0] = Keystore.InitialActor({
                 actorId: actorIdA, authenticator: config.K1_AUTHENTICATOR(), scope: 0, policyData: ""
             });
             bytes memory bytecode =
