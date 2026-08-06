@@ -200,8 +200,8 @@ contract AccountEnvironmentTest is KeystoreTest {
     // ADMIN-ONLY LOCK CHANGES
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice A scoped (non-admin) actor cannot initiate an Unlock — lock changes are admin-only
-    ///         (UnauthorizedLockChange).
+    /// @notice A scoped (non-admin) actor cannot initiate an Unlock — every signed change is admin-only
+    ///         (UnauthorizedAccountChange).
     function test_lock_revert_scopedActorCannotUnlock(uint256 ownerSeed, uint256 scopedSeed) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         uint256 scopedPk = _boundK1Pk(scopedSeed);
@@ -214,7 +214,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertTrue(keystore.isLocked(account));
 
         Keystore.SignedAccountChanges memory s = _localBatch(scopedPk, account, _one(_unlockChange()));
-        vm.expectRevert(Keystore.UnauthorizedLockChange.selector);
+        vm.expectRevert(Keystore.UnauthorizedAccountChange.selector);
         keystore.applySignedAccountChanges(account, s);
     }
 

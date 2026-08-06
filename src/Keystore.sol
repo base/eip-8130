@@ -88,8 +88,8 @@ contract Keystore {
     /// @dev `changes` are applied in order, all-or-nothing (intersection-strict: any rejected op reverts the whole
     ///      batch). `sequence` is interpreted per `channel`:
     ///        - Local: localEpoch(32, high) || localSequence(32, low). A low half equal to {UNSEQUENCED} marks the
-    ///          batch as unsequenced (JIT) — it does not consume a sequence and only the both-channel ops are
-    ///          permitted; any other low value is a sequenced batch consumed against the account's localSequence.
+    ///          batch as unsequenced (JIT) — it does not consume a sequence (so it stays replayable until the epoch
+    ///          moves); any other low value is a sequenced batch consumed against the account's localSequence.
     ///        - Multichain: a plain uint64 consumed against the account's multichainSequence; never {UNSEQUENCED},
     ///          never carries an epoch.
     ///      `signature` is the standard authenticator(20) || authenticator-data blob authenticating the signer.
@@ -294,8 +294,8 @@ contract Keystore {
     /// @notice The signed chainId is neither 0 (multichain) nor the current chain.
     error InvalidChainId();
 
-    /// @notice The authenticated actor lacks the scope required to change actors.
-    error UnauthorizedActorChange();
+    /// @notice The batch signer is not the account admin (scope 0). Every signed account change is admin-only.
+    error UnauthorizedAccountChange();
 
     /// @notice The importAccount ERC-1271 signature check did not return the magic value.
     error InvalidImportSignature();
@@ -306,9 +306,6 @@ contract Keystore {
     /// @notice An unlock op was requested when the account was not in the hard-locked state (FLAG_LOCKED set,
     ///         FLAG_UNLOCK_INITIATED clear) — i.e. never locked, or an unlock was already initiated.
     error NotLocked();
-
-    /// @notice The authenticated actor lacks the scope required to change the lock state (admin only).
-    error UnauthorizedLockChange();
 
     /// @notice The batch's committed local epoch does not match the account's current local epoch: every unlanded
     ///         local signature at a prior epoch is dead. Applies to both the sequenced and unsequenced channels.
@@ -548,11 +545,15 @@ contract Keystore {
     ///      the contract lets a bare reduction land, so pairing it with a bump is a wallet responsibility. A bare
     ///      revoke (or expiry cut) is not durable while a replayable unsequenced grant for that actor is outstanding.
     ///
+    ///      Authorization is flat: every signed account change is admin-only, so a single up-front scope check
+    ///      (signer scope must be 0) authorizes the whole batch — there is no per-op authorization and no per-op
+    ///      sequencing restriction (any op may ride an unsequenced or sequenced batch).
+    ///
     ///      Pipeline (in order): (1) split the sequence word; (2) reject a stale local epoch on both channels;
     ///      (3) validate/advance the sequence counter BEFORE apply (reentrancy discipline); (4) compute the digest
-    ///      via the relocatable {_changesDigest} seam and authenticate; (5) iterate changes enforcing op ordering,
-    ///      per-op channel/sequencing policy, the lock policy, per-op authorization, and the solo rules. Anyone may
-    ///      relay — authorization comes entirely from the signature.
+    ///      via the relocatable {_changesDigest} seam, authenticate, and reject a non-admin signer; (5) iterate
+    ///      changes enforcing op ordering, the lock policy, and the solo rules. Anyone may relay — authorization
+    ///      comes entirely from the signature.
     ///
     /// @param account The account whose configuration is changed.
     /// @param s The signed batch (channel, ordered changes, sequence word, signature).
@@ -586,9 +587,11 @@ contract Keystore {
             a.multichainSequence = seq + 1;
         }
 
-        // (4) Authenticate over the relocatable digest.
+        // (4) Authenticate over the relocatable digest. Authorization is flat: every signed account change is
+        // admin-only, so a single scope check up front replaces any per-op authorization.
         bytes32 digest = _changesDigest(account, s.channel, s.sequence, s.changes);
         (, uint16 scope) = authenticateActor(account, digest, s.signature);
+        if (scope != 0) revert UnauthorizedAccountChange();
 
         // Lock policy is evaluated against the account's lock state at entry (lazily clearing an elapsed unlock).
         bool locked = _checkAndClearLock(account);
@@ -604,18 +607,8 @@ contract Keystore {
             if (!env && sawEnvOp) revert AuthorityOpAfterEnvOp();
             if (env) sawEnvOp = true;
 
-            // Sequencing (channel) policy: RevokeActor, Lock, Unlock are sequenced-only; AuthorizeActor and
-            // BumpLocalEpoch are permitted on both. (Multichain is always sequenced.)
-            if (!_sequencingAllowed(t, sequenced)) revert BadSequence();
-
             // Lock policy: while the account is locked, only environment ops (bump/lock/unlock) may run.
             if (locked && !env) revert AccountIsLocked();
-
-            // Per-op authorization fence against the recovered signer's scope.
-            if (!_opAuthorized(t, scope)) {
-                if (t == ChangeType.Lock || t == ChangeType.Unlock) revert UnauthorizedLockChange();
-                revert UnauthorizedActorChange();
-            }
 
             // Solo rules: Unlock is always solo; an unsequenced BumpLocalEpoch is solo.
             if (t == ChangeType.Unlock && n != 1) revert SoloOpNotSolo();
@@ -682,10 +675,10 @@ contract Keystore {
         _authorizeActor(account, actorId, cfg, policyData);
     }
 
-    /// @dev RevokeActor. `payload = abi.encode(bytes32 actorId)`. Sequenced-only (enforced by the channel policy).
-    ///      Clears the slot unconditionally. Note this alone is not durable against an outstanding replayable
-    ///      unsequenced grant for the same actorId (which would re-install into the emptied slot); to durably revoke,
-    ///      the caller batches a {BumpLocalEpoch}. This is a wallet responsibility, not contract-enforced.
+    /// @dev RevokeActor. `payload = abi.encode(bytes32 actorId)`. Clears the slot unconditionally. Note this alone is
+    ///      not durable against an outstanding replayable unsequenced grant for the same actorId (which would
+    ///      re-install into the emptied slot); to durably revoke, the caller batches a {BumpLocalEpoch}. This is a
+    ///      wallet responsibility, not contract-enforced.
     function _applyRevoke(address account, bytes calldata payload) private {
         bytes32 actorId = abi.decode(payload, (bytes32));
         _revokeActor(account, actorId);
@@ -735,19 +728,6 @@ contract Keystore {
     /// @dev Enum-ordering-as-classification: an environment op mutates the rules ops are checked against.
     function _isEnvOp(ChangeType t) private pure returns (bool) {
         return t >= ChangeType.BumpLocalEpoch;
-    }
-
-    /// @dev Sequencing (channel) policy: RevokeActor, Lock and Unlock require a sequenced batch; AuthorizeActor and
-    ///      BumpLocalEpoch are permitted on both the sequenced and unsequenced channels.
-    function _sequencingAllowed(ChangeType t, bool sequenced) private pure returns (bool) {
-        if (t == ChangeType.AuthorizeActor || t == ChangeType.BumpLocalEpoch) return true;
-        return sequenced;
-    }
-
-    /// @dev Per-op authorization against the recovered signer's scope. Only the admin (scope 0) may perform any
-    ///      signed change; every scoped (non-zero) actor is rejected for all ops, including Unlock.
-    function _opAuthorized(ChangeType, uint16 scope) private pure returns (bool) {
-        return scope == 0;
     }
 
     /// @dev Reads an actor's raw stored slot IGNORING expiry (structural presence): a populated _actorConfig entry
