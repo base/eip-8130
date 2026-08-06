@@ -9,7 +9,7 @@ import {AccountConfigurationTest} from "../../lib/AccountConfigurationTest.sol";
 ///      (via replaySafeHash), so cross-account and cross-chain replay are closed for EVERY consumer of
 ///      verifySignature, including registry-direct verifiers (e.g. precompile-based permits) that cannot call
 ///      account bytecode.
-contract AccountConfigurationERC7739Test is AccountConfigurationTest {
+contract AccountConfigurationReplaySafeHashTest is AccountConfigurationTest {
     uint256 constant OWNER_PK = 0xA11CE;
 
     /// @dev verifySignature now rehashes: a signature over the RAW app hash is rejected; the signer must sign the

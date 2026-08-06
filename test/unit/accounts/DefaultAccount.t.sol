@@ -312,7 +312,7 @@ contract DefaultAccountTest is AccountConfigurationTest {
         // Authorize the actor with SENDER scope only (no POLICY) — it is operational and can validate signatures.
         _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(actor)), k1Authenticator, SCOPE_SENDER);
 
-        // verifySignature applies the account-scoped EIP-7739 wrap, so sign the replaySafeHash digest.
+        // verifySignature applies the account-scoped replaySafeHash wrap, so sign the replaySafeHash digest.
         bytes memory authData = _buildK1Auth(actorPk, accountConfiguration.replaySafeHash(account, hash));
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);
@@ -346,7 +346,7 @@ contract DefaultAccountTest is AccountConfigurationTest {
         uint256 pk = _boundK1Pk(pkSeed);
         (address account,) = _createK1Account(pk);
 
-        // verifySignature applies the account-scoped EIP-7739 wrap, so sign the replaySafeHash digest.
+        // verifySignature applies the account-scoped replaySafeHash wrap, so sign the replaySafeHash digest.
         bytes memory authData = _buildK1Auth(pk, accountConfiguration.replaySafeHash(account, hash));
 
         bytes4 result = DefaultAccount(payable(account)).isValidSignature(hash, authData);

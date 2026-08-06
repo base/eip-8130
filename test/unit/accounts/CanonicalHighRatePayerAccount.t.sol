@@ -156,7 +156,7 @@ contract CanonicalHighRatePayerAccountTest is AccountConfigurationTest {
         (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
 
         bytes32 hash = keccak256("validate me");
-        // verifySignature applies the account-scoped EIP-7739 wrap, so sign the replaySafeHash digest.
+        // verifySignature applies the account-scoped replaySafeHash wrap, so sign the replaySafeHash digest.
         bytes memory authData = _buildK1Auth(ACTOR_PK, accountConfiguration.replaySafeHash(account, hash));
 
         bytes4 result = CanonicalHighRatePayerAccount(payable(account)).isValidSignature(hash, authData);

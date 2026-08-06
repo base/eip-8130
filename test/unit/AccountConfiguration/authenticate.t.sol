@@ -725,7 +725,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(vm.addr(actorPk))), address(k1Authenticator), scope);
 
         bool expected = scope == 0 || (scope & SCOPE_SENDER != 0);
-        // verifySignature applies the account-scoped EIP-7739 wrap.
+        // verifySignature applies the account-scoped replaySafeHash wrap.
         bytes memory auth = _buildK1Auth(actorPk, accountConfiguration.replaySafeHash(account, hash));
         assertEq(accountConfiguration.verifySignature(account, hash, auth), expected);
     }
@@ -744,7 +744,7 @@ contract AuthenticateTest is AccountConfigurationTest {
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(actorPk) != account);
         bytes32 actorId = bytes32(bytes20(vm.addr(actorPk)));
-        // verifySignature applies the account-scoped EIP-7739 wrap; replaySafeHash(account, hash) is scope-independent.
+        // verifySignature applies the account-scoped replaySafeHash wrap; replaySafeHash(account, hash) is scope-independent.
         bytes memory auth = _buildK1Auth(actorPk, accountConfiguration.replaySafeHash(account, hash));
 
         _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), SCOPE_SENDER);
