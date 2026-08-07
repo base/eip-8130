@@ -195,6 +195,19 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         assertEq(keystore.getActorConfig(account, ACTOR_B).authenticator, address(p256Authenticator));
     }
 
+    /// @notice AuthorizeActor targeting the zero actorId reverts InvalidActorId: bytes32(0) is not a usable actor
+    ///         identifier (every real id is a non-zero hash, or the non-zero self).
+    function test_authorize_revert_zeroActorId(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+
+        Keystore.SignedAccountChanges memory s = _localBatch(
+            pk, account, _one(_authorizeChange(bytes32(0), address(k1Authenticator), SENDER, _future(1 days), ""))
+        );
+        vm.expectRevert(Keystore.InvalidActorId.selector);
+        keystore.applySignedAccountChanges(account, s);
+    }
+
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // AUTHORIZE — SEQUENCED
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -483,10 +496,8 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
     // ORDERING / BATCHING
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice `[lock, revoke]` on an account that was UNLOCKED at entry succeeds: the authority-op gate reads the
-    ///         batch-entry snapshot, so a Lock earlier in the same batch does not block the following revoke (the lock
-    ///         takes effect only for later batches). Order within the batch is irrelevant to the authority op.
-    function test_ordering_success_lockThenRevoke(uint256 pk) public {
+    /// @notice `[lock, revoke]` reverts LockChangeMustBeStandalone: a Lock may not share a batch with any other change.
+    function test_ordering_revert_lockNotStandalone(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
         _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
@@ -494,47 +505,43 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
         ch[0] = _lockChange(1 hours);
         ch[1] = _revokeChange(ACTOR_A);
-        _applyLocal(pk, account, ch);
 
-        assertFalse(_isActor(account, ACTOR_A));
-        assertTrue(keystore.isLocked(account));
+        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, ch);
+        vm.expectRevert(Keystore.LockChangeMustBeStandalone.selector);
+        keystore.applySignedAccountChanges(account, s);
     }
 
-    /// @notice `[revoke, bump, lock]` succeeds: authority op first, environment ops after, reduction retired by bump.
-    function test_ordering_success_revokeBumpLock(uint256 pk) public {
+    /// @notice `[revoke, bump]` succeeds: an authority op and an environment op (epoch increment) still freely share a
+    ///         batch — only Lock/Unlock are standalone — and the revoke is retired durably by the bump.
+    function test_ordering_success_revokeThenBump(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
         _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
 
-        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](3);
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
         ch[0] = _revokeChange(ACTOR_A);
         ch[1] = _bumpChange();
-        ch[2] = _lockChange(1 hours);
         _applyLocal(pk, account, ch);
 
         assertFalse(_isActor(account, ACTOR_A));
-        assertTrue(keystore.isLocked(account));
         (uint32 epoch,) = _localEpochSeq(account);
         assertEq(epoch, 1);
     }
 
-    /// @notice Unlock may be batched with other ops (no solo rule): on a locked account `[unlock, bump]` initiates
-    ///         the unlock and bumps the epoch.
-    function test_unlock_success_batchedWithBump(uint256 pk) public {
+    /// @notice `[unlock, bump]` reverts LockChangeMustBeStandalone: an Unlock may not share a batch with any other
+    ///         change, even an environment op. Unlocking then bumping requires two separate signed batches.
+    function test_unlock_revert_notStandalone(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
         _signedLock(pk, account, 1 hours);
-        assertTrue(keystore.isLocked(account));
 
         Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
         ch[0] = _unlockChange();
         ch[1] = _bumpChange();
-        _applyLocal(pk, account, ch);
 
-        (, bool init,,) = keystore.getLockStatus(account);
-        assertTrue(init);
-        (uint32 epoch,) = _localEpochSeq(account);
-        assertEq(epoch, 1);
+        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, ch);
+        vm.expectRevert(Keystore.LockChangeMustBeStandalone.selector);
+        keystore.applySignedAccountChanges(account, s);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡

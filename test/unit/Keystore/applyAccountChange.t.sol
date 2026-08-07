@@ -88,10 +88,9 @@ contract AccountEnvironmentTest is KeystoreTest {
         keystore.applySignedAccountChanges(account, s);
     }
 
-    /// @notice Regression: `[Lock, Unlock, Lock]` in a single batch from the unlocked state must revert on the
-    ///         trailing Lock. _applyLock gates on LIVE lock state, so it sees the mid-batch Unlock rather than the
-    ///         stale batch-entry snapshot; otherwise the final Lock would corrupt the union (FLAG_UNLOCK_INITIATED
-    ///         set over a delay-valued lockUnion, making the account read instantly unlockable).
+    /// @notice `[Lock, Unlock, Lock]` reverts LockChangeMustBeStandalone: the standalone rule rejects the multi-op
+    ///         batch on its first (Lock) change, so the earlier lock/unlock desync scenario is now structurally
+    ///         impossible (a lock transition can never interleave with another change in one batch).
     function test_lock_revert_lockUnlockLockSameBatch(uint256 pkSeed, uint16 d1, uint16 d2) public {
         uint256 pk = _boundK1Pk(pkSeed);
         address account = vm.addr(pk);
@@ -105,7 +104,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         ch[2] = _lockChange(d2);
 
         Keystore.SignedAccountChanges memory s = _localBatch(pk, account, ch);
-        vm.expectRevert(Keystore.AccountIsLocked.selector);
+        vm.expectRevert(Keystore.LockChangeMustBeStandalone.selector);
         keystore.applySignedAccountChanges(account, s);
     }
 
@@ -326,6 +325,59 @@ contract AccountEnvironmentTest is KeystoreTest {
 
         // importAccount must still reject the account as already initialized. The check fires before the ERC-1271
         // staticcall, so the empty signature is never reached.
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
+        actors[0] = Keystore.InitialActor({
+            actorId: bytes32(bytes20(account)), authenticator: address(1), scope: 0, policyData: ""
+        });
+        vm.expectRevert(Keystore.AlreadyInitialized.selector);
+        keystore.importAccount(account, 0, actors, "");
+    }
+
+    /// @notice An empty sequenced batch is rejected (EmptyChangeSet) so it cannot consume a sequence doing nothing.
+    function test_apply_revert_emptyBatchSequenced(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+
+        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, new Keystore.AccountChange[](0));
+        vm.expectRevert(Keystore.EmptyChangeSet.selector);
+        keystore.applySignedAccountChanges(account, s);
+    }
+
+    /// @notice An empty unsequenced batch is rejected (EmptyChangeSet) so it cannot initialize a fresh account without
+    ///         altering any configuration.
+    function test_apply_revert_emptyBatchUnsequenced(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+
+        Keystore.SignedAccountChanges memory s = _unseqBatch(pk, account, new Keystore.AccountChange[](0));
+        vm.expectRevert(Keystore.EmptyChangeSet.selector);
+        keystore.applySignedAccountChanges(account, s);
+    }
+
+    /// @notice A never-bootstrapped EOA acting via its inline k1 self on its first unsequenced batch is marked
+    ///         initialized: the batch burns local sequence 0 (0 -> 1), closing the one-time importAccount bootstrap and
+    ///         invalidating any outstanding sequenced seq==0 signature. The batch itself remains replayable.
+    function test_regression_unsequencedInitBlocksImport(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+
+        // Uninitialized: both local counters are zero.
+        (uint32 epoch0, uint32 seq0) = _localEpochSeq(account);
+        assertEq(epoch0, 0);
+        assertEq(seq0, 0);
+
+        _applyUnsequenced(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
+        );
+
+        // Sequence 0 burned -> reads initialized; the actor landed.
+        (uint32 epoch1, uint32 seq1) = _localEpochSeq(account);
+        assertEq(epoch1, 0);
+        assertEq(seq1, 1);
+        assertTrue(_isActor(account, ACTOR_A));
+
+        // importAccount must now reject the account as already initialized.
         Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
         actors[0] = Keystore.InitialActor({
             actorId: bytes32(bytes20(account)), authenticator: address(1), scope: 0, policyData: ""

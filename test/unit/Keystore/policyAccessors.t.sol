@@ -458,7 +458,8 @@ contract PolicyAccessorsTest is KeystoreTest {
         (address accountA,) = _createK1AccountWithSalt(rootPk, saltA);
         (address accountB,) = _createK1AccountWithSalt(rootPk, saltB);
         bytes32 rootActorId = bytes32(bytes20(vm.addr(rootPk)));
-        // Keep the shared actorId a non-self, non-owner explicit actor on both accounts.
+        // Keep the shared actorId a non-zero, non-self, non-owner explicit actor on both accounts.
+        vm.assume(sharedActorId != bytes32(0)); // the zero actorId is rejected by AuthorizeActor (InvalidActorId)
         vm.assume(sharedActorId != rootActorId);
         vm.assume(sharedActorId != bytes32(bytes20(accountA)));
         vm.assume(sharedActorId != bytes32(bytes20(accountB)));
@@ -585,6 +586,7 @@ contract PolicyAccessorsTest is KeystoreTest {
     ///      self-actorId (which would route to the inline-self home) and from the root owner's actorId (which would
     ///      overwrite the owner). actorId is otherwise an opaque bytes32 the protocol does not format-check.
     function _boundExplicitActorId(address account, uint256 rootPk, bytes32 actorId) internal pure returns (bytes32) {
+        vm.assume(actorId != bytes32(0)); // the zero actorId is rejected by AuthorizeActor (InvalidActorId)
         vm.assume(actorId != bytes32(bytes20(account)));
         vm.assume(actorId != bytes32(bytes20(vm.addr(rootPk))));
         return actorId;
