@@ -593,6 +593,34 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
     }
 
+    /// @notice Right-aligned actorId round-trip. An address-derived actor's id is the address right-aligned
+    ///         (ActorId.fromAddress: bytes32(uint256(uint160(addr))), high 12 bytes zero). The emitted ActorAuthorized
+    ///         indexed topic therefore decodes back to the address via the standard address(uint160(uint256(id)))
+    ///         round-trip that off-chain indexers rely on, and the on-chain k1 derivation resolves the very same id.
+    function test_authorize_success_rightAlignedActorIdRoundTrip(uint256 pk, uint256 actorSeed) public {
+        pk = _boundK1Pk(pk);
+        uint256 actorPk = _boundK1Pk(actorSeed);
+        (address account,) = _createK1Account(pk);
+        address actorAddr = vm.addr(actorPk);
+        vm.assume(actorAddr != account);
+
+        bytes32 actorId = bytes32(uint256(uint160(actorAddr))); // right-aligned, high 12 bytes zero
+
+        // The indexed topic equals the right-aligned id.
+        vm.expectEmit(true, true, false, false, address(keystore));
+        emit Keystore.ActorAuthorized(account, actorId, "");
+        _applyLocal(pk, account, _one(_authorizeChange(actorId, address(k1Authenticator), 0x00, UNBOUNDED, "")));
+
+        // Round-trip: the id decodes back to the address and carries no high bytes.
+        assertEq(address(uint160(uint256(actorId))), actorAddr);
+        assertEq(uint256(actorId) >> 160, 0);
+
+        // The on-chain k1 derivation (recovered signer -> actorId) agrees with the wallet-side derivation.
+        bytes32 hash = keccak256("round-trip");
+        (bytes32 resolvedId,) = keystore.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
+        assertEq(resolvedId, actorId);
+    }
+
     /// @notice A `[revoke, bump]` batch emits ActorRevoked(account, actorId).
     function test_revoke_success_emitsActorRevoked(uint256 pk) public {
         pk = _boundK1Pk(pk);

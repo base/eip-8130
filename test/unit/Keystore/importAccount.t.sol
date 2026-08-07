@@ -88,7 +88,7 @@ contract ImportAccountTest is KeystoreTest {
         return keccak256(
             abi.encode(
                 ACTOR_INITIALIZATION_TYPEHASH,
-                bytes32(bytes20(account)),
+                bytes32(uint256(uint160(account))),
                 chainId,
                 keccak256(abi.encodePacked(actorHashes))
             )

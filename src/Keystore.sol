@@ -618,7 +618,10 @@ contract Keystore {
         }
 
         // Authority ops use the lock state at batch entry. Local-only changes reject the Multichain channel; Lock and
-        // Unlock are also standalone.
+        // Unlock are also standalone. That standalone rule is what makes this entry snapshot EXACT for the whole batch:
+        // the only ops that mutate lock state (Lock/Unlock) can never share a batch with an authority op, so no op
+        // observes a lock state that a peer changed mid-loop. Relaxing standalone re-opens snapshot staleness — a later
+        // authority op could then run against a lock a Lock earlier in the same batch just set (or a stale-unlocked one).
         bool locked = _isLocked(a);
 
         uint256 n = s.changes.length;
@@ -1274,7 +1277,7 @@ contract Keystore {
         return keccak256(
             abi.encode(
                 ACTOR_INITIALIZATION_TYPEHASH,
-                bytes32(bytes20(account)),
+                ActorId.fromAddress(account),
                 chainId,
                 keccak256(abi.encodePacked(actorHashes))
             )

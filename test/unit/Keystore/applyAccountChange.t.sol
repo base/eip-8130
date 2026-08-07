@@ -216,6 +216,40 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertTrue(_isActor(account, ACTOR_A));
     }
 
+    /// @notice Lock-residue overwrite. A full lock -> initiate-unlock -> elapse cycle leaves FLAG_UNLOCK_INITIATED set
+    ///         and a now-elapsed unlocksAt in storage (lock reads never clear them). A fresh Lock over that residue must
+    ///         land a CLEAN hard-lock: FLAG_LOCKED set, FLAG_UNLOCK_INITIATED clear (init == false), and lockUnion
+    ///         holding the NEW delay rather than the stale timestamp. This pins the load-bearing `& ~FLAG_UNLOCK_INITIATED`
+    ///         clear in _applyLock: dropping it would leave a delay-valued union under a set INITIATED flag (the
+    ///         union-corruption bug).
+    function test_lock_success_overwritesElapsedUnlockResidue(uint256 pkSeed, uint16 d1, uint16 d2, uint256 t0) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+        d1 = uint16(bound(d1, 1, type(uint16).max));
+        d2 = uint16(bound(d2, 1, type(uint16).max));
+        t0 = bound(t0, block.timestamp, 1e9);
+
+        // Lock, initiate unlock, and let the delay fully elapse. Storage residue now reads unlocked but still carries
+        // FLAG_LOCKED | FLAG_UNLOCK_INITIATED with an elapsed timestamp in lockUnion.
+        _signedLock(pk, account, d1);
+        vm.warp(t0);
+        _signedUnlock(pk, account);
+        vm.warp(t0 + d1);
+        assertFalse(keystore.isLocked(account));
+
+        // Re-lock over the residue.
+        _signedLock(pk, account, d2);
+
+        // Clean hard-lock: INITIATED cleared and the union holds the new delay (surfaced as storedDelay), not the
+        // stale timestamp.
+        (bool locked, bool init, uint48 unlocksAt, uint16 storedDelay) = keystore.getLockStatus(account);
+        assertTrue(locked);
+        assertFalse(init);
+        assertEq(unlocksAt, type(uint48).max);
+        assertEq(storedDelay, d2);
+    }
+
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // ADMIN-ONLY LOCK CHANGES
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -405,5 +439,64 @@ contract AccountEnvironmentTest is KeystoreTest {
         });
         vm.expectRevert(Keystore.AlreadyInitialized.selector);
         keystore.importAccount(account, 0, actors, "");
+    }
+
+    /// @notice Init asymmetry (fresh-account branch): a never-bootstrapped EOA's first LOCAL unsequenced batch burns
+    ///         local sequence 0 -> 1, so any sequenced-at-0 signature it had already produced is now dead (BadSequence).
+    ///         This is the side of the asymmetry that the unsequenced-init write creates.
+    function test_init_unsequencedFirstBatchKillsSequenceZero(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+
+        // A sequenced local batch at seq 0, captured while the account is still fresh (epoch 0, seq 0).
+        Keystore.SignedAccountChanges memory seqZero = _localBatch(
+            pk, account, _one(_authorizeChange(ACTOR_B, address(k1Authenticator), SENDER, _future(1 days), ""))
+        );
+
+        // First act is an unsequenced batch: burns local sequence 0 -> 1 (marks initialized).
+        _applyUnsequenced(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
+        );
+        (, uint32 seq1) = _localEpochSeq(account);
+        assertEq(seq1, 1);
+
+        // The pre-signed sequenced-at-0 batch no longer matches the advanced counter.
+        vm.expectRevert(Keystore.BadSequence.selector);
+        keystore.applySignedAccountChanges(account, seqZero);
+    }
+
+    /// @notice Init asymmetry (multichain-active branch): once an EOA has bootstrapped via the Multichain channel it
+    ///         already reads initialized, so a later first LOCAL unsequenced batch does NOT burn local sequence 0. The
+    ///         local sequenced-at-0 slot stays live and a sequenced-at-0 batch still lands — the opposite of a fresh
+    ///         account, pinned deliberately.
+    function test_init_multichainActiveKeepsLocalSequenceZero(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+
+        // Bootstrap via multichain: multichain counter 0 -> 1, local word stays 0/0 (initialized via the multichain
+        // term of _isInitialized).
+        _applyMultichain(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
+        );
+        (uint32 epoch0, uint32 seq0) = _localEpochSeq(account);
+        assertEq(epoch0, 0);
+        assertEq(seq0, 0);
+
+        // A local unsequenced batch: the unsequenced-init write is skipped (already initialized), so localSequence
+        // stays 0.
+        _applyUnsequenced(
+            pk, account, _one(_authorizeChange(ACTOR_B, address(k1Authenticator), SENDER, _future(1 days), ""))
+        );
+        (, uint32 seq1) = _localEpochSeq(account);
+        assertEq(seq1, 0);
+
+        // A local sequenced batch at seq 0 therefore still lands (seq 0 == localSequence 0), consuming 0 -> 1.
+        bytes32 idC = bytes32(uint256(0xC3));
+        _applyLocal(pk, account, _one(_authorizeChange(idC, address(k1Authenticator), SENDER, _future(1 days), "")));
+        assertTrue(_isActor(account, idC));
+        (, uint32 seq2) = _localEpochSeq(account);
+        assertEq(seq2, 1);
     }
 }
