@@ -1,26 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.36;
 
-/// @notice Canonical EIP-8130 actor scope grants: the named bits of the `uint16` scope bitmask carried in an
-///         actor's config.
-///
-/// @dev Reference vocabulary, not enforcement. Keystore is deliberately scope-agnostic: it treats `scope == 0` as
-///      the admin predicate and interprets only {POLICY} (to slice/store policy data). Every other bit's *meaning*
-///      is enforced by whoever reads it — protocol nodes for the transaction paths, account contracts for ERC-1271,
-///      policy managers for gating. This library only gives those consumers a shared set of names so the same value
-///      is not re-declared as a magic number at each site.
-///
-///      Delegation for agent fleets is expressed via the external-policy pattern (an account authorizes a hub as a
-///      single POLICY-gated external actor that drives it through a policy manager), so no dedicated delegate grant
-///      is defined here.
-///
-///      The assignment is append-only: a value once given a name keeps it, and new grants take the next free bit.
-///      That is safe against the immutable Keystore deployment because unknown bits grant nothing and are stored
-///      verbatim (see the EIP's Actor Scope section), so adding a bit here can never change how an already-deployed
-///      config behaves. Admin is intentionally absent — it is the *absence* of grants (`scope == 0`), a predicate
-///      rather than a pure grant.
-///
-/// @author Coinbase
+/// @notice Canonical EIP-8130 actor scope grants.
+/// @dev Scope assignments are append-only; unknown bits are stored verbatim and grant no authority.
+///      Keystore treats `scope == 0` as admin and interprets only {POLICY}; consumers enforce all other grants.
 library Scopes {
     /// @notice Ungated initiation (`sender_auth`): may originate transactions to any `call.to`.
     uint16 internal constant SENDER = 0x0001;
