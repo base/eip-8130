@@ -214,6 +214,70 @@ contract DefaultAccountTest is KeystoreTest {
         assertEq(target.value(), v);
     }
 
+    /// @notice A TRUSTED_EXECUTOR actor whose scope is not operational (a capability-only scope, e.g. SELF_PAYER)
+    ///         cannot drive execution: _isAuthorizedCaller returns false via the isOperator(scope) == false leg.
+    function test_executeBatch_revert_trustedExecutorNonOperationalScope(uint256 execSeed) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+
+        address executor = address(uint160(bound(execSeed, 10, type(uint160).max)));
+        vm.assume(executor != account && executor != vm.addr(ACTOR_PK));
+
+        // Registered as a trusted executor, but with a non-operational (capability-only) scope.
+        _authorizeActorWithScope(
+            account, ACTOR_PK, bytes32(uint256(uint160(executor))), TRUSTED_EXECUTOR, SCOPE_SELF_PAYER
+        );
+
+        vm.prank(executor);
+        vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
+        DefaultAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1))));
+    }
+
+    /// @notice A TRUSTED_EXECUTOR actor with an unbounded (expiry == 0) grant may drive execution.
+    /// @dev Covers the `config.expiry != 0` false leg of the expiry guard (the && short-circuits before the
+    ///      timestamp comparison), which the UNBOUNDED-expiry executor helper never exercises.
+    function test_executeBatch_success_trustedExecutorZeroExpiry(uint256 execSeed, uint256 v) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+
+        address executor = address(uint160(bound(execSeed, 10, type(uint160).max)));
+        vm.assume(executor != account && executor != vm.addr(ACTOR_PK));
+
+        // Operational admin scope, expiry == 0 (unlimited).
+        _applyLocal(
+            ACTOR_PK, account, _one(_authorizeChange(bytes32(uint256(uint160(executor))), TRUSTED_EXECUTOR, 0, 0, ""))
+        );
+
+        vm.prank(executor);
+        DefaultAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (v))));
+
+        assertEq(target.value(), v);
+    }
+
+    /// @notice A TRUSTED_EXECUTOR config whose non-zero expiry has elapsed is rejected.
+    /// @dev getActorConfig already zeroes expired configs, so the elapsed-expiry leg of _isAuthorizedCaller is
+    ///      defense-in-depth; mock the keystore to return a stale (expired) executor config and prove it fails closed.
+    function test_executeBatch_revert_trustedExecutorExpired(uint256 execSeed) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+
+        address executor = address(uint160(bound(execSeed, 10, type(uint160).max)));
+        vm.assume(executor != account && executor != vm.addr(ACTOR_PK));
+
+        vm.warp(1000);
+        Keystore.ActorConfig memory stale =
+            Keystore.ActorConfig({authenticator: TRUSTED_EXECUTOR, expiry: 500, scope: 0}); // expiry < now
+        vm.mockCall(
+            address(keystore),
+            abi.encodeWithSelector(Keystore.getActorConfig.selector, account, bytes32(uint256(uint160(executor)))),
+            abi.encode(stale)
+        );
+
+        vm.prank(executor);
+        vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
+        DefaultAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1))));
+    }
+
     /// @notice A call to a target with no code succeeds (the low-level call returns success).
     /// @dev executeBatch does not verify the target has code, so codeless targets return success.
     function test_executeBatch_success_callToCodelessTarget(address t) public {

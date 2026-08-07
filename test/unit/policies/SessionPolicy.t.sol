@@ -516,6 +516,63 @@ contract SessionPolicyTest is KeystoreTest {
         );
     }
 
+    function test_execute_allowsApproveDecodesSpender() public {
+        // A limited token pinning approve exercises the APPROVE leg of the ERC-20 decoder (`selector == APPROVE`).
+        SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](1);
+        rules[0] =
+            SessionPolicy.SelectorRule({selector: SessionMockERC20.approve.selector, recipients: _noRecipients()});
+        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
+        scopes[0] = SessionPolicy.CallScope({target: address(token), selectorRules: rules});
+        bytes32 actorId = _install(_config(_limit(address(token), 500e18, WEEK), scopes));
+
+        _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.approve, (bob, 1e18)));
+        assertEq(token.allowance(account, bob), 1e18);
+    }
+
+    function test_execute_allowsSelfTransferFromDecodesAmount() public {
+        // A self-transferFrom (from == account) with a token limit passes the TransferFromNotSelf gate and reaches
+        // the ERC-20 amount decode — the else (transferFrom) leg of _decodeErc20 — then consumes the decoded amount.
+        SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](1);
+        rules[0] = SessionPolicy.SelectorRule({selector: TRANSFER_FROM, recipients: _noRecipients()});
+        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
+        scopes[0] = SessionPolicy.CallScope({target: address(token), selectorRules: rules});
+        (bytes32 actorId, bytes32 commitment) =
+            _authorizeWithCommitment(_config(_limit(address(token), 500e18, WEEK), scopes));
+
+        // Fund the account and let it pull from itself so the underlying transferFrom succeeds.
+        token.mint(account, 100e18);
+        vm.prank(account);
+        token.approve(account, 100e18);
+
+        _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.transferFrom, (account, bob, 10e18)));
+
+        // The decoded amount was consumed against the token cap, proving the transferFrom decode leg ran.
+        assertEq(
+            policy.getCurrentSpend(
+                commitment, SessionPolicy.TokenLimit({token: address(token), limit: 500e18, period: WEEK})
+            )
+            .spend,
+            10e18
+        );
+        assertEq(token.balanceOf(bob), 10e18);
+    }
+
+    /// @notice Defensive guard: _findTokenLimit re-checks LimitTooLarge before the uint160 cast even though
+    ///         _validateConfig already rejects it at enforce entry. Reached only via a harness that bypasses
+    ///         validation, since the enforce path can never present an oversized limit here.
+    function test_findTokenLimit_revert_limitTooLargeDefensive() public {
+        SessionPolicyHarness harness = new SessionPolicyHarness(address(manager));
+        uint256 tooLarge = uint256(type(uint160).max) + 1;
+
+        SessionPolicy.TokenLimit[] memory limits = new SessionPolicy.TokenLimit[](1);
+        limits[0] = SessionPolicy.TokenLimit({token: address(token), limit: tooLarge, period: WEEK});
+        SessionPolicy.Config memory cfg =
+            SessionPolicy.Config({tokenLimits: limits, callScopes: new SessionPolicy.CallScope[](0)});
+
+        vm.expectRevert(abi.encodeWithSelector(SessionPolicy.LimitTooLarge.selector, address(token), tooLarge));
+        harness.exposedFindTokenLimit(cfg, address(token));
+    }
+
     function test_execute_allowsEmptyCalldata() public {
         // 0 bytes of calldata is a plain value call: it skips selector gating entirely.
         SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
@@ -618,9 +675,69 @@ contract SessionPolicyTest is KeystoreTest {
         assertEq(period, type(uint40).max);
     }
 
+    /// @notice Exercises the mismatch/empty branches of getSelectorRule and isRecipientAllowed: a non-matching
+    ///         target is skipped, an any-selector scope resolves without a recipient binding, an unknown selector
+    ///         resolves to (false,false), a non-matching rule is skipped, and an empty recipient list allows anyone.
+    function test_views_selectorAndRecipientEdges() public view {
+        address[] memory bobOnly = new address[](1);
+        bobOnly[0] = bob;
+
+        // token scope: TRANSFER bound to [bob]; OTHER open to anyone (empty recipient list).
+        SessionPolicy.SelectorRule[] memory tokenRules = new SessionPolicy.SelectorRule[](2);
+        tokenRules[0] = SessionPolicy.SelectorRule({selector: TRANSFER, recipients: bobOnly});
+        tokenRules[1] = SessionPolicy.SelectorRule({selector: OTHER_SELECTOR, recipients: _noRecipients()});
+
+        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](2);
+        scopes[0] = SessionPolicy.CallScope({target: address(token), selectorRules: tokenRules});
+        scopes[1] = _anySelectorScope(address(target)); // any selector (empty rules)
+
+        SessionPolicy.Config memory cfg = SessionPolicy.Config({tokenLimits: _noLimits(), callScopes: scopes});
+
+        // getSelectorRule: querying `target` skips scope[0] (target mismatch) and matches the any-selector scope[1].
+        (bool allowed, bool recipientBound) = policy.getSelectorRule(cfg, address(target), TRANSFER);
+        assertTrue(allowed);
+        assertFalse(recipientBound);
+
+        // getSelectorRule: matched target, unknown selector → (false, false).
+        (allowed, recipientBound) = policy.getSelectorRule(cfg, address(token), UNKNOWN_SELECTOR);
+        assertFalse(allowed);
+        assertFalse(recipientBound);
+
+        // isRecipientAllowed: `target` matches the any-selector scope but has no rules → false.
+        assertFalse(policy.isRecipientAllowed(cfg, address(target), TRANSFER, bob));
+
+        // isRecipientAllowed: token/OTHER skips the TRANSFER rule then hits the empty-recipients rule → anyone allowed.
+        assertTrue(policy.isRecipientAllowed(cfg, address(token), OTHER_SELECTOR, mallory));
+
+        // isRecipientAllowed: token/TRANSFER is bound to bob only.
+        assertTrue(policy.isRecipientAllowed(cfg, address(token), TRANSFER, bob));
+        assertFalse(policy.isRecipientAllowed(cfg, address(token), TRANSFER, mallory));
+    }
+
+    /// @notice getCurrentSpend short-circuits to an empty usage when the queried limit is zero.
+    function test_getCurrentSpend_zeroLimitReturnsEmpty() public view {
+        RecurringAllowance.PeriodUsage memory u = policy.getCurrentSpend(
+            bytes32(0), SessionPolicy.TokenLimit({token: address(token), limit: 0, period: WEEK})
+        );
+        assertEq(u.start, 0);
+        assertEq(u.end, 0);
+        assertEq(u.spend, 0);
+    }
+
+    /// @notice getCurrentSpend rejects a limit that does not fit in uint160 (matching the config-time invariant).
+    function test_getCurrentSpend_revertsLimitTooLarge() public {
+        uint256 tooLarge = uint256(type(uint160).max) + 1;
+        vm.expectRevert(abi.encodeWithSelector(SessionPolicy.LimitTooLarge.selector, address(token), tooLarge));
+        policy.getCurrentSpend(
+            bytes32(0), SessionPolicy.TokenLimit({token: address(token), limit: tooLarge, period: WEEK})
+        );
+    }
+
     // ── Helpers ──
 
     bytes4 internal constant TRANSFER_FROM = bytes4(keccak256("transferFrom(address,address,uint256)"));
+    bytes4 internal constant OTHER_SELECTOR = bytes4(0x12345678);
+    bytes4 internal constant UNKNOWN_SELECTOR = bytes4(0xaabbccdd);
 
     function _anySelectorScopes(address t) internal pure returns (SessionPolicy.CallScope[] memory scopes) {
         scopes = new SessionPolicy.CallScope[](1);
@@ -763,5 +880,19 @@ contract SessionPolicyTest is KeystoreTest {
                 )
             )
         );
+    }
+}
+
+/// @dev Exposes {SessionPolicy._findTokenLimit} so the defensive LimitTooLarge guard — unreachable through the
+///      validated {_enforce} path — can be exercised directly with an oversized limit.
+contract SessionPolicyHarness is SessionPolicy {
+    constructor(address policyManager) SessionPolicy(policyManager) {}
+
+    function exposedFindTokenLimit(SessionPolicy.Config calldata config, address token)
+        external
+        pure
+        returns (bool set, uint160 allowance, uint40 period)
+    {
+        return _findTokenLimit(config, token);
     }
 }
