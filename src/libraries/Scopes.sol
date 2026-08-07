@@ -52,7 +52,7 @@ library Scopes {
     /// @param scope The actor scope bitmask to test.
     ///
     /// @return True iff `scope` carries operational authority.
-    function isOperational(uint16 scope) internal pure returns (bool) {
+    function isOperator(uint16 scope) internal pure returns (bool) {
         return scope == 0 || ((scope & SENDER != 0) && (scope & POLICY == 0));
     }
 }
