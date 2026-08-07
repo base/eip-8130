@@ -52,7 +52,7 @@ contract ImportAccountTest is KeystoreTest {
     // retains the full Actor/ActorConfig typehash structure; for imported (always unrestricted) actors the config
     // fields are zero and policyData is empty.
     bytes32 constant ACTOR_INITIALIZATION_TYPEHASH = keccak256(
-        "ActorInitialization(bytes32 salt,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"
+        "ActorInitialization(bytes32 accountId,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"
     );
     bytes32 constant ACTOR_TYPEHASH = keccak256(
         "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"

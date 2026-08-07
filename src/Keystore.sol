@@ -137,12 +137,14 @@ contract Keystore {
     ///      (0x1626ba7e); used both to build the import staticcall and to validate its result.
     bytes4 internal constant ERC1271_SELECTOR = bytes4(keccak256("isValidSignature(bytes32,bytes)"));
 
-    /// @notice Typehash binding an importAccount signature to its salt, chainId, and initial actor set.
+    /// @notice Typehash binding an importAccount signature to its accountId, chainId, and initial actor set.
     ///
-    /// @dev NOT compliant with EIP-712, to mitigate eth_signTypedData phishing. `chainId` is either the current chain
-    ///      or 0 for a multichain import. Initial actors are hashed structurally below.
+    /// @dev NOT compliant with EIP-712, to mitigate eth_signTypedData phishing. `accountId` is the importing account's
+    ///      right-aligned address (`ActorId.fromAddress(account)`), binding the digest to that account so it cannot be
+    ///      replayed against another. `chainId` is either the current chain or 0 for a multichain import. Initial
+    ///      actors are hashed structurally below.
     bytes32 public constant ACTOR_INITIALIZATION_TYPEHASH = keccak256(
-        "ActorInitialization(bytes32 salt,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"
+        "ActorInitialization(bytes32 accountId,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"
     );
 
     /// @notice Typehash used to structurally hash each Actor within an ActorInitialization import digest.
@@ -1254,8 +1256,9 @@ contract Keystore {
     }
 
     /// @dev Typed digest for the importAccount ERC-1271 signature (a signed message), so signers can reproduce it
-    ///      with standard EIP-712-style struct hashing. `salt` is bound to the account address and the digest is
-    ///      bound to `chainId` (0 = multichain) so its replay domain matches applySignedAccountChanges.
+    ///      with standard EIP-712-style struct hashing. `accountId` is the account's right-aligned address
+    ///      (`ActorId.fromAddress(account)`) and the digest is bound to `chainId` (0 = multichain) so its replay
+    ///      domain matches applySignedAccountChanges.
     function _computeImportDigest(address account, uint256 chainId, InitialActor[] calldata initialActors)
         private
         pure
