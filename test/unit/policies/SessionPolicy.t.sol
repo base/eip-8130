@@ -844,7 +844,7 @@ contract SessionPolicyTest is KeystoreTest {
         lastBinding = binding;
     }
 
-    /// @dev Alias kept for readability at call sites that previously "installed" a session.
+    /// @dev Alias for `_authorize`, named for readability at call sites that read as "installing" a session.
     function _install(bytes memory policyConfig) internal returns (bytes32 actorId) {
         return _authorize(policyConfig);
     }

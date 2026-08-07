@@ -17,9 +17,9 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 ///
 ///         The delegate vouch requires the nested auth to resolve to the ADMIN actor on `delegate` (scope ==
 ///         0x00). This admin-only requirement is enforced independently of the account's ERC-1271 check (via
-///         authenticateActor + an explicit scope == 0 check): ERC-1271 signing is now operational (a
-///         SENDER-without-POLICY key can sign), but such a key must NOT be able to vouch as a delegate, so a
-///         non-admin nested actor reverts.
+///         authenticateActor + an explicit scope == 0 check): a SENDER-without-POLICY key can produce a valid
+///         ERC-1271 signature, but such a key must NOT be able to vouch as a delegate, so a non-admin nested
+///         actor reverts.
 contract DelegateAuthenticatorTest is KeystoreTest {
     uint16 constant SCOPE_SENDER = 0x01;
     uint16 constant SCOPE_POLICY = 0x02;
@@ -168,9 +168,9 @@ contract DelegateAuthenticatorTest is KeystoreTest {
         assertEq(actorId, bytes32(uint256(uint160(delegateAccount))));
     }
 
-    /// @dev The former SIGNER bit (0x10, now SCOPE_SPONSOR_PAYER) no longer grants signing: a nested actor holding
-    ///      it is non-admin (and non-operational), so the delegate vouch reverts.
-    function test_authenticate_revert_formerSignerBitCannotSign(uint256 ownerSeed, uint256 signerSeed, bytes32 hash)
+    /// @dev The SCOPE_SPONSOR_PAYER bit (0x10) does not grant signing: a nested actor holding only it is non-admin
+    ///      (and cannot produce a valid ERC-1271 signature), so the delegate vouch reverts.
+    function test_authenticate_revert_sponsorPayerBitCannotSign(uint256 ownerSeed, uint256 signerSeed, bytes32 hash)
         public
     {
         uint256 ownerPk = _boundK1Pk(ownerSeed);

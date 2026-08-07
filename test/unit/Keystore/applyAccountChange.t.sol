@@ -89,8 +89,8 @@ contract AccountEnvironmentTest is KeystoreTest {
     }
 
     /// @notice `[Lock, Unlock, Lock]` reverts LockChangeMustBeStandalone: the standalone rule rejects the multi-op
-    ///         batch on its first (Lock) change, so the earlier lock/unlock desync scenario is now structurally
-    ///         impossible (a lock transition can never interleave with another change in one batch).
+    ///         batch on its first (Lock) change. Because a lock transition can never interleave with another change
+    ///         in one batch, a lock/unlock desync is structurally impossible.
     function test_lock_revert_lockUnlockLockSameBatch(uint256 pkSeed, uint16 d1, uint16 d2) public {
         uint256 pk = _boundK1Pk(pkSeed);
         address account = vm.addr(pk);
