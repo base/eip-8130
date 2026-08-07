@@ -587,11 +587,9 @@ contract Keystore {
                 if (seq >= UNSEQUENCED - 1) {
                     revert SequenceSaturated();
                 }
-                // Advance the local sequence before apply — checks-effects-before-interactions ahead of the
-                // authenticator STATICCALL below. (authenticateActor is `view`, so the authenticator cannot actually
-                // re-enter with a write; this is hardening in case that ever changes.) A trailing IncrementLocalEpoch
-                // in the same batch overwrites this to 0, but that second write lands on an already-warm slot (~100
-                // gas), so the rare sequenced+increment combo isn't worth special-casing here.
+                // Advance the local sequence before apply. A trailing IncrementLocalEpoch in the same batch
+                // overwrites this to 0, but that second write lands on an already-warm slot (~100 gas), so the
+                // combo isn't worth special-casing here.
                 a.localSequence = seq + 1;
             } else if (!_isInitialized(account)) {
                 // Mark a fresh account initialized and invalidate outstanding sequence-0 signatures. The unsequenced
