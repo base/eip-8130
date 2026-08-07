@@ -8,9 +8,6 @@ import {ActorId} from "../libraries/ActorId.sol";
 /// @notice Delegates authentication to another account's actor configuration; a single hop only.
 ///         actorId = ActorId.fromAddress(delegate_address)
 ///
-///         This contract exists for non-8130 chains where signature validation runs in normal EVM.
-///         On 8130 chains, the protocol handles DELEGATE directly at the protocol level.
-///
 ///         Data layout: delegate_address (20) || nested_authenticator (20) || nested_data
 ///
 /// @author Coinbase
@@ -55,10 +52,7 @@ contract DelegateAuthenticator is IAuthenticator {
         address nestedAuthenticator = address(bytes20(nestedAuth[:20]));
         if (nestedAuthenticator == address(this)) revert RecursiveDelegation();
 
-        // The nested actor MUST be the admin (scope == 0x00) of the delegate account: a delegate vouch requires admin
-        // to preserve non-escalation, so an operational SENDER key that may sign for its own account must NOT be able
-        // to vouch as a delegate here. authenticateActor reverts on any auth failure and otherwise returns the
-        // resolved scope, so we require scope == 0x00 explicitly.
+        // The nested actor MUST be the admin (scope == 0x00) of the delegate account.
         try KEYSTORE.authenticateActor(delegate, hash, nestedAuth) returns (bytes32, uint16 nestedScope) {
             if (nestedScope != 0) revert InvalidNestedSignature();
         } catch {
