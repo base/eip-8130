@@ -30,12 +30,12 @@ contract KeystoreTest is Test {
 
     // SECP256K1_ORDER (curve order n) is inherited from forge-std; _boundK1Pk bounds fuzzed keys to [1, n-1].
 
-    bytes32 constant SIGNED_ACCOUNT_CHANGES_TYPEHASH = keccak256(
-        "SignedAccountChanges(address account,uint256 chainId,uint64 sequence,AccountChange[] changes)"
-        "AccountChange(uint8 changeType,bytes payload)"
+    bytes32 constant SIGNED_CONFIG_CHANGES_TYPEHASH = keccak256(
+        "SignedConfigChanges(address account,uint256 chainId,uint64 sequence,ConfigChange[] changes)"
+        "ConfigChange(uint8 changeType,bytes payload)"
     );
 
-    bytes32 constant ACCOUNT_CHANGE_TYPEHASH = keccak256("AccountChange(uint8 changeType,bytes payload)");
+    bytes32 constant CONFIG_CHANGE_TYPEHASH = keccak256("ConfigChange(uint8 changeType,bytes payload)");
 
     /// @dev Unbounded expiry sentinel: an unbounded (never-expiring) grant is expressed as this value and is only
     ///      permitted on a sequenced batch. Convenience helpers that stand in for the old "no expiry" actors grant
@@ -135,9 +135,9 @@ contract KeystoreTest is Test {
     function _authorizeChange(bytes32 actorId, address auth, uint16 scope, uint48 expiry, bytes memory policyData)
         internal
         pure
-        returns (Keystore.AccountChange memory)
+        returns (Keystore.ConfigChange memory)
     {
-        return Keystore.AccountChange({
+        return Keystore.ConfigChange({
             changeType: Keystore.ChangeType.AuthorizeActor,
             payload: abi.encode(
                 actorId, Keystore.ActorConfig({authenticator: auth, scope: scope, expiry: expiry}), policyData
@@ -145,25 +145,25 @@ contract KeystoreTest is Test {
         });
     }
 
-    function _revokeChange(bytes32 actorId) internal pure returns (Keystore.AccountChange memory) {
-        return Keystore.AccountChange({changeType: Keystore.ChangeType.RevokeActor, payload: abi.encode(actorId)});
+    function _revokeChange(bytes32 actorId) internal pure returns (Keystore.ConfigChange memory) {
+        return Keystore.ConfigChange({changeType: Keystore.ChangeType.RevokeActor, payload: abi.encode(actorId)});
     }
 
-    function _bumpChange() internal pure returns (Keystore.AccountChange memory) {
-        return Keystore.AccountChange({changeType: Keystore.ChangeType.BumpLocalEpoch, payload: ""});
+    function _bumpChange() internal pure returns (Keystore.ConfigChange memory) {
+        return Keystore.ConfigChange({changeType: Keystore.ChangeType.IncrementLocalEpoch, payload: ""});
     }
 
-    function _lockChange(uint16 unlockDelay) internal pure returns (Keystore.AccountChange memory) {
-        return Keystore.AccountChange({changeType: Keystore.ChangeType.Lock, payload: abi.encode(unlockDelay)});
+    function _lockChange(uint16 unlockDelay) internal pure returns (Keystore.ConfigChange memory) {
+        return Keystore.ConfigChange({changeType: Keystore.ChangeType.Lock, payload: abi.encode(unlockDelay)});
     }
 
-    function _unlockChange() internal pure returns (Keystore.AccountChange memory) {
-        return Keystore.AccountChange({changeType: Keystore.ChangeType.Unlock, payload: ""});
+    function _unlockChange() internal pure returns (Keystore.ConfigChange memory) {
+        return Keystore.ConfigChange({changeType: Keystore.ChangeType.Unlock, payload: ""});
     }
 
     /// @dev Wrap a single change into a one-element array.
-    function _one(Keystore.AccountChange memory c) internal pure returns (Keystore.AccountChange[] memory arr) {
-        arr = new Keystore.AccountChange[](1);
+    function _one(Keystore.ConfigChange memory c) internal pure returns (Keystore.ConfigChange[] memory arr) {
+        arr = new Keystore.ConfigChange[](1);
         arr[0] = c;
     }
 
@@ -171,20 +171,20 @@ contract KeystoreTest is Test {
 
     function _changesDigest(
         address account,
-        Keystore.AccountChangeChannel channel,
+        Keystore.ConfigChangeChannel channel,
         uint64 sequence,
-        Keystore.AccountChange[] memory changes
+        Keystore.ConfigChange[] memory changes
     ) internal view returns (bytes32) {
-        uint256 chainId = channel == Keystore.AccountChangeChannel.Multichain ? 0 : block.chainid;
+        uint256 chainId = channel == Keystore.ConfigChangeChannel.Multichain ? 0 : block.chainid;
         bytes32[] memory changeHashes = new bytes32[](changes.length);
         for (uint256 i; i < changes.length; i++) {
             changeHashes[i] = keccak256(
-                abi.encode(ACCOUNT_CHANGE_TYPEHASH, uint8(changes[i].changeType), keccak256(changes[i].payload))
+                abi.encode(CONFIG_CHANGE_TYPEHASH, uint8(changes[i].changeType), keccak256(changes[i].payload))
             );
         }
         return keccak256(
             abi.encode(
-                SIGNED_ACCOUNT_CHANGES_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(changeHashes))
+                SIGNED_CONFIG_CHANGES_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(changeHashes))
             )
         );
     }
@@ -195,34 +195,34 @@ contract KeystoreTest is Test {
     function _signBatch(
         uint256 pk,
         address account,
-        Keystore.AccountChangeChannel channel,
+        Keystore.ConfigChangeChannel channel,
         uint64 sequence,
-        Keystore.AccountChange[] memory changes
-    ) internal view returns (Keystore.SignedAccountChanges memory) {
+        Keystore.ConfigChange[] memory changes
+    ) internal view returns (Keystore.SignedConfigChanges memory) {
         bytes32 digest = _changesDigest(account, channel, sequence, changes);
-        return Keystore.SignedAccountChanges({
+        return Keystore.SignedConfigChanges({
             channel: channel, sequence: sequence, changes: changes, signature: _buildK1Auth(pk, digest)
         });
     }
 
     /// @dev Build + relay a sequenced local batch at the account's current sequence word, K1-signed by `pk`.
-    function _applyLocal(uint256 pk, address account, Keystore.AccountChange[] memory changes) internal {
-        keystore.applySignedAccountChanges(
-            account, _signBatch(pk, account, Keystore.AccountChangeChannel.Local, _localSeqWord(account), changes)
+    function _applyLocal(uint256 pk, address account, Keystore.ConfigChange[] memory changes) internal {
+        keystore.applySignedConfigChanges(
+            account, _signBatch(pk, account, Keystore.ConfigChangeChannel.Local, _localSeqWord(account), changes)
         );
     }
 
     /// @dev Build + relay an unsequenced (JIT) local batch at the account's current epoch, K1-signed by `pk`.
-    function _applyUnsequenced(uint256 pk, address account, Keystore.AccountChange[] memory changes) internal {
-        keystore.applySignedAccountChanges(
-            account, _signBatch(pk, account, Keystore.AccountChangeChannel.Local, _unseqWord(account), changes)
+    function _applyUnsequenced(uint256 pk, address account, Keystore.ConfigChange[] memory changes) internal {
+        keystore.applySignedConfigChanges(
+            account, _signBatch(pk, account, Keystore.ConfigChangeChannel.Local, _unseqWord(account), changes)
         );
     }
 
     /// @dev Build + relay a multichain batch at the account's current multichain sequence, K1-signed by `pk`.
-    function _applyMultichain(uint256 pk, address account, Keystore.AccountChange[] memory changes) internal {
-        keystore.applySignedAccountChanges(
-            account, _signBatch(pk, account, Keystore.AccountChangeChannel.Multichain, _multichainSeq(account), changes)
+    function _applyMultichain(uint256 pk, address account, Keystore.ConfigChange[] memory changes) internal {
+        keystore.applySignedConfigChanges(
+            account, _signBatch(pk, account, Keystore.ConfigChangeChannel.Multichain, _multichainSeq(account), changes)
         );
     }
 
@@ -231,33 +231,33 @@ contract KeystoreTest is Test {
     // These build the fully-signed batch WITHOUT relaying it, so revert tests can construct the batch (which reads
     // the current sequence word via a view staticcall) BEFORE `vm.expectRevert`, then relay it as the single
     // expected-reverting external call. Foundry's strict expectRevert binds to the very next external call, so the
-    // sequence-word staticcall must not sit between expectRevert and applySignedAccountChanges.
+    // sequence-word staticcall must not sit between expectRevert and applySignedConfigChanges.
 
-    function _localBatch(uint256 pk, address account, Keystore.AccountChange[] memory changes)
+    function _localBatch(uint256 pk, address account, Keystore.ConfigChange[] memory changes)
         internal
         view
-        returns (Keystore.SignedAccountChanges memory)
+        returns (Keystore.SignedConfigChanges memory)
     {
-        return _signBatch(pk, account, Keystore.AccountChangeChannel.Local, _localSeqWord(account), changes);
+        return _signBatch(pk, account, Keystore.ConfigChangeChannel.Local, _localSeqWord(account), changes);
     }
 
-    function _unseqBatch(uint256 pk, address account, Keystore.AccountChange[] memory changes)
+    function _unseqBatch(uint256 pk, address account, Keystore.ConfigChange[] memory changes)
         internal
         view
-        returns (Keystore.SignedAccountChanges memory)
+        returns (Keystore.SignedConfigChanges memory)
     {
-        return _signBatch(pk, account, Keystore.AccountChangeChannel.Local, _unseqWord(account), changes);
+        return _signBatch(pk, account, Keystore.ConfigChangeChannel.Local, _unseqWord(account), changes);
     }
 
-    function _multichainBatch(uint256 pk, address account, Keystore.AccountChange[] memory changes)
+    function _multichainBatch(uint256 pk, address account, Keystore.ConfigChange[] memory changes)
         internal
         view
-        returns (Keystore.SignedAccountChanges memory)
+        returns (Keystore.SignedConfigChanges memory)
     {
-        return _signBatch(pk, account, Keystore.AccountChangeChannel.Multichain, _multichainSeq(account), changes);
+        return _signBatch(pk, account, Keystore.ConfigChangeChannel.Multichain, _multichainSeq(account), changes);
     }
 
-    // ── Back-compat actor helpers (re-implemented on applySignedAccountChanges) ──
+    // ── Back-compat actor helpers (re-implemented on applySignedConfigChanges) ──
     //
     // These preserve the pre-split helper names used across the suite. A signed grant always self-expires, so where
     // the old model used a no-expiry (0) actor these grant UNBOUNDED (type(uint48).max) on a sequenced batch — the

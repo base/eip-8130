@@ -5,7 +5,7 @@ import {Keystore} from "../../../src/Keystore.sol";
 import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
-/// @notice §10 test matrix for the account-environment surface driven through {applySignedAccountChanges}: the lock
+/// @notice §10 test matrix for the account-environment surface driven through {applySignedConfigChanges}: the lock
 ///         / unlock ops (admin-authorized), the Multichain channel (no epochs, no unsequenced mode), and the
 ///         split-layout regression checks.
 contract AccountEnvironmentTest is KeystoreTest {
@@ -69,9 +69,9 @@ contract AccountEnvironmentTest is KeystoreTest {
         address account = vm.addr(pk);
         _assumeSafeAccount(account);
 
-        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, _one(_lockChange(0)));
+        Keystore.SignedConfigChanges memory s = _localBatch(pk, account, _one(_lockChange(0)));
         vm.expectRevert(Keystore.ZeroUnlockDelay.selector);
-        keystore.applySignedAccountChanges(account, s);
+        keystore.applySignedConfigChanges(account, s);
     }
 
     /// @notice A second lock while already hard-locked reverts AccountIsLocked.
@@ -83,9 +83,9 @@ contract AccountEnvironmentTest is KeystoreTest {
         d2 = uint16(bound(d2, 1, type(uint16).max));
 
         _signedLock(pk, account, d1);
-        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, _one(_lockChange(d2)));
+        Keystore.SignedConfigChanges memory s = _localBatch(pk, account, _one(_lockChange(d2)));
         vm.expectRevert(Keystore.AccountIsLocked.selector);
-        keystore.applySignedAccountChanges(account, s);
+        keystore.applySignedConfigChanges(account, s);
     }
 
     /// @notice Regression: `[Lock, Unlock, Lock]` in a single batch from the unlocked state must revert on the
@@ -99,14 +99,14 @@ contract AccountEnvironmentTest is KeystoreTest {
         d1 = uint16(bound(d1, 1, type(uint16).max));
         d2 = uint16(bound(d2, 1, type(uint16).max));
 
-        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](3);
+        Keystore.ConfigChange[] memory ch = new Keystore.ConfigChange[](3);
         ch[0] = _lockChange(d1);
         ch[1] = _unlockChange();
         ch[2] = _lockChange(d2);
 
-        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, ch);
+        Keystore.SignedConfigChanges memory s = _localBatch(pk, account, ch);
         vm.expectRevert(Keystore.AccountIsLocked.selector);
-        keystore.applySignedAccountChanges(account, s);
+        keystore.applySignedConfigChanges(account, s);
     }
 
     /// @notice An unlock on a never-locked account reverts NotLocked.
@@ -115,9 +115,9 @@ contract AccountEnvironmentTest is KeystoreTest {
         address account = vm.addr(pk);
         _assumeSafeAccount(account);
 
-        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, _one(_unlockChange()));
+        Keystore.SignedConfigChanges memory s = _localBatch(pk, account, _one(_unlockChange()));
         vm.expectRevert(Keystore.NotLocked.selector);
-        keystore.applySignedAccountChanges(account, s);
+        keystore.applySignedConfigChanges(account, s);
     }
 
     /// @notice An unlock op sets unlocksAt = now + delay, zeroes the stored delay, emits AccountUnlockInitiated.
@@ -154,9 +154,9 @@ contract AccountEnvironmentTest is KeystoreTest {
         vm.warp(t0);
         _signedUnlock(pk, account);
 
-        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, _one(_unlockChange()));
+        Keystore.SignedConfigChanges memory s = _localBatch(pk, account, _one(_unlockChange()));
         vm.expectRevert(Keystore.NotLocked.selector);
-        keystore.applySignedAccountChanges(account, s);
+        keystore.applySignedConfigChanges(account, s);
     }
 
     /// @notice An account can be re-locked once a prior unlock delay has fully elapsed.
@@ -193,11 +193,11 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertEq(epoch, 1);
 
         // Authorize under lock: rejected.
-        Keystore.SignedAccountChanges memory s = _localBatch(
+        Keystore.SignedConfigChanges memory s = _localBatch(
             pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
         );
         vm.expectRevert(Keystore.AccountIsLocked.selector);
-        keystore.applySignedAccountChanges(account, s);
+        keystore.applySignedConfigChanges(account, s);
     }
 
     /// @notice After a full unlock cycle elapses, an authority op is accepted again (lazy lock clear).
@@ -222,7 +222,7 @@ contract AccountEnvironmentTest is KeystoreTest {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     /// @notice A scoped (non-admin) actor cannot initiate an Unlock — every signed change is admin-only
-    ///         (UnauthorizedAccountChange).
+    ///         (UnauthorizedConfigChange).
     function test_lock_revert_scopedActorCannotUnlock(uint256 ownerSeed, uint256 scopedSeed) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         uint256 scopedPk = _boundK1Pk(scopedSeed);
@@ -234,9 +234,9 @@ contract AccountEnvironmentTest is KeystoreTest {
         _signedLock(ownerPk, account, 1 hours);
         assertTrue(keystore.isLocked(account));
 
-        Keystore.SignedAccountChanges memory s = _localBatch(scopedPk, account, _one(_unlockChange()));
-        vm.expectRevert(Keystore.UnauthorizedAccountChange.selector);
-        keystore.applySignedAccountChanges(account, s);
+        Keystore.SignedConfigChanges memory s = _localBatch(scopedPk, account, _one(_unlockChange()));
+        vm.expectRevert(Keystore.UnauthorizedConfigChange.selector);
+        keystore.applySignedConfigChanges(account, s);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -259,14 +259,14 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertEq(_multichainSeq(account), mcBefore + 1);
     }
 
-    /// @notice A BumpLocalEpoch on the Multichain channel reverts EpochOpRequiresLocalChannel.
+    /// @notice An IncrementLocalEpoch on the Multichain channel reverts EpochOpRequiresLocalChannel.
     function test_multichain_revert_bumpRejected(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
 
-        Keystore.SignedAccountChanges memory s = _multichainBatch(pk, account, _one(_bumpChange()));
+        Keystore.SignedConfigChanges memory s = _multichainBatch(pk, account, _one(_bumpChange()));
         vm.expectRevert(Keystore.EpochOpRequiresLocalChannel.selector);
-        keystore.applySignedAccountChanges(account, s);
+        keystore.applySignedConfigChanges(account, s);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -307,5 +307,30 @@ contract AccountEnvironmentTest is KeystoreTest {
                 )
             );
         assertFalse(ok2);
+    }
+
+    /// @notice Regression: an IncrementLocalEpoch zeroes localSequence, but the account must still read as
+    ///         initialized (localEpoch is now non-zero) so the one-time importAccount bootstrap stays closed. Prior
+    ///         to the fix, _isInitialized checked localSequence alone, so a post-increment local-only account looked
+    ///         uninitialized and importAccount would re-bootstrap on top of the live actor set.
+    function test_regression_importBlockedAfterEpochIncrement(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+
+        // Increment the epoch: localSequence -> 0, localEpoch -> 1 (both counters no longer trivially non-zero on the
+        // sequence half).
+        _applyLocal(pk, account, _one(_bumpChange()));
+        (uint32 epoch, uint32 seq) = _localEpochSeq(account);
+        assertEq(epoch, 1);
+        assertEq(seq, 0);
+
+        // importAccount must still reject the account as already initialized. The check fires before the ERC-1271
+        // staticcall, so the empty signature is never reached.
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
+        actors[0] = Keystore.InitialActor({
+            actorId: bytes32(bytes20(account)), authenticator: address(1), scope: 0, policyData: ""
+        });
+        vm.expectRevert(Keystore.AlreadyInitialized.selector);
+        keystore.importAccount(account, 0, actors, "");
     }
 }

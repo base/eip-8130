@@ -673,7 +673,7 @@ contract PolicyAccessorsTest is KeystoreTest {
     /// @dev Authorize an ungated (scope 0) actor under `authenticator`, signed by `pk`. Batched with an epoch bump so
     ///      overwriting a previously gated actor down to ungated (a scope reduction) is permitted.
     function _authorizeUngatedActor(address account, uint256 pk, bytes32 newActorId, address authenticator) internal {
-        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
+        Keystore.ConfigChange[] memory ch = new Keystore.ConfigChange[](2);
         ch[0] = _authorizeChange(newActorId, authenticator, 0x00, UNBOUNDED, "");
         ch[1] = _bumpChange();
         _applyLocal(pk, account, ch);

@@ -48,7 +48,7 @@ contract DefaultAccountTest is KeystoreTest {
     }
 
     // _authorizeActor and _authorizeActorWithScope are provided by the KeystoreTest harness (re-implemented on
-    // applySignedAccountChanges, granting UNBOUNDED on a sequenced local batch). TRUSTED_EXECUTOR and scoped k1
+    // applySignedConfigChanges, granting UNBOUNDED on a sequenced local batch). TRUSTED_EXECUTOR and scoped k1
     // actors are registered through those helpers.
 
     // ══════════════════════════════════════════════
