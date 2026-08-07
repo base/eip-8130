@@ -5,7 +5,7 @@ import {Keystore} from "../../../src/Keystore.sol";
 
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
-/// @notice Account- and chain-scoping of the Keystore signature envelope (validateSignature / replaySafeHash).
+/// @notice Scoping of the Keystore signature envelope to the account and chain (validateSignature / replaySafeHash).
 ///
 /// @dev The envelope digest binds a signature to a specific account and channel at the singleton level, so
 ///      cross-account replay is closed for EVERY consumer of validateSignature — including registry-direct verifiers

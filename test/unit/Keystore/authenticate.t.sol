@@ -908,7 +908,8 @@ contract AuthenticateTest is KeystoreTest {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     // _authorizeActorWithScope, _implicitAuthorizeActor, and _revokeActor are provided by the KeystoreTest harness
-    // (re-implemented on applySignedAccountChanges). Only the expiry- and policy-specific helpers below are local.
+    // (re-implemented on applySignedAccountChanges). Only the expiry-specific and policy-specific helpers below are
+    // local.
 
     /// @dev Authorize `newActorId` under `authenticator` with the given `expiry` (scope 0, no policy), signed by `pk`.
     ///      A zero expiry (the old "no expiry") is translated to the unbounded sentinel.
