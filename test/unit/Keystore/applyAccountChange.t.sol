@@ -258,13 +258,34 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertEq(_multichainSeq(account), mcBefore + 1);
     }
 
-    /// @notice An IncrementLocalEpoch on the Multichain channel reverts EpochOpRequiresLocalChannel.
+    /// @notice An IncrementLocalEpoch on the Multichain channel reverts ChangeRequiresLocalChannel.
     function test_multichain_revert_bumpRejected(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
 
         Keystore.SignedAccountChanges memory s = _multichainBatch(pk, account, _one(_bumpChange()));
-        vm.expectRevert(Keystore.EpochOpRequiresLocalChannel.selector);
+        vm.expectRevert(Keystore.ChangeRequiresLocalChannel.selector);
+        keystore.applySignedAccountChanges(account, s);
+    }
+
+    /// @notice A Lock on the Multichain channel reverts ChangeRequiresLocalChannel.
+    function test_multichain_revert_lockRejected(uint256 pk, uint16 delay) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        delay = uint16(bound(delay, 1, type(uint16).max));
+
+        Keystore.SignedAccountChanges memory s = _multichainBatch(pk, account, _one(_lockChange(delay)));
+        vm.expectRevert(Keystore.ChangeRequiresLocalChannel.selector);
+        keystore.applySignedAccountChanges(account, s);
+    }
+
+    /// @notice an Unlock on the Multichain channel reverts ChangeRequiresLocalChannel.
+    function test_multichain_revert_unlockRejected(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+
+        Keystore.SignedAccountChanges memory s = _multichainBatch(pk, account, _one(_unlockChange()));
+        vm.expectRevert(Keystore.ChangeRequiresLocalChannel.selector);
         keystore.applySignedAccountChanges(account, s);
     }
 
