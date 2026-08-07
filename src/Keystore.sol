@@ -140,9 +140,9 @@ contract Keystore {
     /// @notice Typehash binding an importAccount signature to its accountId, chainId, and initial actor set.
     ///
     /// @dev NOT compliant with EIP-712, to mitigate eth_signTypedData phishing. `accountId` is the importing account's
-    ///      right-aligned address (`ActorId.fromAddress(account)`), binding the digest to that account so it cannot be
-    ///      replayed against another. `chainId` is either the current chain or 0 for a multichain import. Initial
-    ///      actors are hashed structurally below.
+    ///      actorId (`ActorId.fromAddress(account)`), binding the digest to that account so it cannot be replayed
+    ///      against another. `chainId` is either the current chain or 0 for a multichain import. Initial actors are
+    ///      hashed structurally below.
     bytes32 public constant ACTOR_INITIALIZATION_TYPEHASH = keccak256(
         "ActorInitialization(bytes32 accountId,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"
     );
@@ -160,8 +160,7 @@ contract Keystore {
     ///
     /// @dev NOT compliant with EIP-712, to mitigate phishing attacks. `chainId` is the channel's replay domain
     ///      (0 for {AccountChangeChannel.Multichain}, block.chainid for {AccountChangeChannel.Local}). The digest
-    ///      scheme is a relocation seam: it lives behind {_changesDigest} so a later hash-relocation workstream can
-    ///      move it without touching the pipeline.
+    ///      scheme is confined to {_changesDigest}, keeping it independent of the apply pipeline.
     bytes32 public constant SIGNED_ACCOUNT_CHANGES_TYPEHASH = keccak256(
         "SignedAccountChanges(address account,uint256 chainId,uint64 sequence,AccountChange[] changes)"
         "AccountChange(uint8 changeType,bytes payload)"
@@ -458,9 +457,9 @@ contract Keystore {
         bytes memory deploymentCode;
         (account, effectiveSalt, deploymentCode) = _prepareDeployment(userSalt, bytecode, initialActors);
 
-        // Block re-initialization of an already-bootstrapped account. This must be explicit: authorizeActor is now an
-        // upsert (no duplicate-actor revert) and the create2 below is intentionally swallowed (pop), so a duplicate
-        // createAccount would otherwise silently re-initialize.
+        // Block re-initialization of an already-bootstrapped account. This must be explicit: authorizeActor is an
+        // upsert (no duplicate-actor revert), so without this guard a duplicate createAccount would re-run
+        // initialization over the existing actor set.
         if (_isInitialized(account)) {
             revert AlreadyInitialized();
         }
@@ -553,7 +552,7 @@ contract Keystore {
     ///
     ///      Pipeline (in order): (1) split the sequence word; (2) reject a stale epoch on Local batches;
     ///      (3) validate/advance the sequence counter BEFORE apply (reentrancy discipline); (4) compute the digest
-    ///      via the relocatable {_changesDigest} seam, authenticate, and reject a non-admin signer; (5) iterate
+    ///      via {_changesDigest}, authenticate, and reject a non-admin signer; (5) iterate
     ///      changes enforcing channel and lock policy (local-only changes rejected on Multichain; authority ops
     ///      rejected while the account is locked; Lock/Unlock must be standalone). Anyone may relay — authorization
     ///      comes entirely from the signature.
@@ -611,7 +610,7 @@ contract Keystore {
             a.multichainSequence = seq + 1;
         }
 
-        // Authenticate over the relocatable digest. Authorization is flat: every signed account change is
+        // Authenticate over the digest. Authorization is flat: every signed account change is
         // admin-only, so a single scope check up front replaces any per-op authorization.
         bytes32 digest = _changesDigest(account, s.channel, s.sequence, s.changes);
         (, uint16 scope) = authenticateActor(account, digest, s.signature);
@@ -783,12 +782,10 @@ contract Keystore {
     {
         // Authenticate against the account-scoped digest (see {replaySafeHash}), not the raw hash.
         try this.authenticateActor(account, replaySafeHash(account, hash), signature) returns (bytes32, uint16 scope) {
-            // ERC-1271 signing is authorized for any operational actor: the admin (scope == 0x00), or a SENDER actor
-            // that is not gated by a policy (Scopes.SENDER set AND Scopes.POLICY unset). Signing is an encoding of
-            // authority a SENDER actor already holds via calls, not a separate grant, so it needs no dedicated scope
-            // bit. A POLICY-bearing actor is not operational and cannot sign: a signature acts outside its policy
-            // gate, so honoring one would let it act off its gate.
-            return scope == 0 || ((scope & Scopes.SENDER != 0) && (scope & Scopes.POLICY == 0));
+            // ERC-1271 signing is authorized for any operational actor (see {Scopes.isOperator}): signing encodes
+            // authority a SENDER actor already holds via calls, so it needs no dedicated grant, while a POLICY-gated
+            // actor is not operational because a signature would act outside its policy gate.
+            return Scopes.isOperator(scope);
         } catch {
             return false;
         }
@@ -1256,7 +1253,7 @@ contract Keystore {
     }
 
     /// @dev Typed digest for the importAccount ERC-1271 signature (a signed message), so signers can reproduce it
-    ///      with standard EIP-712-style struct hashing. `accountId` is the account's right-aligned address
+    ///      with standard EIP-712-style struct hashing. `accountId` is the account's actorId
     ///      (`ActorId.fromAddress(account)`) and the digest is bound to `chainId` (0 = multichain) so its replay
     ///      domain matches applySignedAccountChanges.
     function _computeImportDigest(address account, uint256 chainId, InitialActor[] calldata initialActors)
@@ -1266,9 +1263,9 @@ contract Keystore {
     {
         bytes32[] memory actorHashes = new bytes32[](initialActors.length);
         for (uint256 i; i < initialActors.length; i++) {
-            // Hash the actor's real scope. Expiry is always 0 at import — an actor-provided expiry is never
-            // accepted here. policyData is hashed via keccak256 into the Actor struct hash. The typehash structure
-            // matches the importAccount signature payload in EIP-8130.
+            // Expiry is forced to 0 at import — an actor-provided expiry is never accepted here. policyData is
+            // hashed via keccak256 into the Actor struct hash. The typehash structure matches the importAccount
+            // signature payload in EIP-8130.
             bytes32 configHash = keccak256(
                 abi.encode(ACTOR_CONFIG_TYPEHASH, initialActors[i].authenticator, uint48(0), initialActors[i].scope)
             );
@@ -1290,10 +1287,8 @@ contract Keystore {
     /// @dev Computes the digest signed over an applySignedAccountChanges batch: each AccountChange is hashed
     ///      structurally (its variable-length `payload` pre-hashed to a fixed-width layout) and the batch is bound to
     ///      `account`, the channel's replay `chainId` (0 for Multichain, block.chainid for Local), and the raw
-    ///      `sequence` word via SIGNED_ACCOUNT_CHANGES_TYPEHASH.
-    ///
-    ///      This is the hash-relocation SEAM: the whole scheme is confined here so a later workstream can relocate
-    ///      it without touching the pipeline in {applySignedAccountChanges}.
+    ///      `sequence` word via SIGNED_ACCOUNT_CHANGES_TYPEHASH. The entire digest scheme is confined to this function
+    ///      so {applySignedAccountChanges} depends only on its output.
     function _changesDigest(
         address account,
         AccountChangeChannel channel,
@@ -1397,8 +1392,8 @@ contract Keystore {
         return _accountState[account].flags & FLAG_REVOKE_DEFAULT_EOA != 0;
     }
 
-    /// @dev The account's implicit self-actorId: the account address right-aligned into a 32-byte word
-    ///      (`ActorId.fromAddress`), matching the normative self derivation. Non-zero for any valid account.
+    /// @dev The account's implicit self-actorId (`ActorId.fromAddress`), matching the normative self derivation.
+    ///      Non-zero for any valid account.
     function _selfActorId(address account) private pure returns (bytes32) {
         return ActorId.fromAddress(account);
     }

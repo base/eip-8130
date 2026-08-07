@@ -55,11 +55,10 @@ contract DelegateAuthenticator is IAuthenticator {
         address nestedAuthenticator = address(bytes20(nestedAuth[:20]));
         if (nestedAuthenticator == address(this)) revert RecursiveDelegation();
 
-        // The nested actor MUST be the admin (scope == 0x00) of the delegate account. This is enforced
-        // independently of verifySignature, which is now operational (signing is not admin-only, but a delegate
-        // vouch requires admin to preserve non-escalation): an operational SENDER key can sign for its own account,
-        // yet it must NOT be able to vouch as a delegate here. authenticateActor reverts on any auth failure and
-        // otherwise returns the resolved scope, so we require scope == 0x00 explicitly.
+        // The nested actor MUST be the admin (scope == 0x00) of the delegate account. Signing is not admin-only, but
+        // a delegate vouch requires admin to preserve non-escalation: an operational SENDER key can sign for its own
+        // account, yet it must NOT be able to vouch as a delegate here. authenticateActor reverts on any auth failure
+        // and otherwise returns the resolved scope, so we require scope == 0x00 explicitly.
         try KEYSTORE.authenticateActor(delegate, hash, nestedAuth) returns (bytes32, uint16 nestedScope) {
             if (nestedScope != 0) revert InvalidNestedSignature();
         } catch {
