@@ -823,9 +823,12 @@ contract Keystore {
     /// @dev The signature is validated against an account- and chain-scoped envelope digest ({envelopeDigest}), binding
     ///      it to a single account and channel; the registry's own signed messages (actor changes, import, lock) bind
     ///      context in-struct via their own typehashes instead. Reverts on an empty envelope, an unknown signature type,
-    ///      or any authentication failure. Never calls into account code, so an account's own ERC-1271 path can call
-    ///      this without recursion. Operational gating for ERC-1271 (which scopes may sign) is left to the caller,
-    ///      which reads the returned `scope`.
+    ///      or any authentication failure. Operational gating (which scopes may sign) is left to the caller, which reads
+    ///      the returned `scope`.
+    ///
+    ///      This is a new signature-checking method that supersedes ERC-1271 for 8130 accounts. An 8130 account should
+    ///      implement ERC-1271 support on top of it by gating on Scopes.isOperator (see DefaultAccount.isValidSignature).
+    ///      Apps are free to use this method directly for finer-grained authorization control for 8130 accounts.
     ///
     /// @param account The account the signature is validated against.
     /// @param hash The raw app digest; validated against the account/chain-scoped envelope digest.
