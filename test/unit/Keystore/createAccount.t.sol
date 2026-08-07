@@ -57,6 +57,15 @@ contract CreateAccountTest is KeystoreTest {
     // REVERTS (source-execution order)
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
+    /// @notice Verifies createAccount reverts when deployment bytecode is empty
+    /// @dev Empty runtime code would leave a Keystore-initialized address with no code — EOA-like on non-8130 chains.
+    function test_createAccount_revert_emptyBytecode(bytes32 salt) public {
+        Keystore.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(1))));
+
+        vm.expectRevert(Keystore.EmptyBytecode.selector);
+        keystore.createAccount(salt, "", actors);
+    }
+
     /// @notice Verifies createAccount reverts when bytecode length exceeds the 0xFFFF encodable maximum
     /// @dev _buildDeploymentCode (reached first, via computeAddress) reverts BytecodeTooLarge for n > 0xFFFF
     function test_createAccount_revert_bytecodeTooLarge(uint256 lenSeed, bytes1 fill, bytes32 salt) public {
@@ -354,6 +363,14 @@ contract CreateAccountTest is KeystoreTest {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // computeAddress (pure/view: _buildDeploymentCode + _computeEffectiveSalt + _computeActorsCommitment)
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+
+    /// @notice Verifies computeAddress reverts when deployment bytecode is empty
+    function test_computeAddress_revert_emptyBytecode(bytes32 salt) public {
+        Keystore.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(1))));
+
+        vm.expectRevert(Keystore.EmptyBytecode.selector);
+        keystore.computeAddress(salt, "", actors);
+    }
 
     /// @notice Verifies computeAddress reverts for bytecode larger than the 0xFFFF encodable maximum
     /// @dev computeAddress -> _buildDeploymentCode reverts BytecodeTooLarge for n > 0xFFFF, independent of create

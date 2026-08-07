@@ -328,6 +328,11 @@ contract Keystore {
     /// @notice The provided account bytecode exceeds the maximum encodable length.
     error BytecodeTooLarge();
 
+    /// @notice createAccount was called with empty deployment bytecode.
+    /// @dev Zero-length runtime code would leave a Keystore-initialized address with no code — indistinguishable from
+    ///      an EOA on non-8130 chains while carrying 8130 actor state.
+    error EmptyBytecode();
+
     /// @notice CREATE2 did not deploy code at the expected account address (e.g. bytecode too large per EIP-170,
     ///      leading 0xEF byte per EIP-3541, or out of gas). Reverting unwinds all state writes so no orphaned
     ///      EIP-8130 configuration is left behind.
@@ -379,6 +384,7 @@ contract Keystore {
     ///         always 0 at create — scoped-with-expiry keys are added afterwards via applySignedActorChanges. The
     ///         implicit default-EOA key is disabled on creation.
     ///
+    /// @dev Reverts with EmptyBytecode when `bytecode` is empty.
     /// @dev Reverts with BytecodeTooLarge when `bytecode` exceeds the maximum encodable length.
     /// @dev Reverts with AlreadyInitialized when the account already has EIP-8130 state.
     /// @dev Reverts with NoInitialActors when `initialActors` is empty.
@@ -702,6 +708,7 @@ contract Keystore {
 
     /// @notice Computes the counterfactual CREATE2 address for an account without deploying it.
     ///
+    /// @dev Reverts with EmptyBytecode when `bytecode` is empty.
     /// @dev Reverts with BytecodeTooLarge when `bytecode` exceeds the maximum encodable length.
     ///
     /// @param userSalt Caller-chosen salt mixed into the CREATE2 address derivation.
@@ -1271,12 +1278,13 @@ contract Keystore {
     // ----------------------------------------------------------------------------------------------------------------
 
     /// @notice Constructs the deployment code for an account in a manner that doesn't immediately run constructor code.
-    /// @dev Returns a 14-byte EVM loader followed by `bytecode`. The loader copies the trailing `bytecode` into
-    ///      memory and returns it as the deployed runtime:
+    /// @dev Returns a 14-byte EVM loader followed by `bytecode`. Reverts {EmptyBytecode} when `bytecode` is empty.
+    ///      The loader copies the trailing `bytecode` into memory and returns it as the deployed runtime:
     ///        PUSH2 n; PUSH1 0x0e; PUSH1 0x00; CODECOPY   // copy n bytes from code offset 14 to mem 0
     ///        PUSH2 n; PUSH1 0x00; RETURN                 // return mem[0..n]
     function _buildDeploymentCode(bytes calldata bytecode) internal pure returns (bytes memory) {
         uint256 n = bytecode.length;
+        if (n == 0) revert EmptyBytecode();
         if (n > 0xFFFF) revert BytecodeTooLarge();
         return abi.encodePacked(
             bytes1(0x61), bytes2(uint16(n)), hex"600e600039", bytes1(0x61), bytes2(uint16(n)), hex"6000f3", bytecode
