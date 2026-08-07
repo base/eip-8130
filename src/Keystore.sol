@@ -329,8 +329,9 @@ contract Keystore {
     error BytecodeTooLarge();
 
     /// @notice createAccount was called with empty deployment bytecode.
-    /// @dev Zero-length runtime code would leave a Keystore-initialized address with no code — indistinguishable from
-    ///      an EOA on non-8130 chains while carrying 8130 actor state.
+    /// @dev Zero-length runtime code would leave a Keystore-initialized address with no code. On 8130 chains that
+    ///      looks like an EOA that removed its EIP-7702 delegation, breaking the invariant
+    ///      isEOA = (7702-delegated) || (no code).
     error EmptyBytecode();
 
     /// @notice CREATE2 did not deploy code at the expected account address (e.g. bytecode too large per EIP-170,

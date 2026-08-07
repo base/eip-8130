@@ -58,7 +58,7 @@ contract CreateAccountTest is KeystoreTest {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     /// @notice Verifies createAccount reverts when deployment bytecode is empty
-    /// @dev Empty runtime code would leave a Keystore-initialized address with no code — EOA-like on non-8130 chains.
+    /// @dev Empty runtime code would break the 8130 isEOA invariant: (7702-delegated) || (no code).
     function test_createAccount_revert_emptyBytecode(bytes32 salt) public {
         Keystore.InitialActor[] memory actors = _oneK1Actor(bytes32(bytes20(vm.addr(1))));
 
