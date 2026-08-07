@@ -407,7 +407,7 @@ contract DefaultAccountTest is KeystoreTest {
     }
 
     /// @notice A valid signature from a payer-only (non-SENDER, non-admin) actor returns the failure magic value.
-    /// @dev isValidSignature gates on Scopes.isOperational; here SCOPE_SELF_PAYER (no SENDER, no admin) is not
+    /// @dev isValidSignature gates on Scopes.isOperator; here SCOPE_SELF_PAYER (no SENDER, no admin) is not
     ///      operational, so an otherwise-valid signature is rejected.
     function test_isValidSignature_success_returnsFailureForNonOperationalScope(
         uint256 ownerSeed,

@@ -707,7 +707,7 @@ contract AuthenticateTest is KeystoreTest {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     /// @notice validateSignature resolves a chain-local envelope to the actor's identity and raw scope, applying no
-    ///         operational gating (that is the caller's job — see DefaultAccount / Scopes.isOperational).
+    ///         operational gating (that is the caller's job — see DefaultAccount / Scopes.isOperator).
     /// @dev Fuzzes the (POLICY-cleared) scope space and asserts the returned scope equals the authorized scope
     ///      verbatim, proving the Keystore does not interpret scope for signing.
     function test_validateSignature_success_localReturnsActorAndScope(
@@ -723,7 +723,7 @@ contract AuthenticateTest is KeystoreTest {
 
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(actorPk) != account);
-        bytes32 actorId = bytes32(bytes20(vm.addr(actorPk)));
+        bytes32 actorId = bytes32(uint256(uint160(vm.addr(actorPk))));
         _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), scope);
 
         bytes memory auth = _wrapLocal(_buildK1Auth(actorPk, keystore.replaySafeHash(account, block.chainid, hash)));
@@ -749,7 +749,7 @@ contract AuthenticateTest is KeystoreTest {
 
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(sessionPk) != account);
-        bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
+        bytes32 sessionActorId = bytes32(uint256(uint160(vm.addr(sessionPk))));
         _authorizeGatedActor(account, ownerPk, sessionActorId, SCOPE_SENDER | SCOPE_POLICY, manager, commitment);
 
         bytes memory auth = _wrapLocal(_buildK1Auth(sessionPk, keystore.replaySafeHash(account, block.chainid, hash)));
@@ -766,7 +766,7 @@ contract AuthenticateTest is KeystoreTest {
 
         bytes memory auth = _wrapMultichain(_buildK1Auth(ownerPk, keystore.replaySafeHash(account, 0, hash)));
         (bytes32 outActorId, uint16 outScope) = keystore.validateSignature(account, hash, auth);
-        assertEq(outActorId, bytes32(bytes20(vm.addr(ownerPk))));
+        assertEq(outActorId, bytes32(uint256(uint160(vm.addr(ownerPk)))));
         assertEq(outScope, 0);
     }
 

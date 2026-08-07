@@ -27,7 +27,7 @@ contract SignatureEnvelopeTest is KeystoreTest {
         bytes memory signable =
             _wrapLocal(_buildK1Auth(OWNER_PK, keystore.replaySafeHash(account, block.chainid, appHash)));
         (bytes32 actorId,) = keystore.validateSignature(account, appHash, signable);
-        assertEq(actorId, bytes32(bytes20(vm.addr(OWNER_PK))), "must resolve the owner actor");
+        assertEq(actorId, bytes32(uint256(uint160(vm.addr(OWNER_PK)))), "must resolve the owner actor");
     }
 
     /// @dev The core property: a signature made for one account does NOT validate on another account that shares the
@@ -43,7 +43,7 @@ contract SignatureEnvelopeTest is KeystoreTest {
             _wrapLocal(_buildK1Auth(OWNER_PK, keystore.replaySafeHash(accountA, block.chainid, appHash)));
 
         (bytes32 actorId,) = keystore.validateSignature(accountA, appHash, sigForA);
-        assertEq(actorId, bytes32(bytes20(vm.addr(OWNER_PK))), "valid on the intended account");
+        assertEq(actorId, bytes32(uint256(uint160(vm.addr(OWNER_PK)))), "valid on the intended account");
 
         // The same envelope replayed onto accountB recovers a non-owner address -> reverts.
         vm.expectRevert();

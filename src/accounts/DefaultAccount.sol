@@ -106,7 +106,7 @@ contract DefaultAccount is Receiver {
     ///
     /// @dev {Keystore.validateSignature} resolves the typed envelope and reverts on any authentication failure; the
     ///      revert is caught and reported as the ERC-1271 failure value. Operational gating lives here (not in the
-    ///      Keystore): signing is authorized for any operational actor via {Scopes.isOperational}, keeping the signing
+    ///      Keystore): signing is authorized for any operational actor via {Scopes.isOperator}, keeping the signing
     ///      and execution ({_isAuthorizedCaller}) authorization surfaces aligned.
     ///
     /// @param hash The digest to authenticate.
@@ -115,7 +115,7 @@ contract DefaultAccount is Receiver {
     /// @return The ERC-1271 magic value (ERC1271_MAGIC_VALUE) if valid, otherwise ERC1271_INVALID.
     function isValidSignature(bytes32 hash, bytes calldata signature) external view virtual returns (bytes4) {
         try KEYSTORE.validateSignature(address(this), hash, signature) returns (bytes32, uint16 scope) {
-            return Scopes.isOperational(scope) ? ERC1271_MAGIC_VALUE : ERC1271_INVALID;
+            return Scopes.isOperator(scope) ? ERC1271_MAGIC_VALUE : ERC1271_INVALID;
         } catch {
             return ERC1271_INVALID;
         }
