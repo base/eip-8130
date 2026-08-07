@@ -69,7 +69,7 @@ contract KeystoreTest is Test {
 
     function _createK1Account(uint256 pk) internal returns (address account, bytes32 actorId) {
         address signer = vm.addr(pk);
-        actorId = bytes32(bytes20(signer));
+        actorId = bytes32(uint256(uint160(signer)));
 
         Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
         actors[0] = Keystore.InitialActor({
@@ -82,7 +82,7 @@ contract KeystoreTest is Test {
 
     function _createK1AccountWithSalt(uint256 pk, bytes32 salt) internal returns (address account, bytes32 actorId) {
         address signer = vm.addr(pk);
-        actorId = bytes32(bytes20(signer));
+        actorId = bytes32(uint256(uint160(signer)));
 
         Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
         actors[0] = Keystore.InitialActor({

@@ -6,6 +6,7 @@ import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
 
 import {Keystore} from "../Keystore.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../interfaces/ITransactionContext.sol";
+import {ActorId} from "../libraries/ActorId.sol";
 import {Policy} from "./Policy.sol";
 
 /// @dev Required `authenticator` for an actor that represents an *external caller* governed by a policy (e.g. a
@@ -16,7 +17,7 @@ import {Policy} from "./Policy.sol";
 ///      call into empty code and fail). `executeFor` / `executeForMany` require the acting actor's stored
 ///      authenticator to equal this sentinel: that restricts the external path to actors the account explicitly
 ///      provisioned as external-pull, so a native signing key gated to the same manager cannot be driven through the
-///      auth-less external path. Authorization then also requires `actorId == bytes20(msg.sender)`,
+///      auth-less external path. Authorization then also requires `actorId == ActorId.fromAddress(msg.sender)`,
 ///      `policy_manager == this`, and a matching binding commitment.
 address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak256("externalPolicyCaller"))));
 
@@ -41,7 +42,7 @@ address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak2
 ///        the account. The acting identity is read from the transaction-context precompile and `account == msg.sender`.
 ///      - {executeFor} / {executeForMany}: an *external caller* acts on behalf of one or more accounts that authorized
 ///        it (e.g. a subscription provider pulling from many accounts in one transaction). Identity is the caller
-///        itself (`actorId == bytes20(msg.sender)`) and `account` comes from the supplied binding.
+///        itself (`actorId == ActorId.fromAddress(msg.sender)`) and `account` comes from the supplied binding.
 ///
 ///      Commitment binding: the account authorizes a {PolicyBinding}; its `keccak256` is the `commitment`. When the
 ///      account authorizes the session-key actor it stores `scope & Scopes.POLICY != 0`, `policy_manager =
@@ -156,7 +157,7 @@ contract PolicyManager is ReentrancyGuard {
     ///         for it. Used when the actor is not a key *on* the account but a separate party (e.g. a subscription
     ///         provider) the account opted into.
     ///
-    /// @dev The acting identity is the caller itself — `actorId == bytes20(msg.sender)` — and `account` is
+    /// @dev The acting identity is the caller itself — `actorId == ActorId.fromAddress(msg.sender)` — and `account` is
     ///      `binding.account`. There is no protocol routing on this path, so unlike {execute} this re-verifies that
     ///      the caller is a live external-pull actor (authenticator == {EXTERNAL_POLICY_AUTHENTICATOR}) and that the
     ///      account gated *this* manager for it.
@@ -164,7 +165,7 @@ contract PolicyManager is ReentrancyGuard {
     /// @param binding       Full account-authorized binding (config + window + salt).
     /// @param executionData Per-use action parameters interpreted by the policy.
     function executeFor(PolicyBinding calldata binding, bytes calldata executionData) external nonReentrant {
-        _enforceExternal(binding, bytes32(bytes20(msg.sender)), executionData, msg.sender);
+        _enforceExternal(binding, ActorId.fromAddress(msg.sender), executionData, msg.sender);
     }
 
     /// @notice Best-effort cross-account batch of {executeFor}: one external caller, many bindings, one transaction.
@@ -182,7 +183,7 @@ contract PolicyManager is ReentrancyGuard {
         returns (bool[] memory results)
     {
         if (bindings.length != executionData.length) revert LengthMismatch();
-        bytes32 actorId = bytes32(bytes20(msg.sender));
+        bytes32 actorId = ActorId.fromAddress(msg.sender);
         address caller = msg.sender;
         results = new bool[](bindings.length);
         for (uint256 i; i < bindings.length; i++) {

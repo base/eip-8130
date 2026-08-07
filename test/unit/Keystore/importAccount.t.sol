@@ -100,12 +100,15 @@ contract ImportAccountTest is KeystoreTest {
     function _singleUnrestrictedActor(address signer) internal view returns (Keystore.InitialActor[] memory actors) {
         actors = new Keystore.InitialActor[](1);
         actors[0] = Keystore.InitialActor({
-            actorId: bytes32(bytes20(signer)), authenticator: address(k1Authenticator), scope: 0, policyData: ""
+            actorId: bytes32(uint256(uint160(signer))),
+            authenticator: address(k1Authenticator),
+            scope: 0,
+            policyData: ""
         });
     }
 
     /// @dev A strictly-ascending k1 actor set of `count` address-shaped actorIds (mirroring a real k1 actorId =
-    ///      bytes32(bytes20(signer))). Ascending uint160 base+i maps to ascending bytes32, so no sort is needed.
+    ///      bytes32(uint256(uint160(signer)))). Ascending uint160 base+i maps to ascending bytes32, so no sort is needed.
     function _ascendingK1Actors(uint256 count, uint256 base)
         internal
         view
@@ -114,7 +117,7 @@ contract ImportAccountTest is KeystoreTest {
         actors = new Keystore.InitialActor[](count);
         for (uint256 i; i < count; i++) {
             actors[i] = Keystore.InitialActor({
-                actorId: bytes32(bytes20(address(uint160(base + i)))),
+                actorId: bytes32(uint256(uint160(address(uint160(base + i))))),
                 authenticator: address(k1Authenticator),
                 scope: 0,
                 policyData: ""
@@ -218,7 +221,9 @@ contract ImportAccountTest is KeystoreTest {
 
         // A global (multichain / chainId 0) actor change signed by the EOA's implicit default owner.
         _applyMultichain(
-            eoaPk, eoa, _one(_authorizeChange(bytes32(bytes20(device)), address(k1Authenticator), 0x00, UNBOUNDED, ""))
+            eoaPk,
+            eoa,
+            _one(_authorizeChange(bytes32(uint256(uint160(device))), address(k1Authenticator), 0x00, UNBOUNDED, ""))
         );
 
         // Multichain channel advanced; local channel untouched.
@@ -395,7 +400,7 @@ contract ImportAccountTest is KeystoreTest {
         keystore.importAccount(address(wallet), block.chainid, actors, sig);
 
         assertEq(keystore.getChangeSequences(address(wallet)).localSequence, 1);
-        assertTrue(_isActor(address(wallet), bytes32(bytes20(vm.addr(ownerPk)))));
+        assertTrue(_isActor(address(wallet), bytes32(uint256(uint160(vm.addr(ownerPk))))));
     }
 
     /// @notice Verifies a chainId == 0 (multichain) import signature authorizes import and still sets localSequence.
@@ -410,7 +415,7 @@ contract ImportAccountTest is KeystoreTest {
 
         assertEq(keystore.getChangeSequences(address(wallet)).localSequence, 1);
         assertEq(keystore.getChangeSequences(address(wallet)).multichain, 0);
-        assertTrue(_isActor(address(wallet), bytes32(bytes20(vm.addr(ownerPk)))));
+        assertTrue(_isActor(address(wallet), bytes32(uint256(uint160(vm.addr(ownerPk))))));
     }
 
     /// @notice Verifies importAccount emits AccountImported(account) exactly once on the happy path.
@@ -437,9 +442,9 @@ contract ImportAccountTest is KeystoreTest {
         keystore.importAccount(address(wallet), chainId, actors, sig);
 
         // The implicit default EOA (self-actorId) is disabled by default on import.
-        assertFalse(_isActor(address(wallet), bytes32(bytes20(address(wallet)))));
+        assertFalse(_isActor(address(wallet), bytes32(uint256(uint160(address(wallet))))));
         Keystore.ActorConfig memory selfConfig =
-            keystore.getActorConfig(address(wallet), bytes32(bytes20(address(wallet))));
+            keystore.getActorConfig(address(wallet), bytes32(uint256(uint160(address(wallet)))));
         assertEq(selfConfig.authenticator, address(0));
     }
 
@@ -491,8 +496,8 @@ contract ImportAccountTest is KeystoreTest {
         keystore.importAccount(eoa, uint64(block.chainid), actors, sig);
 
         assertEq(keystore.getChangeSequences(eoa).localSequence, 1);
-        assertTrue(_isActor(eoa, bytes32(bytes20(device))));
-        assertFalse(_isActor(eoa, bytes32(bytes20(eoa))));
+        assertTrue(_isActor(eoa, bytes32(uint256(uint160(device)))));
+        assertFalse(_isActor(eoa, bytes32(uint256(uint160(eoa)))));
     }
 
     /// @notice Verifies a real EIP-7702 EOA delegated to DefaultAccount can self-import with its own k1 signature.
@@ -515,8 +520,8 @@ contract ImportAccountTest is KeystoreTest {
         );
 
         assertEq(keystore.getChangeSequences(eoa).localSequence, 1);
-        assertTrue(_isActor(eoa, bytes32(bytes20(device))));
-        assertFalse(_isActor(eoa, bytes32(bytes20(eoa))));
+        assertTrue(_isActor(eoa, bytes32(uint256(uint160(device)))));
+        assertFalse(_isActor(eoa, bytes32(uint256(uint160(eoa)))));
 
         // The implicit default EOA is disabled after import: its own k1 sig now finds no config.
         bytes32 h = keccak256("post import");
@@ -534,7 +539,10 @@ contract ImportAccountTest is KeystoreTest {
 
         Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
         actors[0] = Keystore.InitialActor({
-            actorId: bytes32(bytes20(eoa)), authenticator: keystore.K1_AUTHENTICATOR(), scope: 0, policyData: ""
+            actorId: bytes32(uint256(uint160(eoa))),
+            authenticator: keystore.K1_AUTHENTICATOR(),
+            scope: 0,
+            policyData: ""
         });
 
         bytes32 digest = _computeImportDigest(eoa, actors);
@@ -545,7 +553,7 @@ contract ImportAccountTest is KeystoreTest {
 
         assertEq(keystore.getChangeSequences(eoa).localSequence, 1);
         // The self-actorId is a live explicit owner.
-        assertTrue(_isActor(eoa, bytes32(bytes20(eoa))));
+        assertTrue(_isActor(eoa, bytes32(uint256(uint160(eoa)))));
 
         // The same key still authenticates as a full owner — now via its explicit self config, not the (disabled)
         // implicit fallback.

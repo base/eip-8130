@@ -227,7 +227,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         uint256 scopedPk = _boundK1Pk(scopedSeed);
         vm.assume(vm.addr(ownerPk) != vm.addr(scopedPk));
         (address account,) = _createK1Account(ownerPk);
-        bytes32 scopedId = bytes32(bytes20(vm.addr(scopedPk)));
+        bytes32 scopedId = bytes32(uint256(uint160(vm.addr(scopedPk))));
 
         _applyLocal(ownerPk, account, _one(_authorizeChange(scopedId, address(k1Authenticator), SENDER, UNBOUNDED, "")));
         _signedLock(ownerPk, account, 1 hours);
@@ -327,7 +327,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         // staticcall, so the empty signature is never reached.
         Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
         actors[0] = Keystore.InitialActor({
-            actorId: bytes32(bytes20(account)), authenticator: address(1), scope: 0, policyData: ""
+            actorId: bytes32(uint256(uint160(account))), authenticator: address(1), scope: 0, policyData: ""
         });
         vm.expectRevert(Keystore.AlreadyInitialized.selector);
         keystore.importAccount(account, 0, actors, "");
@@ -380,7 +380,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         // importAccount must now reject the account as already initialized.
         Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
         actors[0] = Keystore.InitialActor({
-            actorId: bytes32(bytes20(account)), authenticator: address(1), scope: 0, policyData: ""
+            actorId: bytes32(uint256(uint160(account))), authenticator: address(1), scope: 0, policyData: ""
         });
         vm.expectRevert(Keystore.AlreadyInitialized.selector);
         keystore.importAccount(account, 0, actors, "");

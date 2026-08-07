@@ -12,7 +12,7 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 ///           1. InvalidDataLength       — data.length < 40
 ///           2. RecursiveDelegation     — nestedAuthenticator == address(this) (blocks 1-hop recursion)
 ///           3. InvalidNestedSignature  — the nested auth does not resolve to the admin actor on `delegate`
-///         On success returns actorId = bytes32(bytes20(delegate)).
+///         On success returns actorId = bytes32(uint256(uint160(delegate))).
 ///
 ///         The delegate vouch requires the nested auth to resolve to the ADMIN actor on `delegate` (scope ==
 ///         0x00). This admin-only requirement is enforced independently of verifySignature (via authenticateActor
@@ -153,7 +153,7 @@ contract DelegateAuthenticatorTest is KeystoreTest {
     // ── Happy paths ──
 
     /// @dev An unrestricted (scope 0x00) initial owner is admin, so the delegate vouch succeeds;
-    ///      authenticate returns actorId = bytes32(bytes20(delegate)).
+    ///      authenticate returns actorId = bytes32(uint256(uint160(delegate))).
     function test_authenticate_success_unrestrictedNestedSigner(uint256 ownerSeed, bytes32 hash) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         (address delegateAccount,) = _createK1Account(ownerPk);
@@ -162,7 +162,7 @@ contract DelegateAuthenticatorTest is KeystoreTest {
         bytes memory data = abi.encodePacked(delegateAccount, nestedAuth);
 
         bytes32 actorId = delegateAuthenticator.authenticate(hash, data);
-        assertEq(actorId, bytes32(bytes20(delegateAccount)));
+        assertEq(actorId, bytes32(uint256(uint160(delegateAccount))));
     }
 
     /// @dev The former SIGNER bit (0x10, now SCOPE_SPONSOR_PAYER) no longer grants signing: a nested actor holding
@@ -189,6 +189,8 @@ contract DelegateAuthenticatorTest is KeystoreTest {
     /// @dev Authorizes a new K1 actor (`newPk`) with `scope` on `account`, signed by the unrestricted owner
     ///      (`ownerPk`). Granted UNBOUNDED (the new "no expiry") on a sequenced local batch via the harness helper.
     function _authorizeScopedK1Actor(address account, uint256 ownerPk, uint256 newPk, uint16 scope) internal {
-        _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(vm.addr(newPk))), address(k1Authenticator), scope);
+        _authorizeActorWithScope(
+            account, ownerPk, bytes32(uint256(uint160(vm.addr(newPk)))), address(k1Authenticator), scope
+        );
     }
 }

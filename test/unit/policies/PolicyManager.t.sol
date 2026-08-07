@@ -333,13 +333,16 @@ contract PolicyManagerTest is KeystoreTest {
 
     function _createAccountWithRootAndManager() internal returns (address) {
         Keystore.InitialActor memory root = Keystore.InitialActor({
-            actorId: bytes32(bytes20(vm.addr(ROOT_PK))),
+            actorId: bytes32(uint256(uint160(vm.addr(ROOT_PK)))),
             authenticator: address(k1Authenticator),
             scope: 0,
             policyData: ""
         });
         Keystore.InitialActor memory mgr = Keystore.InitialActor({
-            actorId: bytes32(bytes20(address(manager))), authenticator: TRUSTED_EXECUTOR, scope: 0, policyData: ""
+            actorId: bytes32(uint256(uint160(address(manager)))),
+            authenticator: TRUSTED_EXECUTOR,
+            scope: 0,
+            policyData: ""
         });
 
         Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](2);
@@ -374,13 +377,16 @@ contract PolicyManagerTest is KeystoreTest {
     function _createAttackerAccount() internal returns (address attacker, uint256 attackerOwnerPk) {
         attackerOwnerPk = 0xB0B;
         Keystore.InitialActor memory root = Keystore.InitialActor({
-            actorId: bytes32(bytes20(vm.addr(attackerOwnerPk))),
+            actorId: bytes32(uint256(uint160(vm.addr(attackerOwnerPk)))),
             authenticator: address(k1Authenticator),
             scope: 0,
             policyData: ""
         });
         Keystore.InitialActor memory mgr = Keystore.InitialActor({
-            actorId: bytes32(bytes20(address(manager))), authenticator: TRUSTED_EXECUTOR, scope: 0, policyData: ""
+            actorId: bytes32(uint256(uint160(address(manager)))),
+            authenticator: TRUSTED_EXECUTOR,
+            scope: 0,
+            policyData: ""
         });
         Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](2);
         (actors[0], actors[1]) = root.actorId < mgr.actorId ? (root, mgr) : (mgr, root);

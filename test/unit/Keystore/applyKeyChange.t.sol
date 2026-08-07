@@ -10,7 +10,8 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 ///         and the sequenced-channel replay/saturation edges. Lock/unlock (admin-only),
 ///         and multichain regression live in applyAccountChange.t.sol.
 contract ApplySignedAccountChangesTest is KeystoreTest {
-    // Non-self, non-owner actor ids (low right-aligned constants never collide with a bytes20-left-aligned address).
+    // Non-self, non-owner actor ids: small distinct constants that never collide with a real (address-derived) actorId
+    // used in these tests.
     bytes32 constant ACTOR_A = bytes32(uint256(0xA1));
     bytes32 constant ACTOR_B = bytes32(uint256(0xB2));
 

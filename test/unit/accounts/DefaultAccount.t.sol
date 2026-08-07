@@ -91,7 +91,7 @@ contract DefaultAccountTest is KeystoreTest {
         vm.assume(actor != account && actor != vm.addr(ACTOR_PK));
 
         // Register `actor` as an ordinary k1 actor (authenticator == K1_AUTHENTICATOR), NOT a trusted executor.
-        _authorizeActor(account, ACTOR_PK, bytes32(bytes20(actor)), k1Authenticator);
+        _authorizeActor(account, ACTOR_PK, bytes32(uint256(uint160(actor))), k1Authenticator);
 
         vm.prank(actor);
         vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
@@ -205,7 +205,7 @@ contract DefaultAccountTest is KeystoreTest {
         vm.assume(executor != account && executor != vm.addr(ACTOR_PK));
 
         // The owner signs an actor change registering `executor` with the TRUSTED_EXECUTOR authenticator.
-        _authorizeActor(account, ACTOR_PK, bytes32(bytes20(executor)), TRUSTED_EXECUTOR);
+        _authorizeActor(account, ACTOR_PK, bytes32(uint256(uint160(executor))), TRUSTED_EXECUTOR);
 
         vm.prank(executor);
         DefaultAccount(payable(account))
@@ -314,7 +314,7 @@ contract DefaultAccountTest is KeystoreTest {
         vm.assume(actor != vm.addr(ownerPk) && actor != account);
 
         // Authorize the actor with SELF_PAYER scope only — it is not operational and cannot validate signatures.
-        _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(actor)), k1Authenticator, SCOPE_SELF_PAYER);
+        _authorizeActorWithScope(account, ownerPk, bytes32(uint256(uint160(actor))), k1Authenticator, SCOPE_SELF_PAYER);
 
         bytes memory authData = _buildK1Auth(actorPk, hash);
 
@@ -336,7 +336,7 @@ contract DefaultAccountTest is KeystoreTest {
         vm.assume(actor != vm.addr(ownerPk) && actor != account);
 
         // Authorize the actor with SENDER scope only (no POLICY) — it is operational and can validate signatures.
-        _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(actor)), k1Authenticator, SCOPE_SENDER);
+        _authorizeActorWithScope(account, ownerPk, bytes32(uint256(uint160(actor))), k1Authenticator, SCOPE_SENDER);
 
         // verifySignature applies the account-scoped EIP-7739 wrap, so sign the replaySafeHash digest.
         bytes memory authData = _buildK1Auth(actorPk, keystore.replaySafeHash(account, hash));
@@ -392,7 +392,9 @@ contract DefaultAccountTest is KeystoreTest {
         address actor = vm.addr(actorPk);
         vm.assume(actor != vm.addr(ownerPk) && actor != account);
 
-        _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(actor)), k1Authenticator, SCOPE_SPONSOR_PAYER);
+        _authorizeActorWithScope(
+            account, ownerPk, bytes32(uint256(uint160(actor))), k1Authenticator, SCOPE_SPONSOR_PAYER
+        );
 
         bytes memory authData = _buildK1Auth(actorPk, hash);
 
@@ -421,7 +423,7 @@ contract DefaultAccountTest is KeystoreTest {
         address executor = address(uint160(bound(execSeed, 10, type(uint160).max)));
         vm.assume(executor != account && executor != vm.addr(ACTOR_PK));
 
-        _authorizeActor(account, ACTOR_PK, bytes32(bytes20(executor)), TRUSTED_EXECUTOR);
+        _authorizeActor(account, ACTOR_PK, bytes32(uint256(uint160(executor))), TRUSTED_EXECUTOR);
 
         assertTrue(DefaultAccount(payable(account)).isAuthorizedCaller(executor));
     }
@@ -435,7 +437,7 @@ contract DefaultAccountTest is KeystoreTest {
         address actor = vm.addr(actorPk);
         vm.assume(actor != account && actor != vm.addr(ACTOR_PK));
 
-        _authorizeActor(account, ACTOR_PK, bytes32(bytes20(actor)), k1Authenticator);
+        _authorizeActor(account, ACTOR_PK, bytes32(uint256(uint160(actor))), k1Authenticator);
 
         assertFalse(DefaultAccount(payable(account)).isAuthorizedCaller(actor));
     }

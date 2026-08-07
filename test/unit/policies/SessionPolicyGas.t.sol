@@ -331,13 +331,16 @@ contract SessionPolicyGasTest is KeystoreTest {
 
     function _createAccountWithRootAndManager() internal returns (address) {
         Keystore.InitialActor memory root = Keystore.InitialActor({
-            actorId: bytes32(bytes20(vm.addr(ROOT_PK))),
+            actorId: bytes32(uint256(uint160(vm.addr(ROOT_PK)))),
             authenticator: address(k1Authenticator),
             scope: 0,
             policyData: ""
         });
         Keystore.InitialActor memory mgr = Keystore.InitialActor({
-            actorId: bytes32(bytes20(address(manager))), authenticator: TRUSTED_EXECUTOR, scope: 0, policyData: ""
+            actorId: bytes32(uint256(uint160(address(manager)))),
+            authenticator: TRUSTED_EXECUTOR,
+            scope: 0,
+            policyData: ""
         });
 
         Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](2);

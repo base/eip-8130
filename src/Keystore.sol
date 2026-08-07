@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.36;
 
+import {ActorId} from "./libraries/ActorId.sol";
 import {IAuthenticator} from "./interfaces/IAuthenticator.sol";
 import {Scopes} from "./libraries/Scopes.sol";
 
@@ -119,7 +120,7 @@ contract Keystore {
     ///      `lockUnion` is a union field: while FLAG_UNLOCK_INITIATED is clear it holds the configured unlock delay
     ///      (seconds, uint16 range); while set it holds unlocksAt (the timestamp at which the unlock takes effect).
     ///      The defaultEOA* fields are the inline home for the account's own secp256k1 ("self") key — the actor whose
-    ///      actorId is bytes32(bytes20(account)). When FLAG_REVOKE_DEFAULT_EOA is unset, a k1 signature recovering to
+    ///      actorId is the account address right-aligned (ActorId.fromAddress). When FLAG_REVOKE_DEFAULT_EOA is unset, a k1 signature recovering to
     ///      the account authenticates with this inline config (all-zero = full owner; non-zero scope/expiry = a
     ///      scoped self key), resolved in a single SLOAD. Policy gating (when scope & Scopes.POLICY != 0) is still keyed
     ///      by actorId in the shared _policyManager/_policyCommitment keyspace. The separate _actorConfig[self][account]
@@ -1066,7 +1067,7 @@ contract Keystore {
     {
         // Reject the zero actorId: it is not a usable identifier (the tx-context precompile surfaces the zero id as
         // "no actor"), and every real actorId — derived from keccak(authenticator || salt), or the non-zero self
-        // (bytes32(bytes20(account))) — is non-zero. Bootstrap already rejects it via the strictly-ascending-from-zero
+        // (the account address right-aligned) — is non-zero. Bootstrap already rejects it via the strictly-ascending-from-zero
         // sort; this guards the signed AuthorizeActor path.
         if (actorId == bytes32(0)) revert InvalidActorId();
 
@@ -1341,7 +1342,7 @@ contract Keystore {
             return (_selfActorId(account), st.defaultEOAScope);
         }
 
-        bytes32 actorId = bytes32(bytes20(recovered));
+        bytes32 actorId = ActorId.fromAddress(recovered);
         return (actorId, _resolveExplicitActor(account, actorId, K1_AUTHENTICATOR));
     }
 
@@ -1350,10 +1351,10 @@ contract Keystore {
         return _accountState[account].flags & FLAG_REVOKE_DEFAULT_EOA != 0;
     }
 
-    /// @dev The account's implicit self-actorId: the address left-aligned into the high 20 bytes
-    ///      (`bytes32(bytes20(account))`), matching the normative self derivation. Non-zero for any valid account.
+    /// @dev The account's implicit self-actorId: the account address right-aligned into a 32-byte word
+    ///      (`ActorId.fromAddress`), matching the normative self derivation. Non-zero for any valid account.
     function _selfActorId(address account) internal pure returns (bytes32) {
-        return bytes32(bytes20(account));
+        return ActorId.fromAddress(account);
     }
 
     /// @dev True when `expiry` is set (non-zero) and has passed. A zero expiry means no expiry.

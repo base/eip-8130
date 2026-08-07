@@ -50,7 +50,7 @@ contract GasBenchmarkTest is Test {
         {
             uint256 pkA = 0xA001;
             address signerA = vm.addr(pkA);
-            bytes32 actorIdA = bytes32(bytes20(signerA));
+            bytes32 actorIdA = bytes32(uint256(uint160(signerA)));
             Keystore.InitialActor[] memory actorsA = new Keystore.InitialActor[](1);
             actorsA[0] = Keystore.InitialActor({
                 actorId: actorIdA, authenticator: config.K1_AUTHENTICATOR(), scope: 0, policyData: ""

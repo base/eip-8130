@@ -116,7 +116,7 @@ caller, not the protocol.
 
 `executeFor(binding, executionData)` is the external-caller entrypoint:
 
-- **Identity is the caller:** `actorId = bytes20(msg.sender)`, and `account` is an explicit argument. The caller
+- **Identity is the caller:** `actorId = ActorId.fromAddress(msg.sender)` (the address right-aligned in a 32-byte word), and `account` is an explicit argument. The caller
   can't forge the identity because it's derived from `msg.sender`.
 - **No protocol routing, so the manager re-checks itself:** it re-adds the `policy_manager(account, actorId) ==
   address(this)` check that the account-acting `execute` omits (the 8130 gate guarantees routing only on the
@@ -131,7 +131,7 @@ then `executeFor` — so the account never needs to send a transaction. The acco
 *policy-only* actor — it has no authority of its own, it only carries a binding the manager enforces:
 
 ```solidity
-// actorId = bytes20(provider). The provider never signs an 8130 tx; it acts by being msg.sender.
+// actorId = ActorId.fromAddress(provider). The provider never signs an 8130 tx; it acts by being msg.sender.
 Keystore.ActorConfig({
     authenticator: EXTERNAL_POLICY_AUTHENTICATOR, // recognized actor; NO direct executeBatch; not 8130-usable
     scope:         0x02,                          // Scopes.POLICY — gated initiation only (MAY also OR Scopes.SELF_PAYER

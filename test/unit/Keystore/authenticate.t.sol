@@ -152,7 +152,7 @@ contract AuthenticateTest is KeystoreTest {
         vm.assume(vm.addr(ownerPk) != vm.addr(actorPk));
 
         (address account,) = _createK1Account(ownerPk);
-        bytes32 actorId = bytes32(bytes20(vm.addr(actorPk)));
+        bytes32 actorId = bytes32(uint256(uint160(vm.addr(actorPk))));
         _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), 0x00);
         _revokeActor(account, ownerPk, actorId);
 
@@ -172,7 +172,7 @@ contract AuthenticateTest is KeystoreTest {
     ) public {
         uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
-        bytes32 selfActorId = bytes32(bytes20(eoa));
+        bytes32 selfActorId = bytes32(uint256(uint160(eoa)));
 
         uint48 expiry = uint48(bound(uint256(expirySeed), block.timestamp + 1, uint256(type(uint48).max) - 1));
         // Authorize the self-actorId as a scoped-0 K1 actor carrying an expiry (re-enables the inline self).
@@ -197,7 +197,7 @@ contract AuthenticateTest is KeystoreTest {
         vm.assume(vm.addr(ownerPk) != vm.addr(sessionPk));
 
         (address account,) = _createK1Account(ownerPk);
-        bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
+        bytes32 sessionActorId = bytes32(uint256(uint160(vm.addr(sessionPk))));
         uint48 expiry = uint48(bound(uint256(expirySeed), block.timestamp + 1, uint256(type(uint48).max) - 1));
         _authorizeActorWithExpiry(account, ownerPk, sessionActorId, address(k1Authenticator), expiry);
 
@@ -236,7 +236,7 @@ contract AuthenticateTest is KeystoreTest {
     function test_authenticateActor_revert_defaultEoaRevoked_afterSelfRevoke(uint256 eoaSeed, bytes32 hash) public {
         uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
-        bytes32 selfActorId = bytes32(bytes20(eoa));
+        bytes32 selfActorId = bytes32(uint256(uint160(eoa)));
 
         // The implicit self (unrestricted) signs a batch revoking its own self-actorId; auth precedes the revoke.
         _revokeActor(eoa, eoaPk, selfActorId);
@@ -252,7 +252,7 @@ contract AuthenticateTest is KeystoreTest {
     {
         uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
-        bytes32 selfActorId = bytes32(bytes20(eoa));
+        bytes32 selfActorId = bytes32(uint256(uint160(eoa)));
 
         // Implicit self authorizes itself to a non-K1 authenticator (P256), flipping the mutual-exclusion flag.
         _authorizeActorWithScope(eoa, eoaPk, selfActorId, address(p256Authenticator), 0x00);
@@ -370,7 +370,9 @@ contract AuthenticateTest is KeystoreTest {
 
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(actorPk) != account);
-        _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(vm.addr(actorPk))), address(k1Authenticator), 0x00);
+        _authorizeActorWithScope(
+            account, ownerPk, bytes32(uint256(uint160(vm.addr(actorPk)))), address(k1Authenticator), 0x00
+        );
 
         (, uint16 scope) = keystore.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
         assertEq(scope, uint8(0x00));
@@ -430,7 +432,9 @@ contract AuthenticateTest is KeystoreTest {
 
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(actorPk) != account);
-        _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(vm.addr(actorPk))), address(k1Authenticator), scope);
+        _authorizeActorWithScope(
+            account, ownerPk, bytes32(uint256(uint160(vm.addr(actorPk)))), address(k1Authenticator), scope
+        );
 
         (, uint16 outScope) = keystore.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
         assertEq(outScope, scope);
@@ -447,7 +451,9 @@ contract AuthenticateTest is KeystoreTest {
 
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(actorPk) != account);
-        _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(vm.addr(actorPk))), address(k1Authenticator), 0x00);
+        _authorizeActorWithScope(
+            account, ownerPk, bytes32(uint256(uint160(vm.addr(actorPk)))), address(k1Authenticator), 0x00
+        );
 
         (, uint16 scope) = keystore.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
         assertEq(scope, uint8(0x00));
@@ -467,7 +473,9 @@ contract AuthenticateTest is KeystoreTest {
 
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(sessionPk) != account);
-        _authorizeActorWithExpiry(account, ownerPk, bytes32(bytes20(vm.addr(sessionPk))), address(k1Authenticator), 0);
+        _authorizeActorWithExpiry(
+            account, ownerPk, bytes32(uint256(uint160(vm.addr(sessionPk)))), address(k1Authenticator), 0
+        );
 
         vm.warp(block.timestamp + bound(warpSeed, 1, 3650 days));
         (, uint16 scope) = keystore.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
@@ -490,7 +498,7 @@ contract AuthenticateTest is KeystoreTest {
         vm.assume(vm.addr(sessionPk) != account);
         uint48 expiry = uint48(bound(uint256(expirySeed), block.timestamp + 1, uint256(type(uint48).max)));
         _authorizeActorWithExpiry(
-            account, ownerPk, bytes32(bytes20(vm.addr(sessionPk))), address(k1Authenticator), expiry
+            account, ownerPk, bytes32(uint256(uint160(vm.addr(sessionPk)))), address(k1Authenticator), expiry
         );
 
         vm.warp(expiry);
@@ -518,7 +526,7 @@ contract AuthenticateTest is KeystoreTest {
 
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(sessionPk) != account);
-        bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
+        bytes32 sessionActorId = bytes32(uint256(uint160(vm.addr(sessionPk))));
         _authorizeGatedActor(account, ownerPk, sessionActorId, scope, manager, commitment);
 
         (, uint16 outScope) = keystore.authenticateActor(account, hash, _buildK1Auth(sessionPk, hash));
@@ -536,7 +544,7 @@ contract AuthenticateTest is KeystoreTest {
         (, uint16 scope) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
 
         assertEq(scope, uint16(0x00));
-        assertEq(keystore.getPolicyManager(eoa, bytes32(bytes20(eoa))), address(0));
+        assertEq(keystore.getPolicyManager(eoa, bytes32(uint256(uint160(eoa)))), address(0));
     }
 
     /// @notice Scoping the account's own key downgrades it: the inline self returns the reduced scope, never owner.
@@ -544,7 +552,7 @@ contract AuthenticateTest is KeystoreTest {
     function test_authenticateActor_success_selfScopedDowngrade(uint256 eoaSeed, uint8 scopeSeed, bytes32 hash) public {
         uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
-        bytes32 selfActorId = bytes32(bytes20(eoa));
+        bytes32 selfActorId = bytes32(uint256(uint160(eoa)));
         uint16 scope = uint16(bound(uint256(scopeSeed), 1, 255)) & ~SCOPE_POLICY;
         vm.assume(scope != 0);
 
@@ -564,7 +572,7 @@ contract AuthenticateTest is KeystoreTest {
         address eoa = vm.addr(eoaPk);
         vm.assume(vm.addr(bobPk) != eoa);
 
-        _implicitAuthorizeActor(eoa, eoaPk, bytes32(bytes20(vm.addr(bobPk))), address(k1Authenticator));
+        _implicitAuthorizeActor(eoa, eoaPk, bytes32(uint256(uint160(vm.addr(bobPk)))), address(k1Authenticator));
 
         (, uint16 scope) = keystore.authenticateActor(eoa, hash, _buildK1Auth(bobPk, hash));
         assertEq(scope, uint8(0x00));
@@ -596,16 +604,16 @@ contract AuthenticateTest is KeystoreTest {
     // Off-8130 consumers (e.g. an ERC-4337 account) need the resolved actorId to drive getPolicyCommitment without
     // re-invoking the authenticator — parity with the tx-context precompile on an 8130 chain.
 
-    /// @notice The inline-self k1 path returns actorId == bytes32(bytes20(account)).
+    /// @notice The inline-self k1 path returns actorId == bytes32(uint256(uint160(account))).
     function test_authenticateActor_success_returnsActorId_inlineSelf(uint256 eoaSeed, bytes32 hash) public view {
         uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
 
         (bytes32 actorId,) = keystore.authenticateActor(eoa, hash, _buildK1Auth(eoaPk, hash));
-        assertEq(actorId, bytes32(bytes20(eoa)));
+        assertEq(actorId, bytes32(uint256(uint160(eoa))));
     }
 
-    /// @notice A non-self k1 actor returns actorId == bytes32(bytes20(signer)).
+    /// @notice A non-self k1 actor returns actorId == bytes32(uint256(uint160(signer))).
     function test_authenticateActor_success_returnsActorId_nonSelfK1(uint256 ownerSeed, uint256 actorSeed, bytes32 hash)
         public
     {
@@ -615,7 +623,7 @@ contract AuthenticateTest is KeystoreTest {
 
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(actorPk) != account);
-        bytes32 expectedActorId = bytes32(bytes20(vm.addr(actorPk)));
+        bytes32 expectedActorId = bytes32(uint256(uint160(vm.addr(actorPk))));
         _authorizeActorWithScope(account, ownerPk, expectedActorId, address(k1Authenticator), 0x00);
 
         (bytes32 actorId,) = keystore.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
@@ -668,7 +676,7 @@ contract AuthenticateTest is KeystoreTest {
 
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(actorPk) != account);
-        bytes32 expectedActorId = bytes32(bytes20(vm.addr(actorPk)));
+        bytes32 expectedActorId = bytes32(uint256(uint160(vm.addr(actorPk))));
         _authorizeActorWithScope(account, ownerPk, expectedActorId, address(k1Authenticator), scope);
 
         (bytes32 actorId, uint16 outScope) = keystore.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
@@ -676,7 +684,7 @@ contract AuthenticateTest is KeystoreTest {
         assertEq(outScope, scope);
     }
 
-    /// @notice A scoped (downgraded) inline self still returns actorId == bytes32(bytes20(account)).
+    /// @notice A scoped (downgraded) inline self still returns actorId == bytes32(uint256(uint160(account))).
     function test_authenticateActor_success_returnsActorId_scopedInlineSelf(
         uint256 eoaSeed,
         uint8 scopeSeed,
@@ -684,7 +692,7 @@ contract AuthenticateTest is KeystoreTest {
     ) public {
         uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
-        bytes32 selfActorId = bytes32(bytes20(eoa));
+        bytes32 selfActorId = bytes32(uint256(uint160(eoa)));
         uint16 scope = uint16(bound(uint256(scopeSeed), 1, 255)) & ~SCOPE_POLICY;
 
         _authorizeActorWithScope(eoa, eoaPk, selfActorId, address(k1Authenticator), scope);
@@ -716,7 +724,9 @@ contract AuthenticateTest is KeystoreTest {
 
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(actorPk) != account);
-        _authorizeActorWithScope(account, ownerPk, bytes32(bytes20(vm.addr(actorPk))), address(k1Authenticator), scope);
+        _authorizeActorWithScope(
+            account, ownerPk, bytes32(uint256(uint160(vm.addr(actorPk)))), address(k1Authenticator), scope
+        );
 
         bool expected = scope == 0 || (scope & SCOPE_SENDER != 0);
         // verifySignature applies the account-scoped EIP-7739 wrap.
@@ -737,7 +747,7 @@ contract AuthenticateTest is KeystoreTest {
 
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(actorPk) != account);
-        bytes32 actorId = bytes32(bytes20(vm.addr(actorPk)));
+        bytes32 actorId = bytes32(uint256(uint160(vm.addr(actorPk))));
         // verifySignature applies the account-scoped EIP-7739 wrap; replaySafeHash(account, hash) is scope-independent.
         bytes memory auth = _buildK1Auth(actorPk, keystore.replaySafeHash(account, hash));
 
@@ -763,7 +773,7 @@ contract AuthenticateTest is KeystoreTest {
 
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(actorPk) != account);
-        bytes32 actorId = bytes32(bytes20(vm.addr(actorPk)));
+        bytes32 actorId = bytes32(uint256(uint160(vm.addr(actorPk))));
 
         _authorizeAtScope(account, ownerPk, actorId, SCOPE_SELF_PAYER);
         assertFalse(keystore.verifySignature(account, hash, _buildK1Auth(actorPk, hash)));
@@ -792,7 +802,7 @@ contract AuthenticateTest is KeystoreTest {
 
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(sessionPk) != account);
-        bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
+        bytes32 sessionActorId = bytes32(uint256(uint160(vm.addr(sessionPk))));
         _authorizeGatedActor(account, ownerPk, sessionActorId, SCOPE_POLICY, manager, commitment);
         assertFalse(keystore.verifySignature(account, hash, _buildK1Auth(sessionPk, hash)));
 
@@ -837,7 +847,7 @@ contract AuthenticateTest is KeystoreTest {
         uint16 scope = uint16(scopeSeed) | SCOPE_POLICY;
 
         (address account,) = _createK1Account(ownerPk);
-        bytes32 sessionActorId = bytes32(bytes20(vm.addr(sessionPk)));
+        bytes32 sessionActorId = bytes32(uint256(uint160(vm.addr(sessionPk))));
         _authorizeGatedActor(account, ownerPk, sessionActorId, scope, manager, commitment);
 
         (address outTarget, bytes32 outCommitment) = keystore.getPolicy(account, sessionActorId);
@@ -854,7 +864,7 @@ contract AuthenticateTest is KeystoreTest {
 
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(actorPk) != account);
-        bytes32 actorId = bytes32(bytes20(vm.addr(actorPk)));
+        bytes32 actorId = bytes32(uint256(uint160(vm.addr(actorPk))));
         _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), 0x00);
 
         (address target, bytes32 commitment) = keystore.getPolicy(account, actorId);
@@ -879,7 +889,7 @@ contract AuthenticateTest is KeystoreTest {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         (address account, bytes32 actorId) = _createK1Account(ownerPk);
         vm.assume(unknownActorId != actorId);
-        vm.assume(unknownActorId != bytes32(bytes20(account)));
+        vm.assume(unknownActorId != bytes32(uint256(uint160(account))));
 
         Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, unknownActorId);
         assertEq(cfg.authenticator, address(0));
@@ -890,14 +900,14 @@ contract AuthenticateTest is KeystoreTest {
     /// @dev No _actorConfig entry, actorId == self, flag unset -> true.
     function test_isActor_success_implicitEoaTrue(uint256 eoaSeed) public view {
         address eoa = vm.addr(_boundK1Pk(eoaSeed));
-        assertTrue(_isActor(eoa, bytes32(bytes20(eoa))));
+        assertTrue(_isActor(eoa, bytes32(uint256(uint160(eoa)))));
     }
 
     /// @notice isActor reports a non-self actorId on a never-created EOA as not live.
-    /// @dev A random actorId != bytes32(bytes20(eoa)) has no inline home and no _actorConfig entry -> false.
+    /// @dev A random actorId != bytes32(uint256(uint160(eoa))) has no inline home and no _actorConfig entry -> false.
     function test_isActor_success_nonSelfActorIdNotImplicit(uint256 eoaSeed, bytes32 randomActorId) public view {
         address eoa = vm.addr(_boundK1Pk(eoaSeed));
-        vm.assume(randomActorId != bytes32(bytes20(eoa)));
+        vm.assume(randomActorId != bytes32(uint256(uint160(eoa))));
         assertFalse(_isActor(eoa, randomActorId));
     }
 
@@ -906,7 +916,7 @@ contract AuthenticateTest is KeystoreTest {
     function test_isActor_success_falseAfterSelfRevoke(uint256 eoaSeed) public {
         uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
-        bytes32 selfActorId = bytes32(bytes20(eoa));
+        bytes32 selfActorId = bytes32(uint256(uint160(eoa)));
 
         _revokeActor(eoa, eoaPk, selfActorId);
 

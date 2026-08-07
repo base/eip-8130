@@ -4,6 +4,7 @@ pragma solidity 0.8.36;
 import {Receiver} from "solady/accounts/Receiver.sol";
 
 import {Keystore} from "../Keystore.sol";
+import {ActorId} from "../libraries/ActorId.sol";
 import {Scopes} from "../libraries/Scopes.sol";
 
 /// @notice A single call in an execution batch.
@@ -132,7 +133,7 @@ contract DefaultAccount is Receiver {
     ///      signing (ERC-1271) authorization surfaces aligned.
     function _isAuthorizedCaller(address caller) internal view virtual returns (bool) {
         if (caller == address(this)) return true;
-        Keystore.ActorConfig memory config = KEYSTORE.getActorConfig(address(this), bytes32(bytes20(caller)));
+        Keystore.ActorConfig memory config = KEYSTORE.getActorConfig(address(this), ActorId.fromAddress(caller));
         if (config.authenticator != TRUSTED_EXECUTOR) return false;
         if (config.expiry != 0 && block.timestamp > config.expiry) return false;
         return Scopes.isOperator(config.scope);

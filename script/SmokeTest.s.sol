@@ -18,7 +18,7 @@ contract SmokeTest is Script {
 
     function run(address acctConfig, address k1Authenticator, address defaultImpl) public {
         address signer = vm.addr(SIGNER_PK);
-        bytes32 actorId = bytes32(bytes20(signer));
+        bytes32 actorId = bytes32(uint256(uint160(signer)));
         Keystore config = Keystore(acctConfig);
 
         // 1. Create account
