@@ -592,7 +592,7 @@ contract PolicyAccessorsTest is KeystoreTest {
 
     /// @dev Seed a gated inline-k1 self plus a spare unrestricted owner able to sign a later self-revoke. Returns
     ///      (eoa, spareOwnerPk). The self is downgraded to a policy scope (admin is exactly scope == 0) and thus
-    ///      cannot sign config changes, so the spare owner is what revokes it.
+    ///      cannot sign account changes, so the spare owner is what revokes it.
     function _seedGatedInlineSelfWithSpareOwner(
         uint256 eoaSeed,
         uint256 ownerSeed,
@@ -673,7 +673,7 @@ contract PolicyAccessorsTest is KeystoreTest {
     /// @dev Authorize an ungated (scope 0) actor under `authenticator`, signed by `pk`. Batched with an epoch bump so
     ///      overwriting a previously gated actor down to ungated (a scope reduction) is permitted.
     function _authorizeUngatedActor(address account, uint256 pk, bytes32 newActorId, address authenticator) internal {
-        Keystore.ConfigChange[] memory ch = new Keystore.ConfigChange[](2);
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
         ch[0] = _authorizeChange(newActorId, authenticator, 0x00, UNBOUNDED, "");
         ch[1] = _bumpChange();
         _applyLocal(pk, account, ch);

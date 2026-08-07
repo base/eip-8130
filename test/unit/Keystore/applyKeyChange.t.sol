@@ -5,11 +5,11 @@ import {Keystore} from "../../../src/Keystore.sol";
 import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
-/// @notice §10 test matrix for the authority / environment ops driven through {applySignedConfigChanges}:
+/// @notice §10 test matrix for the authority / environment ops driven through {applySignedAccountChanges}:
 ///         AuthorizeActor (sequenced + unsequenced), RevokeActor, IncrementLocalEpoch, the op-ordering fence,
 ///         and the sequenced-channel replay/saturation edges. Lock/unlock (admin-only),
-///         and multichain regression live in applyConfigChange.t.sol.
-contract ApplySignedConfigChangesTest is KeystoreTest {
+///         and multichain regression live in applyAccountChange.t.sol.
+contract ApplySignedAccountChangesTest is KeystoreTest {
     // Non-self, non-owner actor ids (low right-aligned constants never collide with a bytes20-left-aligned address).
     bytes32 constant ACTOR_A = bytes32(uint256(0xA1));
     bytes32 constant ACTOR_B = bytes32(uint256(0xB2));
@@ -55,15 +55,15 @@ contract ApplySignedConfigChangesTest is KeystoreTest {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
         uint48 expiry = _future(1 days);
-        Keystore.SignedConfigChanges memory s = _signBatch(
+        Keystore.SignedAccountChanges memory s = _signBatch(
             pk,
             account,
-            Keystore.ConfigChangeChannel.Local,
+            Keystore.AccountChangeChannel.Local,
             _unseqWord(account),
             _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, expiry, ""))
         );
-        keystore.applySignedConfigChanges(account, s);
-        keystore.applySignedConfigChanges(account, s);
+        keystore.applySignedAccountChanges(account, s);
+        keystore.applySignedAccountChanges(account, s);
 
         Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, ACTOR_A);
         assertEq(cfg.scope, SENDER);
@@ -76,19 +76,19 @@ contract ApplySignedConfigChangesTest is KeystoreTest {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
         uint48 expiry = _future(1 days);
-        Keystore.SignedConfigChanges memory s = _signBatch(
+        Keystore.SignedAccountChanges memory s = _signBatch(
             pk,
             account,
-            Keystore.ConfigChangeChannel.Local,
+            Keystore.AccountChangeChannel.Local,
             _unseqWord(account),
             _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, expiry, ""))
         );
-        keystore.applySignedConfigChanges(account, s);
+        keystore.applySignedAccountChanges(account, s);
 
         vm.warp(uint256(expiry) + 1);
 
         vm.expectRevert(Keystore.ExpiredChange.selector);
-        keystore.applySignedConfigChanges(account, s);
+        keystore.applySignedAccountChanges(account, s);
     }
 
     /// @notice An unsequenced batch signed at a stale epoch reverts StaleEpoch.
@@ -96,17 +96,17 @@ contract ApplySignedConfigChangesTest is KeystoreTest {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
         // Pre-sign at epoch 0, then bump the epoch out from under it.
-        Keystore.SignedConfigChanges memory s = _signBatch(
+        Keystore.SignedAccountChanges memory s = _signBatch(
             pk,
             account,
-            Keystore.ConfigChangeChannel.Local,
+            Keystore.AccountChangeChannel.Local,
             _unseqWord(account),
             _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
         );
         _applyUnsequenced(pk, account, _one(_bumpChange())); // epoch 0 -> 1
 
         vm.expectRevert(Keystore.StaleEpoch.selector);
-        keystore.applySignedConfigChanges(account, s);
+        keystore.applySignedAccountChanges(account, s);
     }
 
     /// @notice A non-zero grant expiry that is not strictly in the future reverts ExpiredChange (expiry == now).
@@ -114,11 +114,11 @@ contract ApplySignedConfigChangesTest is KeystoreTest {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
 
-        Keystore.SignedConfigChanges memory s = _unseqBatch(
+        Keystore.SignedAccountChanges memory s = _unseqBatch(
             pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, uint48(block.timestamp), ""))
         );
         vm.expectRevert(Keystore.ExpiredChange.selector);
-        keystore.applySignedConfigChanges(account, s);
+        keystore.applySignedAccountChanges(account, s);
     }
 
     /// @notice An unsequenced grant may request the unbounded (max) expiry.
@@ -279,7 +279,7 @@ contract ApplySignedConfigChangesTest is KeystoreTest {
         _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(5 days), "")));
 
         uint48 lower = _future(1 days);
-        Keystore.ConfigChange[] memory ch = new Keystore.ConfigChange[](2);
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
         ch[0] = _authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, lower, "");
         ch[1] = _bumpChange();
         _applyLocal(pk, account, ch);
@@ -311,14 +311,14 @@ contract ApplySignedConfigChangesTest is KeystoreTest {
         (address account,) = _createK1Account(pk);
 
         // An outstanding unsequenced grant for ACTOR_A, captured before it first lands.
-        Keystore.SignedConfigChanges memory grant = _signBatch(
+        Keystore.SignedAccountChanges memory grant = _signBatch(
             pk,
             account,
-            Keystore.ConfigChangeChannel.Local,
+            Keystore.AccountChangeChannel.Local,
             _unseqWord(account),
             _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
         );
-        keystore.applySignedConfigChanges(account, grant);
+        keystore.applySignedAccountChanges(account, grant);
         assertTrue(_isActor(account, ACTOR_A));
 
         // Bare revoke lands...
@@ -326,7 +326,7 @@ contract ApplySignedConfigChangesTest is KeystoreTest {
         assertFalse(_isActor(account, ACTOR_A));
 
         // ...but the epoch never moved, so the original grant replays straight back into the emptied slot.
-        keystore.applySignedConfigChanges(account, grant);
+        keystore.applySignedAccountChanges(account, grant);
         assertTrue(_isActor(account, ACTOR_A));
     }
 
@@ -337,22 +337,22 @@ contract ApplySignedConfigChangesTest is KeystoreTest {
         _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
 
         // A grant signed at the pre-bump epoch (unsequenced), captured before the revoke+bump lands.
-        Keystore.SignedConfigChanges memory oldGrant = _signBatch(
+        Keystore.SignedAccountChanges memory oldGrant = _signBatch(
             pk,
             account,
-            Keystore.ConfigChangeChannel.Local,
+            Keystore.AccountChangeChannel.Local,
             _unseqWord(account),
             _one(_authorizeChange(ACTOR_B, address(k1Authenticator), SENDER, _future(1 days), ""))
         );
 
-        Keystore.ConfigChange[] memory ch = new Keystore.ConfigChange[](2);
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
         ch[0] = _revokeChange(ACTOR_A);
         ch[1] = _bumpChange();
         _applyLocal(pk, account, ch);
         assertFalse(_isActor(account, ACTOR_A));
 
         vm.expectRevert(Keystore.StaleEpoch.selector);
-        keystore.applySignedConfigChanges(account, oldGrant);
+        keystore.applySignedAccountChanges(account, oldGrant);
     }
 
     /// @notice Revoking an already-lapsed actor is GC-equivalent and lands as a bare single-op batch.
@@ -390,7 +390,7 @@ contract ApplySignedConfigChangesTest is KeystoreTest {
     function test_bump_success_unsequencedNonSolo(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
-        Keystore.ConfigChange[] memory ch = new Keystore.ConfigChange[](2);
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
         ch[0] = _authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "");
         ch[1] = _bumpChange();
 
@@ -408,27 +408,27 @@ contract ApplySignedConfigChangesTest is KeystoreTest {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
         uint64 word = _unseqWord(account);
-        Keystore.SignedConfigChanges memory b1 =
-            _signBatch(pk, account, Keystore.ConfigChangeChannel.Local, word, _one(_bumpChange()));
-        Keystore.SignedConfigChanges memory b2 =
-            _signBatch(pk, account, Keystore.ConfigChangeChannel.Local, word, _one(_bumpChange()));
+        Keystore.SignedAccountChanges memory b1 =
+            _signBatch(pk, account, Keystore.AccountChangeChannel.Local, word, _one(_bumpChange()));
+        Keystore.SignedAccountChanges memory b2 =
+            _signBatch(pk, account, Keystore.AccountChangeChannel.Local, word, _one(_bumpChange()));
 
-        keystore.applySignedConfigChanges(account, b1);
+        keystore.applySignedAccountChanges(account, b1);
         vm.expectRevert(Keystore.StaleEpoch.selector);
-        keystore.applySignedConfigChanges(account, b2);
+        keystore.applySignedAccountChanges(account, b2);
     }
 
     /// @notice A sequenced bump that is not terminal (an authority op follows it) reverts AuthorityOpAfterEnvOp.
     function test_bump_revert_sequencedNonTerminal(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
-        Keystore.ConfigChange[] memory ch = new Keystore.ConfigChange[](2);
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
         ch[0] = _bumpChange();
         ch[1] = _authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "");
 
-        Keystore.SignedConfigChanges memory s = _localBatch(pk, account, ch);
+        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, ch);
         vm.expectRevert(Keystore.AuthorityOpAfterEnvOp.selector);
-        keystore.applySignedConfigChanges(account, s);
+        keystore.applySignedAccountChanges(account, s);
     }
 
     /// @notice A bump at the terminal epoch (the full uint32 max — the epoch half reserves no sentinel) reverts
@@ -438,9 +438,9 @@ contract ApplySignedConfigChangesTest is KeystoreTest {
         (address account,) = _createK1Account(pk);
         _forceLocalEpoch(account, type(uint32).max);
 
-        Keystore.SignedConfigChanges memory s = _localBatch(pk, account, _one(_bumpChange()));
+        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, _one(_bumpChange()));
         vm.expectRevert(Keystore.EpochSaturated.selector);
-        keystore.applySignedConfigChanges(account, s);
+        keystore.applySignedAccountChanges(account, s);
     }
 
     /// @notice A bump does not disturb already-landed actors.
@@ -459,17 +459,17 @@ contract ApplySignedConfigChangesTest is KeystoreTest {
     function test_bump_success_oldLocalSignatureInvalid(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
-        Keystore.SignedConfigChanges memory stale = _signBatch(
+        Keystore.SignedAccountChanges memory stale = _signBatch(
             pk,
             account,
-            Keystore.ConfigChangeChannel.Local,
+            Keystore.AccountChangeChannel.Local,
             _unseqWord(account),
             _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
         );
         _applyUnsequenced(pk, account, _one(_bumpChange()));
 
         vm.expectRevert(Keystore.StaleEpoch.selector);
-        keystore.applySignedConfigChanges(account, stale);
+        keystore.applySignedAccountChanges(account, stale);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -482,13 +482,13 @@ contract ApplySignedConfigChangesTest is KeystoreTest {
         (address account,) = _createK1Account(pk);
         _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
 
-        Keystore.ConfigChange[] memory ch = new Keystore.ConfigChange[](2);
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
         ch[0] = _lockChange(1 hours);
         ch[1] = _revokeChange(ACTOR_A);
 
-        Keystore.SignedConfigChanges memory s = _localBatch(pk, account, ch);
+        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, ch);
         vm.expectRevert(Keystore.AuthorityOpAfterEnvOp.selector);
-        keystore.applySignedConfigChanges(account, s);
+        keystore.applySignedAccountChanges(account, s);
     }
 
     /// @notice `[revoke, bump, lock]` succeeds: authority op first, environment ops after, reduction retired by bump.
@@ -497,7 +497,7 @@ contract ApplySignedConfigChangesTest is KeystoreTest {
         (address account,) = _createK1Account(pk);
         _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
 
-        Keystore.ConfigChange[] memory ch = new Keystore.ConfigChange[](3);
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](3);
         ch[0] = _revokeChange(ACTOR_A);
         ch[1] = _bumpChange();
         ch[2] = _lockChange(1 hours);
@@ -517,7 +517,7 @@ contract ApplySignedConfigChangesTest is KeystoreTest {
         _signedLock(pk, account, 1 hours);
         assertTrue(keystore.isLocked(account));
 
-        Keystore.ConfigChange[] memory ch = new Keystore.ConfigChange[](2);
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
         ch[0] = _unlockChange();
         ch[1] = _bumpChange();
         _applyLocal(pk, account, ch);
@@ -538,28 +538,28 @@ contract ApplySignedConfigChangesTest is KeystoreTest {
         (address account,) = _createK1Account(pk);
         _forceLocalSequence(account, keystore.UNSEQUENCED() - 1);
 
-        Keystore.SignedConfigChanges memory s = _localBatch(
+        Keystore.SignedAccountChanges memory s = _localBatch(
             pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
         );
         vm.expectRevert(Keystore.SequenceSaturated.selector);
-        keystore.applySignedConfigChanges(account, s);
+        keystore.applySignedAccountChanges(account, s);
     }
 
     /// @notice The sequence advances BEFORE apply, so re-submitting the exact same sequenced batch reverts BadSequence.
     function test_sequenced_revert_replaySameBatch(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
-        Keystore.SignedConfigChanges memory s = _signBatch(
+        Keystore.SignedAccountChanges memory s = _signBatch(
             pk,
             account,
-            Keystore.ConfigChangeChannel.Local,
+            Keystore.AccountChangeChannel.Local,
             _localSeqWord(account),
             _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
         );
 
-        keystore.applySignedConfigChanges(account, s);
+        keystore.applySignedAccountChanges(account, s);
         vm.expectRevert(Keystore.BadSequence.selector);
-        keystore.applySignedConfigChanges(account, s);
+        keystore.applySignedAccountChanges(account, s);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -582,7 +582,7 @@ contract ApplySignedConfigChangesTest is KeystoreTest {
         (address account,) = _createK1Account(pk);
         _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
 
-        Keystore.ConfigChange[] memory ch = new Keystore.ConfigChange[](2);
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
         ch[0] = _revokeChange(ACTOR_A);
         ch[1] = _bumpChange();
 

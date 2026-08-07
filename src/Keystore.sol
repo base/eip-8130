@@ -32,7 +32,7 @@ contract Keystore {
 
     /// @notice Initial actor for account creation and import. Carries its scope and, when scope & Scopes.POLICY is
     ///         set, its policy data; expiry is always 0 for initial actors (scoped-with-expiry keys are added later
-    ///         via applySignedConfigChanges).
+    ///         via applySignedAccountChanges).
     struct InitialActor {
         bytes32 actorId;
         address authenticator;
@@ -48,7 +48,7 @@ contract Keystore {
         bytes policyData;
     }
 
-    /// @notice The operation an {ConfigChange} applies within an {applySignedConfigChanges} batch.
+    /// @notice The operation an {AccountChange} applies within an {applySignedAccountChanges} batch.
     ///
     /// @dev ABI-encodes as uint8. The declaration ORDER is normative and doubles as a classification: every member
     ///      strictly below {IncrementLocalEpoch} is an *authority op* (it mutates who can act — the actor set); every
@@ -67,24 +67,24 @@ contract Keystore {
         Unlock // payload: empty (length == 0 enforced)
     }
 
-    /// @notice The replay domain a {SignedConfigChanges} batch is bound to.
+    /// @notice The replay domain a {SignedAccountChanges} batch is bound to.
     ///
     /// @dev Replaces the prior `uint256 chainId` argument. {Local} binds `block.chainid` and carries the full local
-    ///      epoch machinery (see {SignedConfigChanges.sequence}); {Multichain} binds chainId 0 and keeps a plain
+    ///      epoch machinery (see {SignedAccountChanges.sequence}); {Multichain} binds chainId 0 and keeps a plain
     ///      monotonic counter with no epochs and no unsequenced (JIT) mode — its counter alone prevents replay, so
     ///      it never requires an epoch increment and {IncrementLocalEpoch} is rejected on it.
-    enum ConfigChangeChannel {
+    enum AccountChangeChannel {
         Local,
         Multichain
     }
 
     /// @notice A single operation within a signed batch: its type and an operation-specific ABI-encoded payload.
-    struct ConfigChange {
+    struct AccountChange {
         ChangeType changeType;
         bytes payload;
     }
 
-    /// @notice An ordered, atomic batch of config changes with its replay binding and signature.
+    /// @notice An ordered, atomic batch of account changes with its replay binding and signature.
     ///
     /// @dev `changes` are applied in order, all-or-nothing (intersection-strict: any rejected op reverts the whole
     ///      batch). `sequence` is interpreted per `channel`:
@@ -94,10 +94,10 @@ contract Keystore {
     ///        - Multichain: a plain uint64 consumed against the account's multichainSequence; never {UNSEQUENCED},
     ///          never carries an epoch.
     ///      `signature` is the standard authenticator(20) || authenticator-data blob authenticating the signer.
-    struct SignedConfigChanges {
-        ConfigChangeChannel channel;
+    struct SignedAccountChanges {
+        AccountChangeChannel channel;
         uint64 sequence;
-        ConfigChange[] changes;
+        AccountChange[] changes;
         bytes signature;
     }
 
@@ -162,23 +162,23 @@ contract Keystore {
     bytes32 public constant ACTOR_CONFIG_TYPEHASH =
         keccak256("ActorConfig(address authenticator,uint48 expiry,uint16 scope)");
 
-    /// @notice Typehash binding a signed config-change batch to its account, chainId, and sequence.
+    /// @notice Typehash binding a signed account-change batch to its account, chainId, and sequence.
     ///
     /// @dev NOT compliant with EIP-712, to mitigate phishing attacks. `chainId` is the channel's replay domain
-    ///      (0 for {ConfigChangeChannel.Multichain}, block.chainid for {ConfigChangeChannel.Local}). The digest
+    ///      (0 for {AccountChangeChannel.Multichain}, block.chainid for {AccountChangeChannel.Local}). The digest
     ///      scheme is a relocation seam: it lives behind {_changesDigest} so a later hash-relocation workstream can
     ///      move it without touching the pipeline.
-    bytes32 public constant SIGNED_CONFIG_CHANGES_TYPEHASH = keccak256(
-        "SignedConfigChanges(address account,uint256 chainId,uint64 sequence,ConfigChange[] changes)"
-        "ConfigChange(uint8 changeType,bytes payload)"
+    bytes32 public constant SIGNED_ACCOUNT_CHANGES_TYPEHASH = keccak256(
+        "SignedAccountChanges(address account,uint256 chainId,uint64 sequence,AccountChange[] changes)"
+        "AccountChange(uint8 changeType,bytes payload)"
     );
 
-    /// @notice Typehash used to structurally hash each ConfigChange within a SignedConfigChanges batch.
-    bytes32 public constant CONFIG_CHANGE_TYPEHASH = keccak256("ConfigChange(uint8 changeType,bytes payload)");
+    /// @notice Typehash used to structurally hash each AccountChange within a SignedAccountChanges batch.
+    bytes32 public constant ACCOUNT_CHANGE_TYPEHASH = keccak256("AccountChange(uint8 changeType,bytes payload)");
 
-    /// @notice Local-channel sequence low-half sentinel marking an unsequenced (JIT) batch. A {SignedConfigChanges}
+    /// @notice Local-channel sequence low-half sentinel marking an unsequenced (JIT) batch. A {SignedAccountChanges}
     ///         whose low 32 bits equal this value does not consume a sequence, so it stays replayable until the local
-    ///         epoch moves; any op type may ride it (see {applySignedConfigChanges}). Sequenced batches may therefore
+    ///         epoch moves; any op type may ride it (see {applySignedAccountChanges}). Sequenced batches may therefore
     ///         run up to UNSEQUENCED - 2.
     uint32 public constant UNSEQUENCED = type(uint32).max;
 
@@ -217,7 +217,7 @@ contract Keystore {
     uint8 public constant FLAG_REVOKE_DEFAULT_EOA = 0x01;
 
     /// @notice AccountState.flags bit (spec `LOCKED`): when set, actor configuration is frozen — only environment
-    ///         ops (IncrementLocalEpoch, Lock, Unlock) are permitted through applySignedConfigChanges; authority ops
+    ///         ops (IncrementLocalEpoch, Lock, Unlock) are permitted through applySignedAccountChanges; authority ops
     ///         (AuthorizeActor, RevokeActor) are rejected. Cleared lazily once an initiated unlock elapses.
     uint8 public constant FLAG_LOCKED = 0x02;
 
@@ -296,8 +296,8 @@ contract Keystore {
     /// @notice The signed chainId is neither 0 (multichain) nor the current chain.
     error InvalidChainId();
 
-    /// @notice The batch signer is not the account admin (scope 0). Every signed config change is admin-only.
-    error UnauthorizedConfigChange();
+    /// @notice The batch signer is not the account admin (scope 0). Every signed account change is admin-only.
+    error UnauthorizedAccountChange();
 
     /// @notice The importAccount ERC-1271 signature check did not return the magic value.
     error InvalidImportSignature();
@@ -432,7 +432,7 @@ contract Keystore {
     /// @notice Deploys a new account with its initial actors. Each initial actor is registered with its declared
     ///         `scope` and, when `scope & Scopes.POLICY` is set, its `policyData` (an external `manager` is expressible
     ///         at create; `manager = account` is not, as the address is unknown at commitment time). `expiry` is
-    ///         always 0 at create — scoped-with-expiry keys are added afterwards via applySignedConfigChanges. The
+    ///         always 0 at create — scoped-with-expiry keys are added afterwards via applySignedAccountChanges. The
     ///         implicit default-EOA key is disabled on creation.
     ///
     /// @dev Reverts with EmptyBytecode when `bytecode` is empty.
@@ -528,7 +528,7 @@ contract Keystore {
         emit AccountImported(account);
     }
 
-    /// @notice The sole signed-change entry point: applies an ordered, atomic batch of config changes (authorize,
+    /// @notice The sole signed-change entry point: applies an ordered, atomic batch of account changes (authorize,
     ///         revoke, increment-local-epoch, lock, unlock) authenticated by `s.signature`.
     ///
     /// @dev The governing axiom is Replay: a signed local change is valid only while it could still be validly
@@ -540,7 +540,7 @@ contract Keystore {
     ///      the contract lets a bare reduction land, so pairing it with an increment is a wallet responsibility. A bare
     ///      revoke (or expiry cut) is not durable while a replayable unsequenced grant for that actor is outstanding.
     ///
-    ///      Authorization is flat: every signed config change is admin-only, so a single up-front scope check
+    ///      Authorization is flat: every signed account change is admin-only, so a single up-front scope check
     ///      (signer scope must be 0) authorizes the whole batch — there is no per-op authorization and no per-op
     ///      sequencing restriction (any op may ride an unsequenced or sequenced batch).
     ///
@@ -552,12 +552,12 @@ contract Keystore {
     ///
     /// @param account The account whose configuration is changed.
     /// @param s The signed batch (channel, ordered changes, sequence word, signature).
-    function applySignedConfigChanges(address account, SignedConfigChanges calldata s)
+    function applySignedAccountChanges(address account, SignedAccountChanges calldata s)
         external
         nonZeroAccount(account)
     {
         AccountState storage a = _accountState[account];
-        bool isLocal = s.channel == ConfigChangeChannel.Local;
+        bool isLocal = s.channel == AccountChangeChannel.Local;
 
         // Epoch / sequence gate. An unsequenced (JIT) batch exists only on the local channel (low half ==
         // UNSEQUENCED) and does not consume a counter; every other batch consumes its channel's counter.
@@ -583,11 +583,11 @@ contract Keystore {
             a.multichainSequence = seq + 1;
         }
 
-        // Authenticate over the relocatable digest. Authorization is flat: every signed config change is
+        // Authenticate over the relocatable digest. Authorization is flat: every signed account change is
         // admin-only, so a single scope check up front replaces any per-op authorization.
         bytes32 digest = _changesDigest(account, s.channel, s.sequence, s.changes);
         (, uint16 scope) = authenticateActor(account, digest, s.signature);
-        if (scope != 0) revert UnauthorizedConfigChange();
+        if (scope != 0) revert UnauthorizedAccountChange();
 
         // Lock policy is evaluated against the account's lock state at entry (lazily clearing an elapsed unlock). This
         // snapshot drives ONLY the authority-op gate below; the entry value is sound there because lock state changes
@@ -1021,7 +1021,7 @@ contract Keystore {
     /// @dev Registers the bootstrap actor set shared by createAccount and importAccount: requires a non-empty,
     ///      strictly ascending-by-actorId list (rejecting unsorted or duplicate entries) and authorizes each entry
     ///      with its declared scope and (when scope & Scopes.POLICY is set) policyData. Expiry is always 0 for
-    ///      initial actors; scoped-with-expiry keys are added later via applySignedConfigChanges. Reverts with
+    ///      initial actors; scoped-with-expiry keys are added later via applySignedAccountChanges. Reverts with
     ///      NoInitialActors or ActorsNotSortedOrDuplicate.
     function _initializeAccount(address account, InitialActor[] calldata initialActors)
         internal
@@ -1208,7 +1208,7 @@ contract Keystore {
 
     /// @dev Typed digest for the importAccount ERC-1271 signature (a signed message), so signers can reproduce it
     ///      with standard EIP-712-style struct hashing. `salt` is bound to the account address and the digest is
-    ///      bound to `chainId` (0 = multichain) so its replay domain matches applySignedConfigChanges.
+    ///      bound to `chainId` (0 = multichain) so its replay domain matches applySignedAccountChanges.
     function _computeImportDigest(address account, uint256 chainId, InitialActor[] calldata initialActors)
         internal
         pure
@@ -1237,29 +1237,29 @@ contract Keystore {
         );
     }
 
-    /// @dev Computes the digest signed over an applySignedConfigChanges batch: each ConfigChange is hashed
+    /// @dev Computes the digest signed over an applySignedAccountChanges batch: each AccountChange is hashed
     ///      structurally (its variable-length `payload` pre-hashed to a fixed-width layout) and the batch is bound to
     ///      `account`, the channel's replay `chainId` (0 for Multichain, block.chainid for Local), and the raw
-    ///      `sequence` word via SIGNED_CONFIG_CHANGES_TYPEHASH.
+    ///      `sequence` word via SIGNED_ACCOUNT_CHANGES_TYPEHASH.
     ///
     ///      This is the hash-relocation SEAM: the whole scheme is confined here so a later workstream can relocate
-    ///      it without touching the pipeline in {applySignedConfigChanges}.
+    ///      it without touching the pipeline in {applySignedAccountChanges}.
     function _changesDigest(
         address account,
-        ConfigChangeChannel channel,
+        AccountChangeChannel channel,
         uint64 sequence,
-        ConfigChange[] calldata changes
+        AccountChange[] calldata changes
     ) internal view returns (bytes32) {
-        uint256 chainId = channel == ConfigChangeChannel.Multichain ? 0 : block.chainid;
+        uint256 chainId = channel == AccountChangeChannel.Multichain ? 0 : block.chainid;
         bytes32[] memory changeHashes = new bytes32[](changes.length);
         for (uint256 i; i < changes.length; i++) {
             changeHashes[i] = keccak256(
-                abi.encode(CONFIG_CHANGE_TYPEHASH, uint8(changes[i].changeType), keccak256(changes[i].payload))
+                abi.encode(ACCOUNT_CHANGE_TYPEHASH, uint8(changes[i].changeType), keccak256(changes[i].payload))
             );
         }
         return keccak256(
             abi.encode(
-                SIGNED_CONFIG_CHANGES_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(changeHashes))
+                SIGNED_ACCOUNT_CHANGES_TYPEHASH, account, chainId, sequence, keccak256(abi.encodePacked(changeHashes))
             )
         );
     }
