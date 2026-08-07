@@ -418,8 +418,10 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         keystore.applySignedAccountChanges(account, b2);
     }
 
-    /// @notice A sequenced bump that is not terminal (an authority op follows it) reverts AuthorityOpAfterEnvOp.
-    function test_bump_revert_sequencedNonTerminal(uint256 pk) public {
+    /// @notice A sequenced batch may interleave an environment op before an authority op: `[bump, authorize]` bumps
+    ///         the epoch (resetting the sequence) and then installs the actor in the same batch. There is no
+    ///         authority-before-environment ordering constraint (the two op classes commute).
+    function test_bump_success_sequencedNonTerminal(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
         Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
@@ -427,8 +429,13 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         ch[1] = _authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "");
 
         Keystore.SignedAccountChanges memory s = _localBatch(pk, account, ch);
-        vm.expectRevert(Keystore.AuthorityOpAfterEnvOp.selector);
         keystore.applySignedAccountChanges(account, s);
+
+        (uint32 epoch, uint32 seq) = _localEpochSeq(account);
+        assertEq(epoch, 1);
+        assertEq(seq, 0);
+        assertTrue(_isActor(account, ACTOR_A));
+        assertEq(keystore.getActorConfig(account, ACTOR_A).scope, SENDER);
     }
 
     /// @notice A bump at the terminal epoch (the full uint32 max — the epoch half reserves no sentinel) reverts
@@ -476,8 +483,10 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
     // ORDERING / BATCHING
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice `[lock, revoke]` reverts AuthorityOpAfterEnvOp (a revoke after the lock env op).
-    function test_ordering_revert_lockThenRevoke(uint256 pk) public {
+    /// @notice `[lock, revoke]` on an account that was UNLOCKED at entry succeeds: the authority-op gate reads the
+    ///         batch-entry snapshot, so a Lock earlier in the same batch does not block the following revoke (the lock
+    ///         takes effect only for later batches). Order within the batch is irrelevant to the authority op.
+    function test_ordering_success_lockThenRevoke(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
         _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
@@ -485,10 +494,10 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
         ch[0] = _lockChange(1 hours);
         ch[1] = _revokeChange(ACTOR_A);
+        _applyLocal(pk, account, ch);
 
-        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, ch);
-        vm.expectRevert(Keystore.AuthorityOpAfterEnvOp.selector);
-        keystore.applySignedAccountChanges(account, s);
+        assertFalse(_isActor(account, ACTOR_A));
+        assertTrue(keystore.isLocked(account));
     }
 
     /// @notice `[revoke, bump, lock]` succeeds: authority op first, environment ops after, reduction retired by bump.

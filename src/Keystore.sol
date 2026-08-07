@@ -50,15 +50,15 @@ contract Keystore {
 
     /// @notice The operation an {AccountChange} applies within an {applySignedAccountChanges} batch.
     ///
-    /// @dev ABI-encodes as uint8. The declaration ORDER is normative and doubles as a classification: every member
-    ///      strictly below {IncrementLocalEpoch} is an *authority op* (it mutates who can act — the actor set); every
-    ///      member from {IncrementLocalEpoch} onward is an *environment op* (it mutates the rules ops are checked
-    ///      against — the local epoch or the lock). The classification is simply `t >= IncrementLocalEpoch`. Future ops MUST be
-    ///      inserted in the correct class to preserve this predicate. All five values are reachable and meaningful;
-    ///      out-of-range wire values (>= 5) can never reach the handler — the enum decoder reverts them while
-    ///      ABI-decoding the calldata (no in-handler "unknown" sentinel, unlike the pre-split enums).
+    /// @dev ABI-encodes as uint8. Members split into two conceptual classes: *authority ops* (AuthorizeActor,
+    ///      RevokeActor) mutate who can act — the actor set — and are rejected while the account is locked; *environment
+    ///      ops* (IncrementLocalEpoch, Lock, Unlock) mutate the rules ops are checked against — the local epoch or the
+    ///      lock — and remain permitted while locked. This class distinction drives only the per-op lock gate; op order
+    ///      within a batch is otherwise unconstrained (authority and environment ops commute). All five values are
+    ///      reachable and meaningful; out-of-range wire values (>= 5) can never reach the handler — the enum decoder
+    ///      reverts them while ABI-decoding the calldata (no in-handler "unknown" sentinel, unlike the pre-split enums).
     enum ChangeType {
-        // Authority ops (mutate who can act) — MUST stay below IncrementLocalEpoch.
+        // Authority ops (mutate who can act).
         AuthorizeActor, // payload: abi.encode(bytes32 actorId, ActorConfig cfg, bytes policyData); cfg.expiry is the granted expiry
         RevokeActor, // payload: abi.encode(bytes32 actorId)
         // Environment ops (mutate the rules ops are checked against).
@@ -322,10 +322,6 @@ contract Keystore {
     /// @notice The local epoch is at its terminal value and cannot be incremented.
     error EpochSaturated();
 
-    /// @notice An authority op (AuthorizeActor / RevokeActor) followed an environment op in the same batch, violating
-    ///         the normative op ordering (authority ops first, environment ops last).
-    error AuthorityOpAfterEnvOp();
-
     /// @notice An AuthorizeActor's granted expiry is non-zero and not strictly in the future (self-expired on
     ///         arrival). A zero expiry is the "no expiry" sentinel and is accepted.
     error ExpiredChange();
@@ -547,8 +543,8 @@ contract Keystore {
     ///      Pipeline (in order): (1) split the sequence word; (2) reject a stale local epoch on both channels;
     ///      (3) validate/advance the sequence counter BEFORE apply (reentrancy discipline); (4) compute the digest
     ///      via the relocatable {_changesDigest} seam, authenticate, and reject a non-admin signer; (5) iterate
-    ///      changes enforcing op ordering and the lock policy. Anyone may relay — authorization comes entirely from
-    ///      the signature.
+    ///      changes enforcing the lock policy (authority ops are rejected while the account is locked). Anyone may
+    ///      relay — authorization comes entirely from the signature.
     ///
     /// @param account The account whose configuration is changed.
     /// @param s The signed batch (channel, ordered changes, sequence word, signature).
@@ -589,35 +585,29 @@ contract Keystore {
         (, uint16 scope) = authenticateActor(account, digest, s.signature);
         if (scope != 0) revert UnauthorizedAccountChange();
 
-        // Lock policy is evaluated against the account's lock state at entry (lazily clearing an elapsed unlock). This
-        // snapshot drives ONLY the authority-op gate below; the entry value is sound there because lock state changes
-        // only via environment ops, and the ordering fence (AuthorityOpAfterEnvOp) forces every authority op before
-        // the first environment op — so throughout the authority prefix the snapshot still equals live state.
-        // The Lock/Unlock handlers themselves read live storage, so they never rely on this snapshot.
+        // Lock policy is evaluated against the account's lock state at batch ENTRY (lazily clearing an already-elapsed
+        // unlock). This snapshot — not live state — gates the authority ops: a batch authorized while the account was
+        // locked cannot make actor changes, while a batch authorized while unlocked may, even if the same batch also
+        // contains a Lock (which takes effect only for later batches). Order within the batch is therefore irrelevant
+        // to authority ops. The Lock/Unlock handlers read live storage independently, so an in-batch
+        // [Lock, Unlock, Lock] still resolves consistently against live flags.
         bool locked = _checkAndClearLock(account);
 
-        // Iterate. Track only whether an environment op has been seen, for the ordering fence.
-        bool sawEnvOp;
         uint256 n = s.changes.length;
         for (uint256 i; i < n; i++) {
             ChangeType t = s.changes[i].changeType;
-            // Enum-ordering-as-classification: an environment op (IncrementLocalEpoch onward) mutates the rules ops are
-            // checked against; anything below is an authority op that mutates who can act.
-            bool env = t >= ChangeType.IncrementLocalEpoch;
-
-            // Ordering: authority ops may never follow an environment op.
-            if (!env && sawEnvOp) revert AuthorityOpAfterEnvOp();
-            if (env) sawEnvOp = true;
-
-            // Lock policy: while the account is locked, only environment ops (increment-epoch/lock/unlock) may run.
-            if (locked && !env) revert AccountIsLocked();
-
+            // Lock policy: if the account was locked at entry, only environment ops (increment-epoch/lock/unlock) may
+            // run, so the two authority ops gate on the entry snapshot; the environment handlers police their own
+            // preconditions against live state.
             if (t == ChangeType.AuthorizeActor) {
+                if (locked) revert AccountIsLocked();
                 _applyAuthorize(account, s.changes[i].payload);
             } else if (t == ChangeType.RevokeActor) {
+                if (locked) revert AccountIsLocked();
                 _applyRevoke(account, s.changes[i].payload);
             } else if (t == ChangeType.IncrementLocalEpoch) {
-                _applyIncrementLocalEpoch(account, isLocal, s.changes[i].payload);
+                if (!isLocal) revert EpochOpRequiresLocalChannel();
+                _applyIncrementLocalEpoch(account, s.changes[i].payload);
             } else if (t == ChangeType.Lock) {
                 _applyLock(account, s.changes[i].payload);
             } else if (t == ChangeType.Unlock) {
@@ -671,9 +661,8 @@ contract Keystore {
 
     /// @dev IncrementLocalEpoch. Empty payload. Strict increment of the local epoch, resetting the local sequence to 0
     ///      and thereby invalidating every unlanded local signature (they commit the full 64-bit word). Local-only.
-    function _applyIncrementLocalEpoch(address account, bool isLocal, bytes calldata payload) private {
+    function _applyIncrementLocalEpoch(address account, bytes calldata payload) private {
         if (payload.length != 0) revert InvalidChangePayload();
-        if (!isLocal) revert EpochOpRequiresLocalChannel();
         AccountState storage a = _accountState[account];
         // The epoch half has no reserved sentinel (unlike UNSEQUENCED on the sequence half), so the full uint32 range
         // is usable: only the terminal value itself cannot advance.
