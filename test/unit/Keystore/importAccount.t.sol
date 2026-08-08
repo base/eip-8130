@@ -275,9 +275,8 @@ contract ImportAccountTest is KeystoreTest {
         keystore.importAccount(address(wallet), chainId, actors, sig);
     }
 
-    /// @notice Verifies importAccount reverts against a code-less account (staticcall returns empty returndata).
-    /// @dev A plain EOA has no code, so the staticcall succeeds with zero-length returndata, tripping the
-    ///      `result.length != 32` term (the natural "account has no ERC-1271 implementation" case).
+    /// @notice Verifies importAccount reverts against a code-less account.
+    /// @dev A plain EOA has no code, so the explicit bytecode guard rejects it before the ERC-1271 staticcall.
     function test_importAccount_revert_invalidImportSignature_noCode(uint256 accountSeed, bool multichain) public {
         uint256 accountPk = _boundK1Pk(accountSeed);
         address account = vm.addr(accountPk);
@@ -289,6 +288,25 @@ contract ImportAccountTest is KeystoreTest {
 
         vm.expectRevert(Keystore.InvalidImportSignature.selector);
         keystore.importAccount(account, chainId, actors, sig);
+    }
+
+    /// @notice A code-less target cannot masquerade as an ERC-1271 account when its returndata has the expected shape.
+    /// @dev Models a precompile returning 32 bytes prefixed by the ERC-1271 magic value. Foundry inserts dummy code for
+    ///      mocked targets, so the test removes it before proving the explicit bytecode guard rejects the response.
+    function test_importAccount_revert_noCodeReturningMagic() public {
+        address target = address(0xBEEF);
+        bytes memory signature = "forged";
+        Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(address(0xA11CE));
+        bytes32 digest = _computeImportDigest(target, block.chainid, actors);
+
+        assertEq(target.code.length, 0);
+        vm.mockCall(target, abi.encodeWithSelector(ERC1271_MAGIC, digest, signature), abi.encode(ERC1271_MAGIC));
+        // Foundry inserts dummy code for a mocked no-code address; remove it while retaining the registered mock.
+        vm.etch(target, "");
+        assertEq(target.code.length, 0);
+
+        vm.expectRevert(Keystore.InvalidImportSignature.selector);
+        keystore.importAccount(target, block.chainid, actors, signature);
     }
 
     /// @notice Verifies importAccount reverts when isValidSignature returns non-32-byte returndata.

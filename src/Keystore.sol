@@ -291,7 +291,7 @@ contract Keystore {
     /// @notice The batch signer is not the account admin (scope 0). Every signed account change is admin-only.
     error UnauthorizedAccountChange();
 
-    /// @notice The importAccount ERC-1271 signature check did not return the magic value.
+    /// @notice The import target has no bytecode or its ERC-1271 signature check did not return the magic value.
     error InvalidImportSignature();
 
     /// @notice A lock op carried a zero unlock delay.
@@ -492,7 +492,8 @@ contract Keystore {
     /// @dev Reverts with AccountIsLocked when the account is locked.
     /// @dev Reverts with InvalidChainId when `chainId` is neither 0 (multichain) nor the current chain.
     /// @dev Reverts with AlreadyInitialized when the account already has EIP-8130 state.
-    /// @dev Reverts with InvalidImportSignature when the account's ERC-1271 check does not return the magic value.
+    /// @dev Reverts with InvalidImportSignature when the account has no bytecode or its ERC-1271 check does not return
+    ///      the magic value.
     /// @dev Reverts with NoInitialActors when `initialActors` is empty.
     /// @dev Reverts with ActorsNotSortedOrDuplicate when `initialActors` is not strictly ascending by actorId.
     /// @dev Reverts with InvalidAuthenticator when an initial actor names a zero authenticator.
@@ -515,6 +516,9 @@ contract Keystore {
         // Import is a one-time bootstrap for accounts with no 8130 state yet.
         if (_isInitialized(account)) {
             revert AlreadyInitialized();
+        }
+        if (account.code.length == 0) {
+            revert InvalidImportSignature();
         }
         _accountState[account].localSequence = 1;
 
