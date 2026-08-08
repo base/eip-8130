@@ -291,7 +291,8 @@ contract Keystore {
     /// @notice The batch signer is not the account admin (scope 0). Every signed account change is admin-only.
     error UnauthorizedAccountChange();
 
-    /// @notice The import target has no bytecode or its ERC-1271 signature check did not return the magic value.
+    /// @notice The import target has no bytecode or its ERC-1271 signature check did not return the canonical magic
+    ///         word.
     error InvalidImportSignature();
 
     /// @notice A lock op carried a zero unlock delay.
@@ -493,7 +494,7 @@ contract Keystore {
     /// @dev Reverts with InvalidChainId when `chainId` is neither 0 (multichain) nor the current chain.
     /// @dev Reverts with AlreadyInitialized when the account already has EIP-8130 state.
     /// @dev Reverts with InvalidImportSignature when the account has no bytecode or its ERC-1271 check does not return
-    ///      the magic value.
+    ///      the canonical 32-byte ABI encoding of the magic value.
     /// @dev Reverts with NoInitialActors when `initialActors` is empty.
     /// @dev Reverts with ActorsNotSortedOrDuplicate when `initialActors` is not strictly ascending by actorId.
     /// @dev Reverts with InvalidAuthenticator when an initial actor names a zero authenticator.
@@ -525,7 +526,7 @@ contract Keystore {
         bytes32 digest = _computeImportDigest(account, chainId, initialActors);
         (bool success, bytes memory result) =
             account.staticcall(abi.encodeWithSelector(ERC1271_SELECTOR, digest, signature));
-        if (!success || result.length != 32 || abi.decode(result, (bytes4)) != ERC1271_SELECTOR) {
+        if (!success || result.length != 32 || abi.decode(result, (bytes32)) != bytes32(ERC1271_SELECTOR)) {
             revert InvalidImportSignature();
         }
 

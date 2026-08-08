@@ -40,6 +40,14 @@ contract ShortReturnERC1271Wallet {
     }
 }
 
+/// @dev ERC-1271-shaped wallet that returns the magic prefix with dirty trailing bytes. A bytes4 decode would accept
+///      this response, but it is not the canonical 32-byte ABI encoding of the ERC-1271 magic value.
+contract DirtyReturnERC1271Wallet {
+    function isValidSignature(bytes32, bytes calldata) external pure returns (bytes32) {
+        return 0x1626ba7effffffffffffffffffffffffffffffffffffffffffffffffffffffff;
+    }
+}
+
 /// @dev Fully fuzzed, branch-complete suite for Keystore.importAccount and the pure digest machinery it
 ///      drives (_computeImportDigest), plus the _initializeAccount reverts it inherits. Reverts are ordered to
 ///      mirror importAccount's source control flow (onlyUnlocked → InvalidChainId → AlreadyInitialized →
@@ -325,6 +333,15 @@ contract ImportAccountTest is KeystoreTest {
 
         vm.expectRevert(Keystore.InvalidImportSignature.selector);
         keystore.importAccount(address(wallet), chainId, actors, sig);
+    }
+
+    /// @notice Verifies importAccount rejects a 32-byte response with the magic prefix but non-zero ABI padding.
+    function test_importAccount_revert_invalidImportSignature_dirtyReturn(bool multichain) public {
+        DirtyReturnERC1271Wallet wallet = new DirtyReturnERC1271Wallet();
+        Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(address(0xA11CE));
+
+        vm.expectRevert(Keystore.InvalidImportSignature.selector);
+        keystore.importAccount(address(wallet), _acceptedChainId(multichain), actors, "");
     }
 
     /// @notice Verifies importAccount reverts with NoInitialActors when the actor set is empty.
