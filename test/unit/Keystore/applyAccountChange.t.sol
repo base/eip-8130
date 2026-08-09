@@ -292,14 +292,20 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertEq(_multichainSeq(account), mcBefore + 1);
     }
 
-    /// @notice An IncrementLocalEpoch on the Multichain channel reverts ChangeRequiresLocalChannel.
-    function test_multichain_revert_bumpRejected(uint256 pk) public {
+    /// @notice A Multichain IncrementLocalEpoch bumps the local epoch (resetting the local sequence) and consumes the
+    ///         multichain counter, retiring outstanding unlanded local signatures without a Local batch.
+    function test_multichain_success_bump(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
+        (uint32 epochBefore,) = _localEpochSeq(account);
+        uint64 mcBefore = _multichainSeq(account);
 
-        Keystore.SignedAccountChanges memory s = _multichainBatch(pk, account, _one(_bumpChange()));
-        vm.expectRevert(Keystore.ChangeRequiresLocalChannel.selector);
-        keystore.applySignedAccountChanges(account, s);
+        _applyMultichain(pk, account, _one(_bumpChange()));
+
+        (uint32 epochAfter, uint32 seqAfter) = _localEpochSeq(account);
+        assertEq(epochAfter, epochBefore + 1);
+        assertEq(seqAfter, 0); // local sequence reset by the epoch bump
+        assertEq(_multichainSeq(account), mcBefore + 1);
     }
 
     /// @notice A Lock on the Multichain channel reverts ChangeRequiresLocalChannel.
