@@ -59,7 +59,7 @@ contract Keystore {
         AuthorizeActor, // payload: abi.encode(bytes32 actorId, ActorConfig cfg, bytes policyData); cfg.expiry is the granted expiry
         RevokeActor, // payload: abi.encode(bytes32 actorId)
         // Environment ops (mutate the rules ops are checked against).
-        IncrementLocalEpoch, // Local only; payload: empty (length == 0 enforced)
+        IncrementLocalEpoch, // Either channel; payload: empty (length == 0 enforced)
         Lock, // Local only; payload: abi.encode(uint16 unlockDelay)
         Unlock // Local only; payload: empty (length == 0 enforced)
     }
@@ -68,8 +68,8 @@ contract Keystore {
     ///
     /// @dev Replaces the prior `uint256 chainId` argument. {Local} binds `block.chainid` and carries the full local
     ///      epoch machinery (see {SignedAccountChanges.sequence}); {Multichain} binds chainId 0 and keeps a plain
-    ///      monotonic counter with no epochs and no unsequenced (JIT) mode. {IncrementLocalEpoch}, {Lock}, and
-    ///      {Unlock} are rejected on the Multichain channel.
+    ///      monotonic counter with no epochs and no unsequenced (JIT) mode. {Lock} and {Unlock} are rejected on the
+    ///      Multichain channel; {IncrementLocalEpoch} is allowed on either channel.
     enum AccountChangeChannel {
         Local,
         Multichain
@@ -319,7 +319,7 @@ contract Keystore {
     ///         arrival). A zero expiry is the "no expiry" sentinel and is accepted.
     error ExpiredChange();
 
-    /// @notice A local-only change (IncrementLocalEpoch, Lock, or Unlock) was submitted on the Multichain channel.
+    /// @notice A local-only change (Lock or Unlock) was submitted on the Multichain channel.
     error ChangeRequiresLocalChannel();
 
     /// @notice A change payload did not match the shape required by its ChangeType (e.g. a non-empty payload on
@@ -552,13 +552,13 @@ contract Keystore {
     ///
     ///      Authorization is flat: every signed account change is admin-only, so a single up-front scope check
     ///      (signer scope must be 0) authorizes the whole batch — there is no per-op authorization and no per-op
-    ///      sequencing restriction. IncrementLocalEpoch, Lock, and Unlock are Local-only; Lock and Unlock must also be
-    ///      standalone. Other ops may share a non-empty batch.
+    ///      sequencing restriction. Lock and Unlock are Local-only and must also be standalone; IncrementLocalEpoch is
+    ///      allowed on either channel. Other ops may share a non-empty batch.
     ///
     ///      Pipeline (in order): (1) split the sequence word; (2) reject a stale epoch on Local batches;
     ///      (3) validate/advance the sequence counter BEFORE apply (reentrancy discipline); (4) compute the digest
     ///      via {_changesDigest}, authenticate, and reject a non-admin signer; (5) iterate
-    ///      changes enforcing channel and lock policy (local-only changes rejected on Multichain; authority ops
+    ///      changes enforcing channel and lock policy (Lock/Unlock rejected on Multichain; authority ops
     ///      rejected while the account is locked; Lock/Unlock must be standalone). Anyone may relay — authorization
     ///      comes entirely from the signature.
     ///
@@ -621,8 +621,8 @@ contract Keystore {
             revert UnauthorizedAccountChange();
         }
 
-        // Authority ops use the lock state at batch entry. Local-only changes reject the Multichain channel; Lock and
-        // Unlock are also standalone. That standalone rule is what makes this entry snapshot EXACT for the whole batch:
+        // Authority ops use the lock state at batch entry. Lock and Unlock reject the Multichain channel and are
+        // standalone. That standalone rule is what makes this entry snapshot EXACT for the whole batch:
         // the only ops that mutate lock state (Lock/Unlock) can never share a batch with an authority op, so no op
         // observes a lock state that a peer changed mid-loop. Relaxing standalone re-opens snapshot staleness — a later
         // authority op could then run against a lock a Lock earlier in the same batch just set (or a stale-unlocked one).
@@ -642,9 +642,8 @@ contract Keystore {
                 }
                 _applyRevoke(account, s.changes[i].payload);
             } else if (t == ChangeType.IncrementLocalEpoch) {
-                if (!isLocal) {
-                    revert ChangeRequiresLocalChannel();
-                }
+                // Allowed on either channel: a Multichain batch may bump the local epoch to retire outstanding
+                // unlanded local signatures without needing a separate Local batch.
                 _applyIncrementLocalEpoch(account, s.changes[i].payload);
             } else if (t == ChangeType.Lock) {
                 if (!isLocal) {
@@ -714,7 +713,8 @@ contract Keystore {
     }
 
     /// @dev IncrementLocalEpoch. Empty payload. Strict increment of the local epoch, resetting the local sequence to 0
-    ///      and thereby invalidating every unlanded local signature (they commit the full 64-bit word). Local-only.
+    ///      and thereby invalidating every unlanded local signature (they commit the full 64-bit word). Allowed on
+    ///      either channel: a Multichain batch may bump the local epoch even though it carries no epoch of its own.
     function _applyIncrementLocalEpoch(address account, bytes calldata payload) private {
         if (payload.length != 0) {
             revert InvalidChangePayload();
