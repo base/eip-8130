@@ -642,8 +642,6 @@ contract Keystore {
                 }
                 _applyRevoke(account, s.changes[i].payload);
             } else if (t == ChangeType.IncrementLocalEpoch) {
-                // Allowed on either channel: a Multichain batch may bump the local epoch to retire outstanding
-                // unlanded local signatures without needing a separate Local batch.
                 _applyIncrementLocalEpoch(account, s.changes[i].payload);
             } else if (t == ChangeType.Lock) {
                 if (!isLocal) {
