@@ -935,23 +935,27 @@ contract Keystore {
     ///      what makes "expired" read identically to "revoked" on every surface — the invariant that lets a node
     ///      garbage-collect an expired actor's slots without changing anything observable on-chain.
     function _resolveActorConfig(address account, bytes32 actorId) private view returns (ActorConfig memory) {
-        ActorConfig memory config = _actorConfig[actorId][account];
-        // Non-zero authenticator = a stored entry. Uses the same `>= K1_AUTHENTICATOR` namespace idiom as _isAuthorized:
-        // every stored authenticator is K1_AUTHENTICATOR (0x1) or a contract, so this is equivalent to != address(0).
-        if (config.authenticator >= K1_AUTHENTICATOR) {
-            // An expired stored actor reports as empty (as if never authorized), never its stale config.
-            if (_isExpired(config.expiry)) {
-                return _emptyActorConfig();
-            }
-            return config;
-        }
-        if (actorId == _selfActorId(account) && !_isDefaultEoaRevoked(account)) {
+        // Common path first: the inline k1 self. A clear FLAG_REVOKE_DEFAULT_EOA means the inline self is live, so
+        // resolve it from AccountState alone (all-zero = full owner). When the flag is set the inline self is off —
+        // either a non-k1 self lives in _actorConfig, or the self was revoked — so fall through to the shared home.
+        if (actorId == _selfActorId(account)) {
             AccountState storage st = _accountState[account];
-            if (_isExpired(st.defaultEOAExpiry)) {
-                return _emptyActorConfig();
+            if (st.flags & FLAG_REVOKE_DEFAULT_EOA == 0) {
+                if (_isExpired(st.defaultEOAExpiry)) {
+                    return _emptyActorConfig();
+                }
+                return
+                    ActorConfig({
+                        authenticator: K1_AUTHENTICATOR, scope: st.defaultEOAScope, expiry: st.defaultEOAExpiry
+                    });
             }
-            return
-                ActorConfig({authenticator: K1_AUTHENTICATOR, scope: st.defaultEOAScope, expiry: st.defaultEOAExpiry});
+        }
+
+        // Explicit actor (or a non-k1 self): the single _actorConfig home. A stored authenticator is K1_AUTHENTICATOR
+        // (0x1) or a contract, so `>= K1_AUTHENTICATOR` is the "slot populated" test. An expired entry reports empty.
+        ActorConfig memory config = _actorConfig[actorId][account];
+        if (config.authenticator >= K1_AUTHENTICATOR) {
+            return _isExpired(config.expiry) ? _emptyActorConfig() : config;
         }
         return config;
     }
