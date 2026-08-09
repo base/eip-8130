@@ -25,10 +25,12 @@ protocol-side, not enforced by this contract.
    to equal the live `getPolicyCommitment(account, actorId)`. That single check authenticates config, validity
    window, and owning account — so neither the manager nor the policy stores a config hash (strictly better than
    [Account Policies](https://github.com/base/account-policies)' per-binding `_configHashByPolicyId` slot). A
-   revoked key has a zero commitment and stops immediately. Actor expiry is not re-checked on this path: protocol
-   authentication already rejects expired actors before dispatch. (The external `executeFor` path does enforce
-   expiry.) The manager then invokes the policy, forwards a non-empty `executeBatch` plan to the account, and
-   calls `onPostExecute` when applicable.
+   revoked *or expired* key reads back a zero commitment and stops immediately: `getPolicyCommitment` (like every
+   Keystore read accessor) is liveness-gated and resolves an expired actor to zero, identical to a revoked one.
+   `execute` doesn't rely on this — protocol authentication already rejects expired actors before dispatch (the
+   external `executeFor` path enforces expiry itself, via `getActorConfig`) — but the gating means no off-chain
+   reader ever sees a live-looking commitment for a dead actor. The manager then invokes the policy, forwards a
+   non-empty `executeBatch` plan to the account, and calls `onPostExecute` when applicable.
 
 ```
 session key ──(8130 gate: only PolicyManager)──▶ PolicyManager.execute
