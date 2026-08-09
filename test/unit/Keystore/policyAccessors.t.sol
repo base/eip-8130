@@ -6,9 +6,9 @@ import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice Fully-fuzzed unit tests for the policy accessors on `Keystore`:
-///           - `getPolicy(account, actorId)`           — off-chain aggregate: (manager, commitment)
-///           - `getPolicyCommitment(account, actorId)` — single-SLOAD hot-path read
-///           - `getPolicyManager(account, actorId)`    — single-SLOAD hot-path read (the resolved policy target)
+///           - `getPolicyCommitment(account, actorId)` — liveness-gated hot-path read
+///           - `getPolicyManager(account, actorId)`    — liveness-gated hot-path read (the resolved policy target)
+///           - `getActor(account, actorId)`            — one-shot liveness-gated aggregate (config + policyData)
 ///
 ///         All are `view`; there are no events to assert. Every test fuzzes its inputs (managers, commitments,
 ///         actorIds, keys, scopes). Gating is determined by the SCOPE_POLICY bit, never by "slot non-zero": a
@@ -17,130 +17,7 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 ///         value is distinguishable from the ungated (unwritten, zero) case.
 contract PolicyAccessorsTest is KeystoreTest {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    // getPolicy — explicit (non-self) actor home  (stored.authenticator != 0)
-    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-
-    /// @notice A gated non-self actor: getPolicy returns (manager, commitment) and the aggregate agrees with the
-    ///         granular accessors. Covers the explicit-actor home.
-    function test_getPolicy_success_explicitGatedActor(
-        uint256 rootSeed,
-        bytes32 actorId,
-        uint8 scopeSeed,
-        uint256 managerSeed,
-        uint256 commitmentSeed
-    ) public {
-        uint256 rootPk = _boundK1Pk(rootSeed);
-        (address account,) = _createK1Account(rootPk);
-        actorId = _boundExplicitActorId(account, rootPk, actorId);
-
-        uint16 scope = _boundGatedScope(scopeSeed);
-        address manager = _boundNonZeroAddress(managerSeed);
-        bytes32 commitment = _boundNonZeroWord(commitmentSeed);
-
-        _authorizePolicyActor(account, rootPk, actorId, scope, manager, commitment);
-
-        (address outManager, bytes32 outCommitment) = keystore.getPolicy(account, actorId);
-        assertEq(outManager, manager);
-        assertEq(outCommitment, commitment);
-        // Aggregate agrees with the single-SLOAD granular accessors.
-        assertEq(outManager, keystore.getPolicyManager(account, actorId));
-        assertEq(outCommitment, keystore.getPolicyCommitment(account, actorId));
-    }
-
-    /// @notice A non-self actor authorized ungated (scope & SCOPE_POLICY == 0): getPolicy returns (0, 0). Covers
-    ///         the explicit-actor home with no policy slots written.
-    function test_getPolicy_success_ungatedExplicitActor_returnsNone(uint256 rootSeed, bytes32 actorId) public {
-        uint256 rootPk = _boundK1Pk(rootSeed);
-        (address account,) = _createK1Account(rootPk);
-        actorId = _boundExplicitActorId(account, rootPk, actorId);
-
-        _authorizeUngatedActor(account, rootPk, actorId, address(k1Authenticator));
-
-        (address outManager, bytes32 outCommitment) = keystore.getPolicy(account, actorId);
-        assertEq(outManager, address(0));
-        assertEq(outCommitment, bytes32(0));
-    }
-
-    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    // getPolicy — inline-k1-self home  (else-if actorId == self && !revoked)
-    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    //
-    // The inline-k1 self stores scope/expiry in AccountState, but manager/commitment live in the shared
-    // actorId-keyed keyspace — so the accessors must resolve identically to the explicit-actor home.
-
-    /// @notice A gated inline-k1 self: getPolicy returns (manager, commitment) and agrees with the granular
-    ///         accessors. Covers the inline-self home.
-    function test_getPolicy_success_inlineSelfGatedActor(
-        uint256 eoaSeed,
-        uint8 scopeSeed,
-        uint256 managerSeed,
-        uint256 commitmentSeed
-    ) public {
-        uint256 eoaPk = _boundK1Pk(eoaSeed);
-        address eoa = vm.addr(eoaPk);
-        bytes32 selfActorId = bytes32(uint256(uint160(eoa)));
-
-        uint16 scope = _boundGatedScope(scopeSeed);
-        address manager = _boundNonZeroAddress(managerSeed);
-        bytes32 commitment = _boundNonZeroWord(commitmentSeed);
-
-        _authorizeInlineSelfWithPolicy(eoa, eoaPk, scope, manager, commitment);
-
-        (address outManager, bytes32 outCommitment) = keystore.getPolicy(eoa, selfActorId);
-        assertEq(outManager, manager);
-        assertEq(outCommitment, commitment);
-        assertEq(outManager, keystore.getPolicyManager(eoa, selfActorId));
-        assertEq(outCommitment, keystore.getPolicyCommitment(eoa, selfActorId));
-    }
-
-    /// @notice A fresh EOA's implicit self (full owner, ungated): getPolicy returns (0, 0). Covers the inline-self
-    ///         home (else-if true, no _actorConfig, not revoked) with no policy slots written.
-    function test_getPolicy_success_inlineSelfUngated_returnsNone(uint256 eoaSeed) public view {
-        address eoa = vm.addr(_boundK1Pk(eoaSeed));
-        bytes32 selfActorId = bytes32(uint256(uint160(eoa)));
-
-        (address outManager, bytes32 outCommitment) = keystore.getPolicy(eoa, selfActorId);
-        assertEq(outManager, address(0));
-        assertEq(outCommitment, bytes32(0));
-    }
-
-    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    // getPolicy — else branch  (unknown actor / revoked self)
-    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-
-    /// @notice An unknown (never-authorized, non-self) actor: getPolicy returns (0, 0) over empty state.
-    function test_getPolicy_success_unknownActor_returnsNone(address account, bytes32 actorId) public view {
-        vm.assume(actorId != bytes32(uint256(uint160(account)))); // stay off the inline-self else-if
-
-        (address outManager, bytes32 outCommitment) = keystore.getPolicy(account, actorId);
-        assertEq(outManager, address(0));
-        assertEq(outCommitment, bytes32(0));
-    }
-
-    /// @notice A gated inline self that is then revoked: getPolicy returns (0, 0). The revoke clears the shared
-    ///         (actorId-keyed) policy slots.
-    function test_getPolicy_success_revokedInlineSelf_returnsNone(
-        uint256 eoaSeed,
-        uint256 ownerSeed,
-        uint8 scopeSeed,
-        uint256 managerSeed,
-        uint256 commitmentSeed
-    ) public {
-        (address eoa, uint256 ownerPk) = _seedGatedInlineSelfWithSpareOwner(
-            eoaSeed, ownerSeed, scopeSeed, managerSeed, commitmentSeed
-        );
-        bytes32 selfActorId = bytes32(uint256(uint160(eoa)));
-
-        // Revoke the (downgraded) self via the spare unrestricted owner; the policy-scoped self cannot sign config.
-        _revokeActor(eoa, ownerPk, selfActorId);
-
-        (address outManager, bytes32 outCommitment) = keystore.getPolicy(eoa, selfActorId);
-        assertEq(outManager, address(0));
-        assertEq(outCommitment, bytes32(0));
-    }
-
-    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    // getPolicyManager / getPolicyCommitment — single-SLOAD granular reads
+    // getPolicyManager / getPolicyCommitment — liveness-gated granular reads
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     function test_getPolicyManager_success_explicitGatedActor(
@@ -595,9 +472,7 @@ contract PolicyAccessorsTest is KeystoreTest {
         // Live before expiry.
         assertEq(keystore.getPolicyManager(account, actorId), manager);
         assertEq(keystore.getPolicyCommitment(account, actorId), commitment);
-        (address liveTarget, bytes32 liveCommitment) = keystore.getPolicy(account, actorId);
-        assertEq(liveTarget, manager);
-        assertEq(liveCommitment, commitment);
+        assertEq(keystore.getActor(account, actorId).policyData, abi.encodePacked(manager, commitment));
 
         // Cross the expiry boundary.
         vm.warp(uint256(expiry) + 1);
@@ -605,9 +480,7 @@ contract PolicyAccessorsTest is KeystoreTest {
         // Every read surface now reports empty, identical to a revoked actor.
         assertEq(keystore.getPolicyManager(account, actorId), address(0));
         assertEq(keystore.getPolicyCommitment(account, actorId), bytes32(0));
-        (address deadTarget, bytes32 deadCommitment) = keystore.getPolicy(account, actorId);
-        assertEq(deadTarget, address(0));
-        assertEq(deadCommitment, bytes32(0));
+        assertEq(keystore.getActor(account, actorId).policyData.length, 0);
         // And the config resolver already treated it as empty — the accessors now agree with it.
         assertEq(keystore.getActorConfig(account, actorId).authenticator, address(0));
     }

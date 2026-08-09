@@ -807,11 +807,11 @@ contract AuthenticateTest is KeystoreTest {
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    // getPolicy / getActorConfig / isActor (actor-resolution views)
+    // getPolicyManager / getPolicyCommitment / getActorConfig / isActor (actor-resolution views)
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice getPolicy resolves a gated actor's manager and signed commitment.
-    /// @dev Returns (manager, commitment) from the policy keyspace when scope & SCOPE_POLICY is set.
+    /// @notice The policy accessors resolve a gated actor's manager and signed commitment.
+    /// @dev Return (manager, commitment) from the policy keyspace when scope & SCOPE_POLICY is set.
     function test_getPolicy_success_gatedActor(
         uint256 ownerSeed,
         uint256 sessionSeed,
@@ -830,12 +830,11 @@ contract AuthenticateTest is KeystoreTest {
         bytes32 sessionActorId = bytes32(uint256(uint160(vm.addr(sessionPk))));
         _authorizeGatedActor(account, ownerPk, sessionActorId, scope, manager, commitment);
 
-        (address outTarget, bytes32 outCommitment) = keystore.getPolicy(account, sessionActorId);
-        assertEq(outTarget, manager);
-        assertEq(outCommitment, commitment);
+        assertEq(keystore.getPolicyManager(account, sessionActorId), manager);
+        assertEq(keystore.getPolicyCommitment(account, sessionActorId), commitment);
     }
 
-    /// @notice getPolicy returns the zero policy for an ungated actor.
+    /// @notice The policy accessors return the zero policy for an ungated actor.
     /// @dev No policy slots written for scope & SCOPE_POLICY == 0 -> (address(0), bytes32(0)).
     function test_getPolicy_success_ungatedActor(uint256 ownerSeed, uint256 actorSeed) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
@@ -847,9 +846,8 @@ contract AuthenticateTest is KeystoreTest {
         bytes32 actorId = bytes32(uint256(uint160(vm.addr(actorPk))));
         _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), 0x00);
 
-        (address target, bytes32 commitment) = keystore.getPolicy(account, actorId);
-        assertEq(target, address(0));
-        assertEq(commitment, bytes32(0));
+        assertEq(keystore.getPolicyManager(account, actorId), address(0));
+        assertEq(keystore.getPolicyCommitment(account, actorId), bytes32(0));
     }
 
     /// @notice getActorConfig returns a registered actor's authenticator and scope verbatim.

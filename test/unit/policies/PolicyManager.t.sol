@@ -258,17 +258,18 @@ contract PolicyManagerTest is KeystoreTest {
 
     // ── Config resolution ──
 
-    /// @notice Verifies getPolicy returns the manager address and signed commitment for an authorized policy actor.
-    /// @dev Asserts Keystore.getPolicy resolves the configured policy_manager and policy_commitment.
+    /// @notice Verifies the policy accessors resolve the manager address and signed commitment for an authorized
+    ///         policy actor.
+    /// @dev Asserts Keystore.getPolicyManager / getPolicyCommitment resolve the configured policy_manager and
+    ///      policy_commitment.
     function test_getPolicy_success_resolvesManagerAndCommitment() public {
         PolicyManager.PolicyBinding memory binding = _binding(9);
         bytes32 commitment = manager.commitmentOf(binding);
         bytes32 actorId = _sessionActorId(9);
         _authorizePolicyActor(actorId, commitment);
 
-        (address resolvedTarget, bytes32 signed) = keystore.getPolicy(account, actorId);
-        assertEq(resolvedTarget, address(manager));
-        assertEq(signed, commitment);
+        assertEq(keystore.getPolicyManager(account, actorId), address(manager));
+        assertEq(keystore.getPolicyCommitment(account, actorId), commitment);
     }
 
     // ── Helpers ──

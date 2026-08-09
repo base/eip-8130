@@ -207,7 +207,15 @@ contract PolicyManager is ReentrancyGuard {
     }
 
     /// @dev External-path validation: live external-pull actor, manager-match, live commitment vs binding, then
-    ///      enforce.
+    ///      enforce. The external path has no protocol auth (omitted on {execute}, where authentication already
+    ///      enforced this before dispatch), so the manager itself gates the caller with a single liveness-resolved
+    ///      {Keystore.getActor} read: the actor must be provisioned with EXTERNAL_POLICY_AUTHENTICATOR — the no-code
+    ///      sentinel marking an external-pull actor (one that can act ONLY through this path and can never
+    ///      authenticate a native 8130 tx). A non-live actor (unknown/revoked/expired) resolves to the all-zero
+    ///      config, so this both enforces liveness AND restricts executeFor to actors the account explicitly opted
+    ///      into external pull; a native signing key gated to this manager (a real authenticator) is not drivable
+    ///      here, where it would bypass protocol replay protection. The gated actor's policyData carries the same
+    ///      manager/commitment the granular accessors would return, so one read replaces three.
     function _enforceExternal(
         PolicyBinding calldata binding,
         bytes32 actorId,
@@ -216,29 +224,31 @@ contract PolicyManager is ReentrancyGuard {
     ) internal {
         address account = binding.account;
 
-        // Liveness + verifier precondition. The external path has no protocol auth (omitted on {execute}, where
-        // authentication already enforced this before dispatch), so the manager itself gates the caller. It requires
-        // the actor to be provisioned with EXTERNAL_POLICY_AUTHENTICATOR — the no-code sentinel that marks an
-        // external-pull actor (one that can act ONLY through this path and can never authenticate a native 8130 tx).
-        // getActorConfig resolves an unknown, revoked, or expired actor to the all-zero config (authenticator 0), so
-        // this single read both enforces liveness AND restricts executeFor to actors the account explicitly opted
-        // into external pull. A native signing key gated to this manager (a real authenticator) is therefore not
-        // drivable through the auth-less external path, where it would bypass protocol replay protection. Checked
-        // before the policy-binding checks so those stay specific to a live external-pull actor.
-        if (KEYSTORE.getActorConfig(account, actorId).authenticator != EXTERNAL_POLICY_AUTHENTICATOR) {
+        Keystore.Actor memory actor = KEYSTORE.getActor(account, actorId);
+        if (actor.config.authenticator != EXTERNAL_POLICY_AUTHENTICATOR) {
             revert InvalidActor(actorId);
         }
+        // A live gated actor's policyData is manager(20) || commitment(32); anything else (ungated or non-live) is not
+        // a policy actor routed through a manager.
+        if (actor.policyData.length != 52) revert NoActivePolicy(actorId);
+        (address manager, bytes32 signed) = _unpackPolicyGate(actor.policyData);
 
-        if (KEYSTORE.getPolicyManager(account, actorId) != address(this)) {
-            revert NoActivePolicy(actorId);
-        }
+        if (manager != address(this)) revert NoActivePolicy(actorId);
 
         bytes32 commitment = _commitment(binding);
-        bytes32 signed = KEYSTORE.getPolicyCommitment(account, actorId);
         if (signed == bytes32(0)) revert NoActivePolicy(actorId);
         if (signed != commitment) revert BindingCommitmentMismatch(signed, commitment);
 
         _enforce(binding, commitment, executionData, caller);
+    }
+
+    /// @dev Unpacks a gated actor's `policyData` (manager(20) || commitment(32), tightly packed to 52 bytes, so
+    ///      abi.decode cannot parse it) into its two fixed-offset fields without copying.
+    function _unpackPolicyGate(bytes memory policyData) private pure returns (address manager, bytes32 commitment) {
+        assembly ("memory-safe") {
+            manager := shr(96, mload(add(policyData, 0x20)))
+            commitment := mload(add(policyData, 0x34))
+        }
     }
 
     /// @dev Common enforcement: enforce the binding's validity window (authenticated by the commitment check at the
