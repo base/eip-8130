@@ -207,15 +207,10 @@ contract PolicyManager is ReentrancyGuard {
     }
 
     /// @dev External-path validation: live external-pull actor, manager-match, live commitment vs binding, then
-    ///      enforce. The external path has no protocol auth (omitted on {execute}, where authentication already
-    ///      enforced this before dispatch), so the manager itself gates the caller with a single liveness-resolved
-    ///      {Keystore.getActor} read: the actor must be provisioned with EXTERNAL_POLICY_AUTHENTICATOR — the no-code
-    ///      sentinel marking an external-pull actor (one that can act ONLY through this path and can never
-    ///      authenticate a native 8130 tx). A non-live actor (unknown/revoked/expired) resolves to the all-zero
-    ///      config, so this both enforces liveness AND restricts executeFor to actors the account explicitly opted
-    ///      into external pull; a native signing key gated to this manager (a real authenticator) is not drivable
-    ///      here, where it would bypass protocol replay protection. The gated actor's policyData carries the same
-    ///      manager/commitment the granular accessors would return, so one read replaces three.
+    ///      enforce. The external path has no protocol auth, so the manager gates the caller itself with a single
+    ///      liveness-resolved {Keystore.getActor} read: the actor must carry EXTERNAL_POLICY_AUTHENTICATOR (the
+    ///      no-code sentinel marking an external-pull actor) and be gated to this manager. A non-live or ungated
+    ///      actor resolves to a zero manager, failing the manager-match.
     function _enforceExternal(
         PolicyBinding calldata binding,
         bytes32 actorId,
@@ -224,15 +219,8 @@ contract PolicyManager is ReentrancyGuard {
     ) internal {
         address account = binding.account;
 
-        Keystore.Actor memory actor = KEYSTORE.getActor(account, actorId);
-        if (actor.config.authenticator != EXTERNAL_POLICY_AUTHENTICATOR) {
-            revert InvalidActor(actorId);
-        }
-        // A live gated actor's policyData is manager(20) || commitment(32); anything else (ungated or non-live) is not
-        // a policy actor routed through a manager.
-        if (actor.policyData.length != 52) revert NoActivePolicy(actorId);
-        (address manager, bytes32 signed) = _unpackPolicyGate(actor.policyData);
-
+        (Keystore.ActorConfig memory config, address manager, bytes32 signed) = KEYSTORE.getActor(account, actorId);
+        if (config.authenticator != EXTERNAL_POLICY_AUTHENTICATOR) revert InvalidActor(actorId);
         if (manager != address(this)) revert NoActivePolicy(actorId);
 
         bytes32 commitment = _commitment(binding);
@@ -240,15 +228,6 @@ contract PolicyManager is ReentrancyGuard {
         if (signed != commitment) revert BindingCommitmentMismatch(signed, commitment);
 
         _enforce(binding, commitment, executionData, caller);
-    }
-
-    /// @dev Unpacks a gated actor's `policyData` (manager(20) || commitment(32), tightly packed to 52 bytes, so
-    ///      abi.decode cannot parse it) into its two fixed-offset fields without copying.
-    function _unpackPolicyGate(bytes memory policyData) private pure returns (address manager, bytes32 commitment) {
-        assembly ("memory-safe") {
-            manager := shr(96, mload(add(policyData, 0x20)))
-            commitment := mload(add(policyData, 0x34))
-        }
     }
 
     /// @dev Common enforcement: enforce the binding's validity window (authenticated by the commitment check at the

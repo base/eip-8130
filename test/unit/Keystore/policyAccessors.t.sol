@@ -8,7 +8,7 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 /// @notice Fully-fuzzed unit tests for the policy accessors on `Keystore`:
 ///           - `getPolicyCommitment(account, actorId)` — liveness-gated hot-path read
 ///           - `getPolicyManager(account, actorId)`    — liveness-gated hot-path read (the resolved policy target)
-///           - `getActor(account, actorId)`            — one-shot liveness-gated aggregate (config + policyData)
+///           - `getActor(account, actorId)`            — one-shot liveness-gated aggregate (config + manager + commitment)
 ///
 ///         All are `view`; there are no events to assert. Every test fuzzes its inputs (managers, commitments,
 ///         actorIds, keys, scopes). Gating is determined by the SCOPE_POLICY bit, never by "slot non-zero": a
@@ -472,7 +472,9 @@ contract PolicyAccessorsTest is KeystoreTest {
         // Live before expiry.
         assertEq(keystore.getPolicyManager(account, actorId), manager);
         assertEq(keystore.getPolicyCommitment(account, actorId), commitment);
-        assertEq(keystore.getActor(account, actorId).policyData, abi.encodePacked(manager, commitment));
+        (, address liveManager, bytes32 liveCommitment) = keystore.getActor(account, actorId);
+        assertEq(liveManager, manager);
+        assertEq(liveCommitment, commitment);
 
         // Cross the expiry boundary.
         vm.warp(uint256(expiry) + 1);
@@ -480,7 +482,9 @@ contract PolicyAccessorsTest is KeystoreTest {
         // Every read surface now reports empty, identical to a revoked actor.
         assertEq(keystore.getPolicyManager(account, actorId), address(0));
         assertEq(keystore.getPolicyCommitment(account, actorId), bytes32(0));
-        assertEq(keystore.getActor(account, actorId).policyData.length, 0);
+        (, address deadManager, bytes32 deadCommitment) = keystore.getActor(account, actorId);
+        assertEq(deadManager, address(0));
+        assertEq(deadCommitment, bytes32(0));
         // And the config resolver already treated it as empty — the accessors now agree with it.
         assertEq(keystore.getActorConfig(account, actorId).authenticator, address(0));
     }
@@ -523,14 +527,14 @@ contract PolicyAccessorsTest is KeystoreTest {
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    // getActor — one-shot liveness-gated snapshot (config + packed policyData)
+    // getActor — config + policy manager + commitment in one read
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     //
-    // getActor echoes the queried actorId, returns the resolved (liveness-gated) config, and packs the policy gate
-    // as policyData exactly like the ActorAuthorized event: manager(20) || commitment(32) when gated, else empty.
+    // getActor returns the resolved (liveness-gated) config plus the policy gate as (manager, commitment): non-zero
+    // for a live gated actor, zero for an ungated or non-live one.
 
-    /// @notice A gated explicit actor: getActor returns the config and packs (manager, commitment) into policyData,
-    ///         agreeing byte-for-byte with the granular accessors.
+    /// @notice A gated explicit actor: getActor returns the config and the (manager, commitment) gate, agreeing with
+    ///         the granular accessors.
     function test_getActor_success_gatedExplicitActor(
         uint256 rootSeed,
         bytes32 actorId,
@@ -547,30 +551,32 @@ contract PolicyAccessorsTest is KeystoreTest {
         bytes32 commitment = _boundNonZeroWord(commitmentSeed);
         _authorizePolicyActor(account, rootPk, actorId, scope, manager, commitment);
 
-        Keystore.Actor memory actor = keystore.getActor(account, actorId);
-        assertEq(actor.actorId, actorId);
-        assertEq(actor.config.authenticator, address(k1Authenticator));
-        assertEq(actor.config.scope, scope);
-        assertEq(actor.policyData, abi.encodePacked(manager, commitment));
+        (Keystore.ActorConfig memory config, address outManager, bytes32 outCommitment) =
+            keystore.getActor(account, actorId);
+        assertEq(config.authenticator, address(k1Authenticator));
+        assertEq(config.scope, scope);
+        assertEq(outManager, manager);
+        assertEq(outCommitment, commitment);
     }
 
-    /// @notice An ungated live actor: getActor returns the config with EMPTY policyData (gating is by scope bit).
-    function test_getActor_success_ungatedActor_emptyPolicyData(uint256 rootSeed, bytes32 actorId) public {
+    /// @notice An ungated live actor: getActor returns the config with a zero gate (gating is by scope bit).
+    function test_getActor_success_ungatedActor_zeroGate(uint256 rootSeed, bytes32 actorId) public {
         uint256 rootPk = _boundK1Pk(rootSeed);
         (address account,) = _createK1Account(rootPk);
         actorId = _boundExplicitActorId(account, rootPk, actorId);
 
         _authorizeUngatedActor(account, rootPk, actorId, address(k1Authenticator));
 
-        Keystore.Actor memory actor = keystore.getActor(account, actorId);
-        assertEq(actor.actorId, actorId);
-        assertEq(actor.config.authenticator, address(k1Authenticator));
-        assertEq(actor.config.scope, uint16(0));
-        assertEq(actor.policyData.length, 0);
+        (Keystore.ActorConfig memory config, address outManager, bytes32 outCommitment) =
+            keystore.getActor(account, actorId);
+        assertEq(config.authenticator, address(k1Authenticator));
+        assertEq(config.scope, uint16(0));
+        assertEq(outManager, address(0));
+        assertEq(outCommitment, bytes32(0));
     }
 
-    /// @notice An expired gated actor: getActor resolves to the all-zero config with empty policyData — identical to
-    ///         an unknown/revoked actor.
+    /// @notice An expired gated actor: getActor resolves to the all-zero config with a zero gate — identical to an
+    ///         unknown/revoked actor.
     function test_getActor_success_expired_returnsEmpty(
         uint256 rootSeed,
         bytes32 actorId,
@@ -596,26 +602,27 @@ contract PolicyAccessorsTest is KeystoreTest {
 
         vm.warp(uint256(expiry) + 1);
 
-        Keystore.Actor memory actor = keystore.getActor(account, actorId);
-        assertEq(actor.actorId, actorId); // actorId is echoed even for a non-live actor
-        assertEq(actor.config.authenticator, address(0));
-        assertEq(actor.config.scope, uint16(0));
-        assertEq(actor.config.expiry, uint48(0));
-        assertEq(actor.policyData.length, 0);
+        (Keystore.ActorConfig memory config, address outManager, bytes32 outCommitment) =
+            keystore.getActor(account, actorId);
+        assertEq(config.authenticator, address(0));
+        assertEq(config.scope, uint16(0));
+        assertEq(config.expiry, uint48(0));
+        assertEq(outManager, address(0));
+        assertEq(outCommitment, bytes32(0));
     }
 
-    /// @notice An unknown (never-authorized, non-self) actor: getActor echoes the id over an all-zero config with
-    ///         empty policyData.
+    /// @notice An unknown (never-authorized, non-self) actor: getActor returns an all-zero config with a zero gate.
     function test_getActor_success_unknownActor_returnsEmpty(address account, bytes32 actorId) public view {
         vm.assume(actorId != bytes32(uint256(uint160(account)))); // stay off the inline-self path
 
-        Keystore.Actor memory actor = keystore.getActor(account, actorId);
-        assertEq(actor.actorId, actorId);
-        assertEq(actor.config.authenticator, address(0));
-        assertEq(actor.policyData.length, 0);
+        (Keystore.ActorConfig memory config, address outManager, bytes32 outCommitment) =
+            keystore.getActor(account, actorId);
+        assertEq(config.authenticator, address(0));
+        assertEq(outManager, address(0));
+        assertEq(outCommitment, bytes32(0));
     }
 
-    /// @notice A gated inline-k1 self: getActor resolves the inline config and packs the shared-keyspace policy gate.
+    /// @notice A gated inline-k1 self: getActor resolves the inline config and the shared-keyspace policy gate.
     function test_getActor_success_inlineSelfGatedActor(
         uint256 eoaSeed,
         uint8 scopeSeed,
@@ -631,11 +638,12 @@ contract PolicyAccessorsTest is KeystoreTest {
         bytes32 commitment = _boundNonZeroWord(commitmentSeed);
         _authorizeInlineSelfWithPolicy(eoa, eoaPk, scope, manager, commitment);
 
-        Keystore.Actor memory actor = keystore.getActor(eoa, selfActorId);
-        assertEq(actor.actorId, selfActorId);
-        assertEq(actor.config.authenticator, keystore.K1_AUTHENTICATOR());
-        assertEq(actor.config.scope, scope);
-        assertEq(actor.policyData, abi.encodePacked(manager, commitment));
+        (Keystore.ActorConfig memory config, address outManager, bytes32 outCommitment) =
+            keystore.getActor(eoa, selfActorId);
+        assertEq(config.authenticator, keystore.K1_AUTHENTICATOR());
+        assertEq(config.scope, scope);
+        assertEq(outManager, manager);
+        assertEq(outCommitment, commitment);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡

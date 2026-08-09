@@ -41,14 +41,6 @@ contract Keystore {
         bytes policyData; // empty unless scope & Scopes.POLICY; then manager(20) || commitment(32)
     }
 
-    /// @notice A full actor record: identifier, config, and policy data.
-    struct Actor {
-        bytes32 actorId;
-        ActorConfig config;
-        // Sliced by scope: empty when scope & Scopes.POLICY == 0; manager[20] || commitment[32] when set.
-        bytes policyData;
-    }
-
     /// @notice The operation an {AccountChange} applies within an {applySignedAccountChanges} batch.
     ///
     /// @dev ABI-encodes as uint8. Authority ops (AuthorizeActor, RevokeActor) are rejected while locked. Environment
@@ -920,19 +912,19 @@ contract Keystore {
         return _resolveActorConfig(account, actorId);
     }
 
-    /// @notice One-shot liveness-gated snapshot for off-chain consumers: the resolved {ActorConfig} plus the policy
-    ///         gate packed as `policyData` (manager(20) || commitment(32) when scope & Scopes.POLICY is set, else
-    ///         empty — the same shape as the {Actor} import struct). Preferred aggregate: the granular
-    ///         {getPolicyCommitment} / {getPolicyManager} each re-resolve liveness, so this is cheaper than combining
-    ///         them. A non-live actor resolves to the empty config with empty `policyData`.
-    function getActor(address account, bytes32 actorId) external view returns (Actor memory actor) {
-        actor.actorId = actorId;
-        ActorConfig memory config = _resolveActorConfig(account, actorId);
-        actor.config = config;
-        // Gating is by the scope bit, matching {_emitActorAuthorized}: a live gated actor's policyData is always 52
-        // bytes (even with a zero manager/commitment); a non-live or ungated actor's is empty.
+    /// @notice Returns an actor's config, policy manager, and policy commitment in one read. The manager and
+    ///         commitment are non-zero only for a live actor with scope & Scopes.POLICY set; a non-live actor
+    ///         returns the empty config and a zero manager/commitment.
+    function getActor(address account, bytes32 actorId)
+        external
+        view
+        returns (ActorConfig memory config, address policyManager, bytes32 policyCommitment)
+    {
+        config = _resolveActorConfig(account, actorId);
+        // Gating is by the scope bit, matching {_emitActorAuthorized}; a non-live or ungated actor has a zero gate.
         if (config.authenticator != address(0) && config.scope & Scopes.POLICY != 0) {
-            actor.policyData = abi.encodePacked(_policyManager[actorId][account], _policyCommitment[actorId][account]);
+            policyManager = _policyManager[actorId][account];
+            policyCommitment = _policyCommitment[actorId][account];
         }
     }
 
