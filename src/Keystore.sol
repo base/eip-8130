@@ -43,9 +43,9 @@ contract Keystore {
 
     /// @notice The operation an {AccountChange} applies within an {applySignedAccountChanges} batch.
     ///
-    /// @dev ABI-encodes as uint8. Authority ops (AuthorizeActor, RevokeActor) are rejected while locked. Environment
-    ///      ops enforce their own lock preconditions; Lock and Unlock are Local-only and must each be the batch's only
-    ///      op.
+    /// @dev ABI-encodes as uint8. A locked account freezes every op except Unlock and IncrementLocalEpoch, enforced by
+    ///      the guard in {applySignedAccountChanges} (Unlock additionally self-checks it is hard-locked). Lock and
+    ///      Unlock are Local-only and must each be the batch's only op.
     enum ChangeType {
         // Authority ops (mutate who can act).
         AuthorizeActor, // payload: abi.encode(bytes32 actorId, ActorConfig cfg, bytes policyData); cfg.expiry is the granted expiry
@@ -388,7 +388,7 @@ contract Keystore {
     mapping(bytes32 actorId => mapping(address account => ActorConfig)) internal _actorConfig;
 
     /// @notice Per-actor signed policy commitment. Set when the actor's scope carries Scopes.POLICY.
-    /// @dev Read only during execution (via getPolicy), never during signature validity checks.
+    /// @dev Read only during execution (via getPolicyCommitment / getActor), never during signature validity checks.
     mapping(bytes32 actorId => mapping(address account => bytes32)) internal _policyCommitment;
 
     /// @notice Per-actor policy manager address. Set when the actor's scope carries Scopes.POLICY.
@@ -560,7 +560,7 @@ contract Keystore {
         external
         nonZeroAccount(account)
     {
-        AccountState storage a = _accountState[account];
+        AccountState storage st = _accountState[account];
         bool isLocal = s.channel == AccountChangeChannel.Local;
 
         // Reject an empty batch: a no-op signed change would otherwise consume a sequence (or initialize a fresh
@@ -574,11 +574,11 @@ contract Keystore {
         if (isLocal) {
             uint32 epoch = uint32(s.sequence >> 32);
             uint32 seq = uint32(s.sequence);
-            if (epoch != a.localEpoch) {
+            if (epoch != st.localEpoch) {
                 revert StaleEpoch();
             }
             if (seq != UNSEQUENCED) {
-                if (seq != a.localSequence) {
+                if (seq != st.localSequence) {
                     revert BadSequence();
                 }
                 if (seq >= UNSEQUENCED - 1) {
@@ -587,22 +587,22 @@ contract Keystore {
                 // Advance the local sequence before apply. A trailing IncrementLocalEpoch in the same batch
                 // overwrites this to 0, but that second write lands on an already-warm slot (~100 gas), so the
                 // combo isn't worth special-casing here.
-                a.localSequence = seq + 1;
+                st.localSequence = seq + 1;
             } else if (!_isInitialized(account)) {
                 // Mark a fresh account initialized and invalidate outstanding sequence-0 signatures. The unsequenced
                 // batch remains replayable; failed authentication rolls this write back.
-                a.localSequence = 1;
+                st.localSequence = 1;
             }
         } else {
             // Multichain: a plain monotonic counter, never epoch-bearing or UNSEQUENCED.
             uint64 seq = s.sequence;
-            if (seq != a.multichainSequence) {
+            if (seq != st.multichainSequence) {
                 revert BadSequence();
             }
             if (seq == type(uint64).max) {
                 revert SequenceSaturated();
             }
-            a.multichainSequence = seq + 1;
+            st.multichainSequence = seq + 1;
         }
 
         // Authenticate over the digest. Authorization is flat: every signed account change is
@@ -705,27 +705,27 @@ contract Keystore {
         if (payload.length != 0) {
             revert InvalidChangePayload();
         }
-        AccountState storage a = _accountState[account];
+        AccountState storage st = _accountState[account];
         // The epoch half has no reserved sentinel (unlike UNSEQUENCED on the sequence half), so the full uint32 range
         // is usable: only the terminal value itself cannot advance.
-        if (a.localEpoch == type(uint32).max) {
+        if (st.localEpoch == type(uint32).max) {
             revert EpochSaturated();
         }
-        a.localEpoch += 1;
-        a.localSequence = 0;
+        st.localEpoch += 1;
+        st.localSequence = 0;
     }
 
     /// @dev Lock. Local-only; `payload = abi.encode(uint16 unlockDelay)`. Must be standalone. The caller
     ///      ({applySignedAccountChanges}) guarantees the account is unlocked before dispatch, so this overwrites any
     ///      residue from an elapsed prior lock unconditionally.
     function _applyLock(address account, bytes calldata payload) private {
-        AccountState storage a = _accountState[account];
+        AccountState storage st = _accountState[account];
         uint16 unlockDelay = abi.decode(payload, (uint16));
         if (unlockDelay == 0) {
             revert ZeroUnlockDelay();
         }
-        a.flags = (a.flags | FLAG_LOCKED) & ~FLAG_UNLOCK_INITIATED;
-        a.lockUnion = unlockDelay;
+        st.flags = (st.flags | FLAG_LOCKED) & ~FLAG_UNLOCK_INITIATED;
+        st.lockUnion = unlockDelay;
         emit AccountLocked(account, unlockDelay);
     }
 
@@ -735,14 +735,14 @@ contract Keystore {
         if (payload.length != 0) {
             revert InvalidChangePayload();
         }
-        AccountState storage a = _accountState[account];
-        uint8 flags = a.flags;
+        AccountState storage st = _accountState[account];
+        uint8 flags = st.flags;
         if (flags & FLAG_LOCKED == 0 || flags & FLAG_UNLOCK_INITIATED != 0) {
             revert NotLocked();
         }
-        uint48 unlocksAt = uint48(block.timestamp + uint16(a.lockUnion));
-        a.flags = flags | FLAG_UNLOCK_INITIATED;
-        a.lockUnion = unlocksAt;
+        uint48 unlocksAt = uint48(block.timestamp + uint16(st.lockUnion));
+        st.flags = flags | FLAG_UNLOCK_INITIATED;
+        st.lockUnion = unlocksAt;
         emit AccountUnlockInitiated(account, unlocksAt);
     }
 
@@ -981,9 +981,9 @@ contract Keystore {
     ///
     /// @return The account's ChangeSequences (multichain counter, local epoch, local sequence).
     function getChangeSequences(address account) external view returns (ChangeSequences memory) {
-        AccountState storage state = _accountState[account];
+        AccountState storage st = _accountState[account];
         return ChangeSequences({
-            multichain: state.multichainSequence, localEpoch: state.localEpoch, localSequence: state.localSequence
+            multichain: st.multichainSequence, localEpoch: st.localEpoch, localSequence: st.localSequence
         });
     }
 
@@ -1009,20 +1009,20 @@ contract Keystore {
         view
         returns (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 unlockDelay)
     {
-        AccountState storage config = _accountState[account];
-        uint8 flags = config.flags;
+        AccountState storage st = _accountState[account];
+        uint8 flags = st.flags;
         if (flags & FLAG_LOCKED == 0) {
             // Unlocked: no lock bits set.
             return (false, false, 0, 0);
         }
         if (flags & FLAG_UNLOCK_INITIATED == 0) {
             // Hard-locked: lockUnion holds the configured delay; synthesize the max sentinel for unlocksAt.
-            return (true, false, type(uint48).max, uint16(config.lockUnion));
+            return (true, false, type(uint48).max, uint16(st.lockUnion));
         }
         // Unlock initiated: lockUnion holds the effective unlock timestamp. Once it has elapsed the account is
         // effectively unlocked, so report the clean unlocked state instead of surfacing the stale timestamp. Storage is
         // not canonicalized (lock reads are non-clearing); a later Lock overwrites the residue.
-        uint48 unlockTime = config.lockUnion;
+        uint48 unlockTime = st.lockUnion;
         if (block.timestamp >= unlockTime) {
             return (false, false, 0, 0);
         }
