@@ -622,11 +622,16 @@ contract Keystore {
         uint256 n = s.changes.length;
         for (uint256 i; i < n; i++) {
             ChangeType t = s.changes[i].changeType;
-            // A locked account is frozen for every op except Unlock (which requires the lock, enforced in
-            // _applyUnlock) and IncrementLocalEpoch (retiring keys stays available while locked). Any future op
-            // defaults to requiring an unlocked account (fail-safe).
             if (locked && t != ChangeType.Unlock && t != ChangeType.IncrementLocalEpoch) {
                 revert AccountIsLocked();
+            }
+            if (t == ChangeType.Lock || t == ChangeType.Unlock) {
+                if (!isLocal) {
+                    revert ChangeRequiresLocalChannel();
+                }
+                if (n != 1) {
+                    revert LockChangeMustBeStandalone();
+                }
             }
             if (t == ChangeType.AuthorizeActor) {
                 _applyAuthorize(account, s.changes[i].payload);
@@ -635,20 +640,8 @@ contract Keystore {
             } else if (t == ChangeType.IncrementLocalEpoch) {
                 _applyIncrementLocalEpoch(account, s.changes[i].payload);
             } else if (t == ChangeType.Lock) {
-                if (!isLocal) {
-                    revert ChangeRequiresLocalChannel();
-                }
-                if (n != 1) {
-                    revert LockChangeMustBeStandalone();
-                }
                 _applyLock(account, s.changes[i].payload);
             } else if (t == ChangeType.Unlock) {
-                if (!isLocal) {
-                    revert ChangeRequiresLocalChannel();
-                }
-                if (n != 1) {
-                    revert LockChangeMustBeStandalone();
-                }
                 _applyUnlock(account, s.changes[i].payload);
             } else {
                 // Defensive guard: every ChangeType must be dispatched explicitly. Unreachable today — out-of-range
