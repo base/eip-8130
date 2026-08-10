@@ -1289,10 +1289,7 @@ contract Keystore {
 
         return keccak256(
             abi.encode(
-                ACTOR_INITIALIZATION_TYPEHASH,
-                ActorId.fromAddress(account),
-                chainId,
-                keccak256(abi.encodePacked(actorHashes))
+                ACTOR_INITIALIZATION_TYPEHASH, _selfActorId(account), chainId, keccak256(abi.encodePacked(actorHashes))
             )
         );
     }
