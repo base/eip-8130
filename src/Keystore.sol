@@ -114,7 +114,7 @@ contract Keystore {
         uint64 multichainSequence; // 8 bytes
         uint32 localSequence; // 4 bytes – low half of the signed local word
         uint32 localEpoch; // 4 bytes – high half of the signed local word
-        uint8 flags; // 1 byte – bitfield: bit 0 REVOKE_DEFAULT_EOA, bit 1 LOCKED, bit 2 UNLOCK_INITIATED, bit 3 CONTRACT_ESTABLISHED
+        uint8 flags; // 1 byte – bitfield: bit 0 CONTRACT_ESTABLISHED, bit 1 REVOKE_DEFAULT_EOA, bit 2 LOCKED, bit 3 UNLOCK_INITIATED
         uint48 lockUnion; // 6 bytes – union: unlockDelay while UNLOCK_INITIATED clear, else unlocksAt (timestamp)
         uint48 defaultEOAExpiry; // 6 bytes – inline self k1 expiry (Unix seconds; 0 = no expiry)
         uint16 defaultEOAScope; // 2 bytes – inline self k1 scope (0 = full owner)
@@ -191,6 +191,15 @@ contract Keystore {
     // ACCOUNT STATE FLAGS
     // ----------------------------------------------------------------------------------------------------------------
 
+    /// @notice AccountState.flags bit: set on every account the keystore establishes (createAccount and importAccount),
+    ///         marking it "keystore-established, not a proven address key."
+    ///
+    /// @dev Permanent once set; has no effect on authentication. The protocol can read it to make code-delegation or
+    ///      other decisions — e.g. an account may have empty code yet retain EIP-8130 state (an EIP-6780 same-transaction
+    ///      SELFDESTRUCT), so this flag lets consumers avoid treating empty code as proof of a known EOA key. A future
+    ///      key-backed native path may deliberately leave it clear.
+    uint8 public constant FLAG_CONTRACT_ESTABLISHED = 0x01;
+
     /// @notice AccountState.flags bit: when set, the account's secp256k1 ("self") key cannot authenticate — neither
     ///         the implicit full owner nor an inline-scoped self. The self key is a K1_AUTHENTICATOR signature whose
     ///         recovered signer equals the account; when this flag is unset, it authenticates with the inline
@@ -199,25 +208,16 @@ contract Keystore {
     ///         self-actorId, and by authorizing the self-actorId to a *non-k1* authenticator (mutual exclusion: the
     ///         k1 self and a non-k1 self are never simultaneously live). Authorizing the self-actorId as a k1 actor
     ///         clears it (re-enabling the inline self, possibly scoped).
-    uint8 public constant FLAG_REVOKE_DEFAULT_EOA = 0x01;
+    uint8 public constant FLAG_REVOKE_DEFAULT_EOA = 0x02;
 
     /// @notice AccountState.flags bit (spec `LOCKED`): identifies a lock record. The account is frozen unless an
     ///         initiated unlock's timestamp has elapsed; expired lock bits remain until a later Lock overwrites them.
-    uint8 public constant FLAG_LOCKED = 0x02;
+    uint8 public constant FLAG_LOCKED = 0x04;
 
     /// @notice AccountState.flags bit (spec `UNLOCK_INITIATED`): selects how the packed `lockUnion` field is read.
     ///         While clear, `lockUnion` holds the configured unlock delay (seconds); while set, it holds unlocksAt
     ///         (the timestamp at which the pending unlock takes effect). Only meaningful when FLAG_LOCKED is set.
-    uint8 public constant FLAG_UNLOCK_INITIATED = 0x04;
-
-    /// @notice AccountState.flags bit: set on every account the keystore establishes (createAccount and importAccount),
-    ///         marking it "keystore-established, not a proven address key."
-    ///
-    /// @dev Permanent once set; has no effect on authentication. The protocol can read it to make code-delegation or
-    ///      other decisions — e.g. an account may have empty code yet retain EIP-8130 state (an EIP-6780 same-transaction
-    ///      SELFDESTRUCT), so this flag lets consumers avoid treating empty code as proof of a known EOA key. A future
-    ///      key-backed native path may deliberately leave it clear.
-    uint8 public constant FLAG_CONTRACT_ESTABLISHED = 0x08;
+    uint8 public constant FLAG_UNLOCK_INITIATED = 0x08;
 
     /// @dev secp256k1 half-order (n/2). Per EIP-2, only the lower-half `s` value is accepted to reject signature
     ///      malleability. Equal to (secp256k1n - 1) / 2.
