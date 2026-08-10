@@ -1243,22 +1243,26 @@ contract Keystore {
         return keccak256(abi.encodePacked(userSalt, _computeActorsCommitment(initialActors)));
     }
 
-    /// @dev Packed commitment over the initial actor set. Per-actor contribution is
+    /// @dev Commitment over the initial actor set, using the same hash-the-leaves-then-hash-the-list scheme as the
+    ///      signed digests ({_computeImportDigest}, {_changesDigest}). Each actor hashes to a fixed-width leaf over
     ///      actorId (32) || authenticator (20) || scope (2) || policyData, where policyData is empty (POLICY unset)
-    ///      or exactly 52 bytes (POLICY set), so the length is unambiguous. Expiry does not participate (always 0
-    ///      for initial actors).
+    ///      or exactly 52 bytes (POLICY set); expiry does not participate (always 0 for initial actors). The
+    ///      commitment is keccak256 over the tightly packed 32-byte leaves, so it is unambiguous by construction and
+    ///      linear in the actor count. Protocol clients reproduce it as leaf_i = keccak256(actorId || authenticator ||
+    ///      scope || policyData); commitment = keccak256(leaf_0 || ... || leaf_{n-1}).
     function _computeActorsCommitment(InitialActor[] calldata initialActors) private pure returns (bytes32) {
-        bytes memory packed;
+        bytes32[] memory leaves = new bytes32[](initialActors.length);
         for (uint256 i; i < initialActors.length; i++) {
-            packed = abi.encodePacked(
-                packed,
-                initialActors[i].actorId,
-                initialActors[i].authenticator,
-                initialActors[i].scope,
-                initialActors[i].policyData
+            leaves[i] = keccak256(
+                abi.encodePacked(
+                    initialActors[i].actorId,
+                    initialActors[i].authenticator,
+                    initialActors[i].scope,
+                    initialActors[i].policyData
+                )
             );
         }
-        return keccak256(packed);
+        return keccak256(abi.encodePacked(leaves));
     }
 
     /// @dev Typed digest for the importAccount ERC-1271 signature (a signed message), so signers can reproduce it
