@@ -114,7 +114,7 @@ contract Keystore {
         uint64 multichainSequence; // 8 bytes
         uint32 localSequence; // 4 bytes – low half of the signed local word
         uint32 localEpoch; // 4 bytes – high half of the signed local word
-        uint8 flags; // 1 byte – bitfield: bit 0 REVOKE_DEFAULT_EOA, bit 1 LOCKED, bit 2 UNLOCK_INITIATED
+        uint8 flags; // 1 byte – bitfield: bit 0 REVOKE_DEFAULT_EOA, bit 1 LOCKED, bit 2 UNLOCK_INITIATED, bit 3 CONTRACT_ESTABLISHED
         uint48 lockUnion; // 6 bytes – union: unlockDelay while UNLOCK_INITIATED clear, else unlocksAt (timestamp)
         uint48 defaultEOAExpiry; // 6 bytes – inline self k1 expiry (Unix seconds; 0 = no expiry)
         uint16 defaultEOAScope; // 2 bytes – inline self k1 scope (0 = full owner)
@@ -209,6 +209,23 @@ contract Keystore {
     ///         While clear, `lockUnion` holds the configured unlock delay (seconds); while set, it holds unlocksAt
     ///         (the timestamp at which the pending unlock takes effect). Only meaningful when FLAG_LOCKED is set.
     uint8 public constant FLAG_UNLOCK_INITIATED = 0x04;
+
+    /// @notice AccountState.flags bit: set on every account whose EIP-8130 authority the keystore establishes — by
+    ///         createAccount and by importAccount alike, regardless of the target's code shape (contract wallet,
+    ///         EIP-7702/7819 delegate, etc.). EIP-8130 deliberately does not infer an address-bound private key from
+    ///         code shape: an EOA's power to (un)delegate is exercised with its key at the protocol layer, outside this
+    ///         contract, so there is nothing for the keystore to record. The bit therefore marks "keystore-established,
+    ///         not a proven address key."
+    ///
+    /// @dev Once set, the bit is permanent: no op clears it. It exists to survive EIP-6780, under which a contract
+    ///      created and SELFDESTRUCTed in the same transaction leaves empty code but retains its EIP-8130 state. Such
+    ///      an account has no address-backed key, so consumers MUST NOT treat "empty code (or a delegate) plus
+    ///      EIP-8130 state" as proof of a known EOA key when this flag is set (see {isContractEstablished}). It has no
+    ///      effect on authentication — authority still rests entirely on the configured actor set.
+    ///
+    ///      Every current establishment path sets it. The bit's forward meaning is the inverse case: a future,
+    ///      genuinely key-backed native path (e.g. an EIP-8164 ML-DSA self-import) may deliberately leave it clear.
+    uint8 public constant FLAG_CONTRACT_ESTABLISHED = 0x08;
 
     /// @dev secp256k1 half-order (n/2). Per EIP-2, only the lower-half `s` value is accepted to reject signature
     ///      malleability. Equal to (secp256k1n - 1) / 2.
@@ -434,7 +451,8 @@ contract Keystore {
     /// @dev Reverts with AlreadyInitialized when the account already has EIP-8130 state.
     /// @dev Reverts with NoInitialActors when `initialActors` is empty.
     /// @dev Reverts with ActorsNotSortedOrDuplicate when `initialActors` is not strictly ascending by actorId.
-    /// @dev Reverts with InvalidAuthenticator when an initial actor names a zero authenticator.
+    /// @dev Reverts with InvalidAuthenticator when an initial actor names a sub-K1 (zero) authenticator.
+    /// @dev Reverts with InvalidPolicyData when an initial actor's policyData length does not match its scope.
     /// @dev Reverts with AccountDeploymentFailed when CREATE2 does not deploy code at the expected address.
     ///
     /// @param userSalt Caller-chosen salt mixed into the CREATE2 address derivation.
@@ -458,9 +476,11 @@ contract Keystore {
         }
 
         // Created accounts disable the implicit EOA key. Set this before actor initialization so an explicit k1 self
-        // actor can re-enable it.
+        // actor can re-enable it. FLAG_CONTRACT_ESTABLISHED is set unconditionally: the account lives at a CREATE2
+        // address that has no private key, so even if its runtime later becomes empty (e.g. an EIP-6780 same-tx
+        // SELFDESTRUCT) it must never be mistaken for a key-backed EOA.
         _accountState[account].localSequence = 1;
-        _accountState[account].flags = FLAG_REVOKE_DEFAULT_EOA;
+        _accountState[account].flags = FLAG_REVOKE_DEFAULT_EOA | FLAG_CONTRACT_ESTABLISHED;
 
         _initializeAccount(account, initialActors);
 
@@ -524,7 +544,15 @@ contract Keystore {
 
         // Disable the implicit EOA key after ERC-1271 validation so a delegated EOA can use that key to authorize its
         // import. Including the k1 self in initialActors re-enables it explicitly.
-        _accountState[account].flags = FLAG_REVOKE_DEFAULT_EOA;
+        //
+        // FLAG_CONTRACT_ESTABLISHED is set unconditionally, independent of the target's code shape. Import accepts any
+        // ERC-1271 target — contract wallets and EIP-7702/7819 delegates alike (the 7819 factory relies on importing
+        // delegates) — and the keystore does not infer an address-bound key from code: an EOA's ability to redelegate
+        // lives with its key at the protocol layer, not in this flag. The accepted consequence is that an imported
+        // delegate that later delegates to the zero address (empty code) has no keystore-visible key and cannot be
+        // treated as a key-backed EOA — which is correct for a 7819 clone and irrelevant to a genuine EOA (which
+        // redelegates with its key directly). See {FLAG_CONTRACT_ESTABLISHED}.
+        _accountState[account].flags = FLAG_REVOKE_DEFAULT_EOA | FLAG_CONTRACT_ESTABLISHED;
 
         _initializeAccount(account, initialActors);
         emit AccountImported(account);
@@ -879,6 +907,9 @@ contract Keystore {
     ///
     /// @dev Reverts with EmptyBytecode when `bytecode` is empty.
     /// @dev Reverts with BytecodeTooLarge when `bytecode` exceeds the maximum encodable length.
+    /// @dev Applies the same initial-actor validation as {createAccount} (see {_validateInitialActors}), so it never
+    ///      returns an address for an actor set a later createAccount would reject. Reverts with NoInitialActors,
+    ///      ActorsNotSortedOrDuplicate, InvalidAuthenticator, or InvalidPolicyData.
     ///
     /// @param userSalt Caller-chosen salt mixed into the CREATE2 address derivation.
     /// @param bytecode Account deployment bytecode.
@@ -994,6 +1025,22 @@ contract Keystore {
     /// @return True if the account is locked at the current block timestamp.
     function isLocked(address account) external view returns (bool) {
         return _isLocked(account);
+    }
+
+    /// @notice Whether the account's EIP-8130 authority was established by the keystore (via createAccount or
+    ///         importAccount) rather than by a proven address key. True for every account the keystore establishes
+    ///         today; see {FLAG_CONTRACT_ESTABLISHED} for the forward case that leaves it clear.
+    ///
+    /// @dev Consumers that treat "empty code (or a delegate) plus EIP-8130 state" as evidence of a known EOA key MUST
+    ///      exclude accounts for which this returns true: under EIP-6780 such an account can be created (or its
+    ///      importing contract destroyed) and SELFDESTRUCTed in the same transaction, leaving empty code and persisted
+    ///      EIP-8130 state at an address that has no private key. See {FLAG_CONTRACT_ESTABLISHED}.
+    ///
+    /// @param account The account to check.
+    ///
+    /// @return True when the account was keystore-established and must not be treated as a key-backed EOA.
+    function isContractEstablished(address account) external view returns (bool) {
+        return _accountState[account].flags & FLAG_CONTRACT_ESTABLISHED != 0;
     }
 
     /// @notice Returns the account's full lock status.
@@ -1217,14 +1264,50 @@ contract Keystore {
         return false;
     }
 
+    /// @dev The shared, read-only static gate on a bootstrap actor set, applying the exact rules that
+    ///      _initializeAccount/_authorizeActor enforce at write time: non-empty, strictly ascending by actorId (which
+    ///      also rejects duplicates and the zero actorId), a K1-or-above authenticator, and a policyData length that
+    ///      matches scope & Scopes.POLICY (52 bytes when set, empty when clear). Running it inside {_prepareDeployment}
+    ///      gives {computeAddress} the same validity as {createAccount}, so a predicted address is never returned for
+    ///      an actor set a later createAccount would reject (which would otherwise let a client prefund and strand
+    ///      funds at an undeployable address). Reverts with NoInitialActors, ActorsNotSortedOrDuplicate,
+    ///      InvalidAuthenticator, or InvalidPolicyData.
+    function _validateInitialActors(InitialActor[] calldata initialActors) private pure {
+        if (initialActors.length == 0) {
+            revert NoInitialActors();
+        }
+
+        bytes32 previousActorId;
+        for (uint256 i; i < initialActors.length; i++) {
+            InitialActor calldata actor = initialActors[i];
+
+            // Strictly ascending: rejects unsorted, duplicate, and the zero actorId (previousActorId starts at 0).
+            if (actor.actorId <= previousActorId) {
+                revert ActorsNotSortedOrDuplicate();
+            }
+            if (actor.authenticator < K1_AUTHENTICATOR) {
+                revert InvalidAuthenticator();
+            }
+            // Same frozen rule as _slicePolicy: 52 bytes when POLICY-scoped, empty otherwise.
+            if (actor.policyData.length != (actor.scope & Scopes.POLICY != 0 ? 52 : 0)) {
+                revert InvalidPolicyData();
+            }
+
+            previousActorId = actor.actorId;
+        }
+    }
+
     /// @dev Derives the CREATE2 inputs once for both {createAccount} and {computeAddress}: the effective salt, the
     ///      deployment code, and the resulting counterfactual address. Sharing this avoids rebuilding and re-hashing
-    ///      the (up to ~24KB) deployment code — and recomputing the actors commitment — twice per creation.
+    ///      the (up to ~24KB) deployment code — and recomputing the actors commitment — twice per creation. The actor
+    ///      set is validated up front so a prediction is never returned for a set createAccount would later reject.
     function _prepareDeployment(bytes32 userSalt, bytes calldata bytecode, InitialActor[] calldata initialActors)
         private
         view
         returns (address account, bytes32 effectiveSalt, bytes memory deploymentCode)
     {
+        _validateInitialActors(initialActors);
+
         effectiveSalt = _computeEffectiveSalt(userSalt, initialActors);
         deploymentCode = _buildDeploymentCode(bytecode);
         bytes32 codeHash = keccak256(deploymentCode);

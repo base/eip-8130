@@ -386,6 +386,89 @@ contract CreateAccountTest is KeystoreTest {
         keystore.computeAddress(salt, bytecode, actors);
     }
 
+    /// @notice Verifies computeAddress rejects an empty actor set, matching createAccount (M-02 parity)
+    /// @dev _prepareDeployment runs _validateInitialActors before deriving the address, so no address is predicted
+    ///      for a set createAccount would reject.
+    function test_computeAddress_revert_noInitialActors(bytes32 salt) public {
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](0);
+        bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
+
+        vm.expectRevert(Keystore.NoInitialActors.selector);
+        keystore.computeAddress(salt, bytecode, actors);
+    }
+
+    /// @notice Verifies computeAddress rejects an unsorted actor set, matching createAccount (M-02 parity)
+    function test_computeAddress_revert_actorsNotSorted(bytes32 idA, bytes32 idB, bytes32 salt) public {
+        vm.assume(idA != 0 && idB != 0 && idA != idB);
+        bytes32 smaller = idA < idB ? idA : idB;
+        bytes32 larger = idA < idB ? idB : idA;
+
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](2);
+        actors[0] = _initialActor(larger, address(k1Authenticator));
+        actors[1] = _initialActor(smaller, address(k1Authenticator));
+
+        bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
+        vm.expectRevert(Keystore.ActorsNotSortedOrDuplicate.selector);
+        keystore.computeAddress(salt, bytecode, actors);
+    }
+
+    /// @notice Verifies computeAddress rejects a duplicate actorId, matching createAccount (M-02 parity)
+    function test_computeAddress_revert_actorsDuplicate(bytes32 id, bytes32 salt) public {
+        vm.assume(id != 0);
+
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](2);
+        actors[0] = _initialActor(id, address(k1Authenticator));
+        actors[1] = _initialActor(id, address(k1Authenticator));
+
+        bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
+        vm.expectRevert(Keystore.ActorsNotSortedOrDuplicate.selector);
+        keystore.computeAddress(salt, bytecode, actors);
+    }
+
+    /// @notice Verifies computeAddress rejects a sub-K1 authenticator, matching createAccount (M-02 parity)
+    function test_computeAddress_revert_invalidAuthenticator(bytes32 actorId, bytes32 salt) public {
+        vm.assume(actorId != 0);
+
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
+        actors[0] = _initialActor(actorId, address(0));
+
+        bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
+        vm.expectRevert(Keystore.InvalidAuthenticator.selector);
+        keystore.computeAddress(salt, bytecode, actors);
+    }
+
+    /// @notice Verifies computeAddress rejects malformed policyData, matching createAccount (M-02 parity)
+    /// @dev Scope carries Scopes.POLICY (0x02) but policyData is not the required 52 bytes, so _validateInitialActors
+    ///      reverts InvalidPolicyData before an address is predicted.
+    function test_computeAddress_revert_invalidPolicyData(bytes32 actorId, bytes32 salt) public {
+        vm.assume(actorId != 0);
+
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
+        actors[0] = Keystore.InitialActor({
+            actorId: actorId, authenticator: address(k1Authenticator), scope: 0x02, policyData: hex"deadbeef"
+        });
+
+        bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
+        vm.expectRevert(Keystore.InvalidPolicyData.selector);
+        keystore.computeAddress(salt, bytecode, actors);
+    }
+
+    /// @notice Verifies createAccount rejects malformed policyData up front via the shared validator
+    /// @dev Complements the existing sorted/duplicate/authenticator revert tests: scope has Scopes.POLICY set but
+    ///      policyData is not 52 bytes, so _prepareDeployment -> _validateInitialActors reverts InvalidPolicyData.
+    function test_createAccount_revert_invalidPolicyData(bytes32 actorId, bytes32 salt) public {
+        vm.assume(actorId != 0);
+
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
+        actors[0] = Keystore.InitialActor({
+            actorId: actorId, authenticator: address(k1Authenticator), scope: 0x02, policyData: hex"deadbeef"
+        });
+
+        bytes memory bytecode = _computeERC1167Bytecode(defaultAccountImplementation);
+        vm.expectRevert(Keystore.InvalidPolicyData.selector);
+        keystore.createAccount(salt, bytecode, actors);
+    }
+
     /// @notice Verifies computeAddress accepts bytecode of exactly 0xFFFF bytes without reverting
     /// @dev Config-independent proof that the BytecodeTooLarge boundary is exclusive: computeAddress runs
     ///      _buildDeploymentCode but never deploys, so 0xFFFF returns an address while n == 0x10000 reverts (above)
