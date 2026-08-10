@@ -210,21 +210,13 @@ contract Keystore {
     ///         (the timestamp at which the pending unlock takes effect). Only meaningful when FLAG_LOCKED is set.
     uint8 public constant FLAG_UNLOCK_INITIATED = 0x04;
 
-    /// @notice AccountState.flags bit: set on every account whose EIP-8130 authority the keystore establishes — by
-    ///         createAccount and by importAccount alike, regardless of the target's code shape (contract wallet,
-    ///         EIP-7702/7819 delegate, etc.). EIP-8130 deliberately does not infer an address-bound private key from
-    ///         code shape: an EOA's power to (un)delegate is exercised with its key at the protocol layer, outside this
-    ///         contract, so there is nothing for the keystore to record. The bit therefore marks "keystore-established,
-    ///         not a proven address key."
+    /// @notice AccountState.flags bit: set on every account the keystore establishes (createAccount and importAccount),
+    ///         marking it "keystore-established, not a proven address key."
     ///
-    /// @dev Once set, the bit is permanent: no op clears it. It exists to survive EIP-6780, under which a contract
-    ///      created and SELFDESTRUCTed in the same transaction leaves empty code but retains its EIP-8130 state. Such
-    ///      an account has no address-backed key, so consumers MUST NOT treat "empty code (or a delegate) plus
-    ///      EIP-8130 state" as proof of a known EOA key when this flag is set (see {isContractEstablished}). It has no
-    ///      effect on authentication — authority still rests entirely on the configured actor set.
-    ///
-    ///      Every current establishment path sets it. The bit's forward meaning is the inverse case: a future,
-    ///      genuinely key-backed native path (e.g. an EIP-8164 ML-DSA self-import) may deliberately leave it clear.
+    /// @dev Permanent once set; has no effect on authentication. The protocol can read it to make code-delegation or
+    ///      other decisions — e.g. an account may have empty code yet retain EIP-8130 state (an EIP-6780 same-transaction
+    ///      SELFDESTRUCT), so this flag lets consumers avoid treating empty code as proof of a known EOA key. A future
+    ///      key-backed native path may deliberately leave it clear.
     uint8 public constant FLAG_CONTRACT_ESTABLISHED = 0x08;
 
     /// @dev secp256k1 half-order (n/2). Per EIP-2, only the lower-half `s` value is accepted to reject signature
@@ -451,7 +443,7 @@ contract Keystore {
     /// @dev Reverts with AlreadyInitialized when the account already has EIP-8130 state.
     /// @dev Reverts with NoInitialActors when `initialActors` is empty.
     /// @dev Reverts with ActorsNotSortedOrDuplicate when `initialActors` is not strictly ascending by actorId.
-    /// @dev Reverts with InvalidAuthenticator when an initial actor names a sub-K1 (zero) authenticator.
+    /// @dev Reverts with InvalidAuthenticator when an initial actor names a zero authenticator.
     /// @dev Reverts with InvalidPolicyData when an initial actor's policyData length does not match its scope.
     /// @dev Reverts with AccountDeploymentFailed when CREATE2 does not deploy code at the expected address.
     ///
@@ -476,9 +468,8 @@ contract Keystore {
         }
 
         // Created accounts disable the implicit EOA key. Set this before actor initialization so an explicit k1 self
-        // actor can re-enable it. FLAG_CONTRACT_ESTABLISHED is set unconditionally: the account lives at a CREATE2
-        // address that has no private key, so even if its runtime later becomes empty (e.g. an EIP-6780 same-tx
-        // SELFDESTRUCT) it must never be mistaken for a key-backed EOA.
+        // actor can re-enable it. FLAG_CONTRACT_ESTABLISHED is set for every created account. See
+        // {FLAG_CONTRACT_ESTABLISHED}.
         _accountState[account].localSequence = 1;
         _accountState[account].flags = FLAG_REVOKE_DEFAULT_EOA | FLAG_CONTRACT_ESTABLISHED;
 
@@ -543,15 +534,8 @@ contract Keystore {
         }
 
         // Disable the implicit EOA key after ERC-1271 validation so a delegated EOA can use that key to authorize its
-        // import. Including the k1 self in initialActors re-enables it explicitly.
-        //
-        // FLAG_CONTRACT_ESTABLISHED is set unconditionally, independent of the target's code shape. Import accepts any
-        // ERC-1271 target — contract wallets and EIP-7702/7819 delegates alike (the 7819 factory relies on importing
-        // delegates) — and the keystore does not infer an address-bound key from code: an EOA's ability to redelegate
-        // lives with its key at the protocol layer, not in this flag. The accepted consequence is that an imported
-        // delegate that later delegates to the zero address (empty code) has no keystore-visible key and cannot be
-        // treated as a key-backed EOA — which is correct for a 7819 clone and irrelevant to a genuine EOA (which
-        // redelegates with its key directly). See {FLAG_CONTRACT_ESTABLISHED}.
+        // import. Including the k1 self in initialActors re-enables it explicitly. FLAG_CONTRACT_ESTABLISHED is set for
+        // every import regardless of code shape (delegates included). See {FLAG_CONTRACT_ESTABLISHED}.
         _accountState[account].flags = FLAG_REVOKE_DEFAULT_EOA | FLAG_CONTRACT_ESTABLISHED;
 
         _initializeAccount(account, initialActors);
@@ -1027,14 +1011,8 @@ contract Keystore {
         return _isLocked(account);
     }
 
-    /// @notice Whether the account's EIP-8130 authority was established by the keystore (via createAccount or
-    ///         importAccount) rather than by a proven address key. True for every account the keystore establishes
-    ///         today; see {FLAG_CONTRACT_ESTABLISHED} for the forward case that leaves it clear.
-    ///
-    /// @dev Consumers that treat "empty code (or a delegate) plus EIP-8130 state" as evidence of a known EOA key MUST
-    ///      exclude accounts for which this returns true: under EIP-6780 such an account can be created (or its
-    ///      importing contract destroyed) and SELFDESTRUCTed in the same transaction, leaving empty code and persisted
-    ///      EIP-8130 state at an address that has no private key. See {FLAG_CONTRACT_ESTABLISHED}.
+    /// @notice Whether the account was keystore-established (createAccount or importAccount) rather than backed by a
+    ///         proven address key. See {FLAG_CONTRACT_ESTABLISHED}.
     ///
     /// @param account The account to check.
     ///
