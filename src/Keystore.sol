@@ -613,43 +613,39 @@ contract Keystore {
             revert UnauthorizedAccountChange();
         }
 
-        // Authority ops use the lock state at batch entry. Lock and Unlock reject the Multichain channel and are
-        // standalone. That standalone rule is what makes this entry snapshot EXACT for the whole batch:
-        // the only ops that mutate lock state (Lock/Unlock) can never share a batch with an authority op, so no op
-        // observes a lock state that a peer changed mid-loop. Relaxing standalone re-opens snapshot staleness — a later
-        // authority op could then run against a lock a Lock earlier in the same batch just set (or a stale-unlocked one).
-        bool locked = _isLocked(a);
+        // Lock state at batch entry gates every op below. This snapshot is EXACT for the whole batch: the only ops
+        // that mutate lock state (Lock/Unlock) must be standalone, so no op observes a lock state that a peer changed
+        // mid-loop. Relaxing standalone re-opens snapshot staleness — a later authority op could then run against a
+        // lock a Lock earlier in the same batch just set (or a stale-unlocked one).
+        bool locked = _isLocked(account);
 
         uint256 n = s.changes.length;
         for (uint256 i; i < n; i++) {
             ChangeType t = s.changes[i].changeType;
-            if (t == ChangeType.AuthorizeActor) {
-                if (locked) {
-                    revert AccountIsLocked();
+
+            // Preconditions: freeze non-exempt ops on a locked account, and hold Lock/Unlock to a standalone local batch.
+            if (locked && t != ChangeType.Unlock && t != ChangeType.IncrementLocalEpoch) {
+                revert AccountIsLocked();
+            }
+            if (t == ChangeType.Lock || t == ChangeType.Unlock) {
+                if (!isLocal) {
+                    revert ChangeRequiresLocalChannel();
                 }
+                if (n != 1) {
+                    revert LockChangeMustBeStandalone();
+                }
+            }
+
+            // Apply: dispatch the op to its handler.
+            if (t == ChangeType.AuthorizeActor) {
                 _applyAuthorize(account, s.changes[i].payload);
             } else if (t == ChangeType.RevokeActor) {
-                if (locked) {
-                    revert AccountIsLocked();
-                }
                 _applyRevoke(account, s.changes[i].payload);
             } else if (t == ChangeType.IncrementLocalEpoch) {
                 _applyIncrementLocalEpoch(account, s.changes[i].payload);
             } else if (t == ChangeType.Lock) {
-                if (!isLocal) {
-                    revert ChangeRequiresLocalChannel();
-                }
-                if (n != 1) {
-                    revert LockChangeMustBeStandalone();
-                }
                 _applyLock(account, s.changes[i].payload);
             } else if (t == ChangeType.Unlock) {
-                if (!isLocal) {
-                    revert ChangeRequiresLocalChannel();
-                }
-                if (n != 1) {
-                    revert LockChangeMustBeStandalone();
-                }
                 _applyUnlock(account, s.changes[i].payload);
             } else {
                 // Defensive guard: every ChangeType must be dispatched explicitly. Unreachable today — out-of-range
@@ -719,13 +715,11 @@ contract Keystore {
         a.localSequence = 0;
     }
 
-    /// @dev Lock. Local-only; `payload = abi.encode(uint16 unlockDelay)`. Must be standalone and requires the account
-    ///      to be currently unlocked. Overwrites any residue from an elapsed prior lock.
+    /// @dev Lock. Local-only; `payload = abi.encode(uint16 unlockDelay)`. Must be standalone. The caller
+    ///      ({applySignedAccountChanges}) guarantees the account is unlocked before dispatch, so this overwrites any
+    ///      residue from an elapsed prior lock unconditionally.
     function _applyLock(address account, bytes calldata payload) private {
         AccountState storage a = _accountState[account];
-        if (_isLocked(a)) {
-            revert AccountIsLocked();
-        }
         uint16 unlockDelay = abi.decode(payload, (uint16));
         if (unlockDelay == 0) {
             revert ZeroUnlockDelay();
@@ -999,7 +993,7 @@ contract Keystore {
     ///
     /// @return True if the account is locked at the current block timestamp.
     function isLocked(address account) external view returns (bool) {
-        return _isLocked(_accountState[account]);
+        return _isLocked(account);
     }
 
     /// @notice Returns the account's full lock status.
@@ -1041,7 +1035,8 @@ contract Keystore {
 
     /// @dev Returns whether the account's configuration is currently frozen without mutating storage.
     /// @dev An elapsed unlock reads as unlocked; a later {_applyLock} overwrites the stale lock fields.
-    function _isLocked(AccountState storage st) private view returns (bool) {
+    function _isLocked(address account) private view returns (bool) {
+        AccountState storage st = _accountState[account];
         uint8 flags = st.flags;
         if (flags & FLAG_LOCKED == 0) {
             return false;
@@ -1050,11 +1045,6 @@ contract Keystore {
             return true;
         }
         return block.timestamp < st.lockUnion; // pending unlock: frozen until the timestamp elapses
-    }
-
-    /// @dev Convenience overload of {_isLocked} keyed by address.
-    function _isLocked(address account) private view returns (bool) {
-        return _isLocked(_accountState[account]);
     }
 
     /// @dev True after bootstrap or any successful signed change. The epoch and multichain counter keep initialization
