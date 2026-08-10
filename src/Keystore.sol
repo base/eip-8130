@@ -622,6 +622,8 @@ contract Keystore {
         uint256 n = s.changes.length;
         for (uint256 i; i < n; i++) {
             ChangeType t = s.changes[i].changeType;
+
+            // Preconditions: freeze non-exempt ops on a locked account, and hold Lock/Unlock to a standalone local batch.
             if (locked && t != ChangeType.Unlock && t != ChangeType.IncrementLocalEpoch) {
                 revert AccountIsLocked();
             }
@@ -633,6 +635,8 @@ contract Keystore {
                     revert LockChangeMustBeStandalone();
                 }
             }
+
+            // Apply: dispatch the op to its handler.
             if (t == ChangeType.AuthorizeActor) {
                 _applyAuthorize(account, s.changes[i].payload);
             } else if (t == ChangeType.RevokeActor) {
