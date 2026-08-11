@@ -316,11 +316,11 @@ contract Keystore {
     /// @notice The local epoch is at its terminal value and cannot be incremented.
     error EpochSaturated();
 
-    /// @notice A Local-channel AuthorizeActor's granted expiry is non-zero and already in the past (self-expired on
-    ///         arrival). Local changes are chain-bound and never replayed, so a dead grant is rejected fail-fast. The
-    ///         Multichain channel does NOT raise this: a historical expiring grant must stay replayable so a chain
-    ///         onboarded later can consume its sequence slot and converge, so there it is installed inert instead. A
-    ///         zero expiry is the "no expiry" sentinel and is always accepted.
+    /// @notice An unsequenced (JIT) AuthorizeActor's granted expiry is non-zero and already in the past. A JIT grant is
+    ///         replayable, so its expiry must bound replay: once lapsed it can no longer land. Sequenced batches (local
+    ///         or multichain) do NOT raise this — being single-consume they cannot be replayed, so an expired grant
+    ///         installs inert and consumes its slot (multichain needs this for cross-chain catch-up). A zero expiry is
+    ///         the "no expiry" sentinel and is always accepted.
     error ExpiredChange();
 
     /// @notice A local-only change (Lock or Unlock) was submitted on the Multichain channel.
@@ -577,6 +577,10 @@ contract Keystore {
     {
         AccountState storage st = _accountState[account];
         bool isLocal = s.channel == AccountChangeChannel.Local;
+        // A JIT (unsequenced) batch — local channel with the low sequence half == UNSEQUENCED — is the only replayable
+        // form (it consumes no counter). This gates the AuthorizeActor expiry fail-fast: only a replayable grant needs
+        // its expiry to bound replay. Multichain is never unsequenced, so this short-circuits false there.
+        bool isUnsequenced = isLocal && uint32(s.sequence) == UNSEQUENCED;
 
         // Reject an empty batch: a no-op signed change would otherwise consume a sequence (or initialize a fresh
         // account, below) without altering any configuration.
@@ -653,7 +657,7 @@ contract Keystore {
 
             // Apply: dispatch the op to its handler.
             if (t == ChangeType.AuthorizeActor) {
-                _applyAuthorize(account, s.changes[i].payload, isLocal);
+                _applyAuthorize(account, s.changes[i].payload, isUnsequenced);
             } else if (t == ChangeType.RevokeActor) {
                 _applyRevoke(account, s.changes[i].payload);
             } else if (t == ChangeType.IncrementLocalEpoch) {
@@ -677,30 +681,25 @@ contract Keystore {
 
     /// @dev AuthorizeActor. `payload = abi.encode(bytes32 actorId, ActorConfig cfg, bytes policyData)`; `cfg.expiry`
     ///      is the granted expiry and the signature self-expires at it (or never, if `cfg.expiry == 0`). A plain
-    ///      upsert on both channels and both sequencing modes.
+    ///      upsert.
     ///
-    ///      Expiry handling is channel-aware. On Local (`isLocal`), an already-past non-zero expiry is rejected up
-    ///      front (ExpiredChange): local changes are chain-bound and never replayed, so a dead-on-arrival grant is a
-    ///      client mistake worth failing fast. On Multichain it is NOT rejected — the grant is installed even though
-    ///      already expired. Multichain changes share one gap-free counter replayed across chains, so a historical
-    ///      expiring grant (e.g. a yearly-renewed operator) MUST stay replayable: a chain onboarded later has to
-    ///      consume that sequence slot in order to reach the current live grant. Reverting would strand its counter
-    ///      behind the expired slot; installing it inert consumes the slot and converges the chain to the same state,
-    ///      granting no authority — the actor is dead on arrival (see {_isExpired}, which yields ActorExpired at
-    ///      authentication).
-    ///
-    ///      An unsequenced grant is replayable (it consumes no counter) and last-write-wins on its slot until the grant
-    ///      lapses or the epoch is incremented; durable reduction (revoke, shorter expiry, narrower scope) is therefore
-    ///      a wallet responsibility — batch the reducing op with a {IncrementLocalEpoch} to retire outstanding grants.
-    function _applyAuthorize(address account, bytes calldata payload, bool isLocal) private {
+    ///      Expiry fail-fast applies only to an unsequenced (JIT) grant (`isUnsequenced`). A JIT grant consumes no
+    ///      counter and is replayable, so its expiry is what retires it: once lapsed it must never re-land, hence
+    ///      ExpiredChange (it also last-write-wins on its slot until the epoch is incremented — durable reduction is a
+    ///      wallet responsibility: batch the reducing op with {IncrementLocalEpoch}). A sequenced batch (local or
+    ///      multichain) is single-consume and cannot be replayed, so an already-expired grant instead installs inert —
+    ///      dead on arrival ({_isExpired} yields ActorExpired at authentication), granting no authority — and simply
+    ///      consumes its slot. Multichain relies on this: a chain catching up must replay a historical expiring grant's
+    ///      slot (e.g. a yearly-renewed operator) to reach the current live grant, so reverting would strand its
+    ///      counter behind the expired slot.
+    function _applyAuthorize(address account, bytes calldata payload, bool isUnsequenced) private {
         (bytes32 actorId, ActorConfig memory cfg, bytes memory policyData) =
             abi.decode(payload, (bytes32, ActorConfig, bytes));
 
-        // Local only: reject a non-zero expiry that is not strictly in the future (dead on arrival). A zero expiry is
-        // the canonical "no expiry" sentinel (unlimited, per {ActorConfig}) and is accepted. Multichain deliberately
-        // omits this fence so an expired grant installs inert and its sequence slot stays replayable for chains
-        // catching up — see the doc above.
-        if (isLocal && cfg.expiry != 0 && cfg.expiry <= block.timestamp) {
+        // Unsequenced (JIT) only: reject a non-zero expiry that is not strictly in the future, so a lapsed replayable
+        // grant can never re-land. Sequenced batches are single-consume (no replay) and install an expired grant inert
+        // instead — see the doc above. A zero expiry is the "no expiry" sentinel (unlimited, per {ActorConfig}).
+        if (isUnsequenced && cfg.expiry != 0 && cfg.expiry <= block.timestamp) {
             revert ExpiredChange();
         }
 

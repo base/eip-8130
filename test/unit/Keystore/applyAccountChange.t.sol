@@ -366,18 +366,22 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertFalse(_isActor(account, selfActorId));
     }
 
-    /// @notice Regression: the channel-aware fence still fails fast on the LOCAL channel — a sequenced local
-    ///         AuthorizeActor with an already-past expiry reverts ExpiredChange. Only Multichain installs inert.
-    function test_local_authorize_pastExpiryStillReverts(uint256 pk) public {
+    /// @notice A SEQUENCED local AuthorizeActor with an already-past expiry installs inert (like Multichain), not
+    ///         reverts: a sequenced batch is single-consume and cannot be replayed, so the expiry-bound-replay concern
+    ///         does not apply. The fail-fast is reserved for the replayable unsequenced (JIT) path (see
+    ///         test_authorizeUnsequenced_revert_pastExpiry in applyKeyChange.t.sol).
+    function test_local_sequenced_authorize_pastExpiry_installsInert(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
+        uint64 seqBefore = _localSeqWord(account);
 
         uint48 pastExpiry = uint48(block.timestamp - 1);
-        Keystore.SignedAccountChanges memory s =
-            _localBatch(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, pastExpiry, "")));
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, pastExpiry, "")));
 
-        vm.expectRevert(Keystore.ExpiredChange.selector);
-        keystore.applySignedAccountChanges(account, s);
+        // Sequence consumed (no revert); the actor is present but not live.
+        assertEq(_localSeqWord(account), seqBefore + 1);
+        assertFalse(_isActor(account, ACTOR_A));
+        _revokeActor(account, pk, ACTOR_A); // present -> explicit revoke succeeds (reverts UnknownActor if empty)
     }
 
     /// @notice A Multichain IncrementLocalEpoch bumps the local epoch (resetting the local sequence) and consumes the
