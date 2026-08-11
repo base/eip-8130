@@ -71,25 +71,36 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         assertEq(cfg.expiry, expiry);
     }
 
-    /// @notice Replaying an unsequenced grant after its granted expiry has passed reverts ExpiredChange (the fixed
-    ///         granted expiry is now in the past).
-    function test_authorizeUnsequenced_revert_replayAfterExpiry(uint256 pk) public {
+    /// @notice A stale unsequenced (JIT) grant cannot clobber a renewed slot: once its granted expiry has passed the
+    ///         replay is skipped (no-op, no revert), so re-authorizing the actor with a fresh expiry and then replaying
+    ///         the old grant leaves the renewal intact — the "extend the lease, the old one can't apply overtop"
+    ///         property, without needing an epoch bump.
+    function test_authorizeUnsequenced_expiredReplay_doesNotClobberRenewal(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
-        uint48 expiry = _future(1 days);
-        Keystore.SignedAccountChanges memory s = _signBatch(
+
+        uint48 shortExpiry = _future(1 days);
+        Keystore.SignedAccountChanges memory oldLease = _signBatch(
             pk,
             account,
             Keystore.AccountChangeChannel.Local,
             _unseqWord(account),
-            _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, expiry, ""))
+            _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, shortExpiry, ""))
         );
-        keystore.applySignedAccountChanges(account, s);
+        keystore.applySignedAccountChanges(account, oldLease);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, shortExpiry);
 
-        vm.warp(uint256(expiry) + 1);
+        // Lease lapses, then the actor is renewed with a longer expiry (epoch unchanged).
+        vm.warp(uint256(shortExpiry) + 1);
+        uint48 longExpiry = _future(365 days);
+        _applyUnsequenced(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, longExpiry, ""))
+        );
+        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, longExpiry);
 
-        vm.expectRevert(Keystore.ExpiredChange.selector);
-        keystore.applySignedAccountChanges(account, s);
+        // Replaying the now-expired old lease is skipped: no revert, and the renewal is untouched.
+        keystore.applySignedAccountChanges(account, oldLease);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, longExpiry);
     }
 
     /// @notice An unsequenced batch signed at a stale epoch reverts StaleEpoch.
@@ -110,16 +121,39 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         keystore.applySignedAccountChanges(account, s);
     }
 
-    /// @notice A non-zero grant expiry that is not strictly in the future reverts ExpiredChange (expiry == now).
-    function test_authorizeUnsequenced_revert_pastExpiry(uint256 pk) public {
+    /// @notice An unsequenced (JIT) grant whose expiry is not strictly in the future (expiry == now) is skipped, not
+    ///         reverted: the batch succeeds but the actor is never written (contrast the sequenced path, which installs
+    ///         it inert).
+    function test_authorizeUnsequenced_pastExpiry_skippedNotApplied(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
 
-        Keystore.SignedAccountChanges memory s = _unseqBatch(
+        // No revert despite the already-expired grant.
+        _applyUnsequenced(
             pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, uint48(block.timestamp), ""))
         );
-        vm.expectRevert(Keystore.ExpiredChange.selector);
-        keystore.applySignedAccountChanges(account, s);
+
+        // Skipped, not installed inert: the slot was never written, so an explicit revoke finds nothing.
+        assertFalse(_isActor(account, ACTOR_A));
+        Keystore.SignedAccountChanges memory revokeBatch = _unseqBatch(pk, account, _one(_revokeChange(ACTOR_A)));
+        vm.expectRevert(Keystore.UnknownActor.selector);
+        keystore.applySignedAccountChanges(account, revokeBatch);
+    }
+
+    /// @notice Partial application on the unsequenced (JIT) path: an already-expired grant is skipped while its live
+    ///         siblings in the same batch still apply (skip is per-change, not whole-batch).
+    function test_authorizeUnsequenced_mixedExpiredAndLive_appliesLiveOnly(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+
+        Keystore.AccountChange[] memory changes = new Keystore.AccountChange[](2);
+        changes[0] = _authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, uint48(block.timestamp), ""); // expired
+        changes[1] = _authorizeChange(ACTOR_B, address(k1Authenticator), SENDER, _future(1 days), ""); // live
+
+        _applyUnsequenced(pk, account, changes);
+
+        assertFalse(_isActor(account, ACTOR_A)); // expired -> skipped
+        assertTrue(_isActor(account, ACTOR_B)); // live -> applied
     }
 
     /// @notice An unsequenced grant may request the unbounded (max) expiry.

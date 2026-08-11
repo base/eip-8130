@@ -296,15 +296,16 @@ contract AccountEnvironmentTest is KeystoreTest {
     // MULTICHAIN — EXPIRY (channel-aware install-inert)
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice A Multichain AuthorizeActor whose granted expiry is already in the past does NOT revert (unlike Local):
-    ///         it installs the actor inert and consumes the multichain sequence, so the slot stays replayable for a
-    ///         chain catching up. The actor is present (revocable) but not live.
+    /// @notice A Multichain AuthorizeActor whose granted expiry is already in the past does NOT revert: like any
+    ///         sequenced batch it installs the actor inert and consumes the multichain sequence, so the slot stays
+    ///         replayable for a chain catching up. The actor is present (revocable) but not live.
     function test_multichain_authorize_expiredInstallsInert(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
         uint64 mcBefore = _multichainSeq(account);
 
-        // Strictly-past expiry: this would be ExpiredChange on Local, but Multichain installs it inert.
+        // Strictly-past expiry: an unsequenced (JIT) batch would skip this, but a sequenced batch (Local or
+        // Multichain) installs it inert.
         uint48 pastExpiry = uint48(block.timestamp - 1);
         _applyMultichain(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, pastExpiry, "")));
 

@@ -37,9 +37,8 @@ contract KeystoreTest is Test {
 
     bytes32 constant ACCOUNT_CHANGE_TYPEHASH = keccak256("AccountChange(uint8 changeType,bytes payload)");
 
-    /// @dev Unbounded expiry sentinel: an unbounded (never-expiring) grant is expressed as this value and is only
-    ///      permitted on a sequenced batch. Convenience helpers that stand in for the old "no expiry" actors grant
-    ///      this so they never trip the ExpiredChange fence (a signed grant always self-expires).
+    /// @dev Unbounded expiry sentinel: a never-expiring grant is expressed as this value. Convenience helpers that
+    ///      stand in for the old "no expiry" actors grant this so those actors stay live for the whole test.
     uint48 constant UNBOUNDED = type(uint48).max;
 
     function setUp() public virtual {
