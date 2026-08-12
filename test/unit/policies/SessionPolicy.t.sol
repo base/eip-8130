@@ -257,6 +257,31 @@ contract SessionPolicyTest is KeystoreTest {
         manager.execute(lastBinding, _action(bob, 0.6 ether, ""));
     }
 
+    function test_nativeValue_revertsWhenNoNativeLimit() public {
+        // Fail closed: a call carrying value with no address(0) TokenLimit is rejected, not forwarded unbounded.
+        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
+        scopes[0] = _anySelectorScope(bob);
+        bytes32 actorId = _install(_config(_noLimits(), scopes));
+        _mockActingActor(actorId);
+
+        vm.expectRevert(abi.encodeWithSelector(SessionPolicy.NativeValueNotAllowed.selector, 1 ether));
+        vm.prank(account);
+        manager.execute(lastBinding, _action(bob, 1 ether, ""));
+    }
+
+    function test_nativeValue_erc20LimitDoesNotAuthorizeEth() public {
+        // A token cap (e.g. "USDC 5/month") must not implicitly permit ETH: value to any target still fails closed.
+        bytes32 actorId =
+            _install(_config(_limit(address(token), 5e6, WEEK), _erc20Scope(address(token), _noRecipients())));
+        _mockActingActor(actorId);
+
+        vm.expectRevert(abi.encodeWithSelector(SessionPolicy.NativeValueNotAllowed.selector, 1 ether));
+        vm.prank(account);
+        manager.execute(
+            lastBinding, _action(address(token), 1 ether, abi.encodeCall(SessionMockERC20.transfer, (bob, 0)))
+        );
+    }
+
     // ── Atomic multi-dimension enforcement on a single call ──
 
     function test_multiDimension_passesAllAtOnce() public {
