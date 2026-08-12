@@ -66,8 +66,7 @@ contract SessionPolicy is Policy {
         /// @dev ERC-20 token address, or address(0) for native ETH (gated on each call's `value`).
         address token;
         /// @dev Maximum spend per period (one-time: total cap). Must fit uint160; 0 is rejected ({ZeroLimit}). To
-        ///      express an effectively unlimited budget, set `limit = type(uint160).max`. For native ETH, an omitted
-        ///      `address(0)` entry means "no ETH", not "unlimited ETH" (see {NativeValueNotAllowed}).
+        ///      express an effectively unlimited budget, set `limit = type(uint160).max`.
         uint256 limit;
         /// @dev Recurring period in seconds. 0 = one-time (a single cumulative cap that never resets).
         uint40 period;
