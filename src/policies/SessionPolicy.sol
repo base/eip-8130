@@ -66,9 +66,7 @@ contract SessionPolicy is Policy {
         /// @dev ERC-20 token address, or address(0) for native ETH (gated on each call's `value`).
         address token;
         /// @dev Maximum spend per period (one-time: total cap). Must fit uint160; 0 is rejected ({ZeroLimit}). To
-        ///      express an effectively unlimited budget, set `limit = type(uint160).max` (~1.46e48 wei, far exceeding
-        ///      total ETH supply): spending still accrues to the ledger (telemetry via {getCurrentSpend}) but the cap
-        ///      is never reached. For native ETH this is the *only* way to express "unlimited" — an omitted
+        ///      express an effectively unlimited budget, set `limit = type(uint160).max`. For native ETH, an omitted
         ///      `address(0)` entry means "no ETH", not "unlimited ETH" (see {NativeValueNotAllowed}).
         uint256 limit;
         /// @dev Recurring period in seconds. 0 = one-time (a single cumulative cap that never resets).
