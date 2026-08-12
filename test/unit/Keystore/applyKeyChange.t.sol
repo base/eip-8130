@@ -20,7 +20,7 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
 
     function setUp() public override {
         super.setUp();
-        // A non-zero base timestamp so `expiry <= block.timestamp` comparisons are meaningful.
+        // A non-zero base timestamp so strictly-past expiries (block.timestamp - 1) stay non-zero and meaningful.
         vm.warp(1_000_000);
     }
 
@@ -128,9 +128,12 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
 
-        // No revert despite the already-expired grant.
+        // No revert despite the already-expired grant. Use a strictly-past expiry: an actor is expired only once
+        // block.timestamp > expiry (see {_isExpired}), so `expiry == now` is still live and would install.
         _applyUnsequenced(
-            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, uint48(block.timestamp), ""))
+            pk,
+            account,
+            _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, uint48(block.timestamp - 1), ""))
         );
 
         // Skipped, not installed inert: the slot was never written, so an explicit revoke finds nothing.
@@ -147,13 +150,27 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         (address account,) = _createK1Account(pk);
 
         Keystore.AccountChange[] memory changes = new Keystore.AccountChange[](2);
-        changes[0] = _authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, uint48(block.timestamp), ""); // expired
+        changes[0] = _authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, uint48(block.timestamp - 1), ""); // expired
         changes[1] = _authorizeChange(ACTOR_B, address(k1Authenticator), SENDER, _future(1 days), ""); // live
 
         _applyUnsequenced(pk, account, changes);
 
         assertFalse(_isActor(account, ACTOR_A)); // expired -> skipped
         assertTrue(_isActor(account, ACTOR_B)); // live -> applied
+    }
+
+    /// @notice Boundary: a JIT grant whose expiry equals the current timestamp is still live (expired only once
+    ///         block.timestamp > expiry), so it installs rather than being skipped — matching authentication exactly.
+    function test_authorizeUnsequenced_expiryAtNow_installsLive(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+
+        _applyUnsequenced(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, uint48(block.timestamp), ""))
+        );
+
+        assertTrue(_isActor(account, ACTOR_A));
+        assertEq(keystore.getActorConfig(account, ACTOR_A).authenticator, address(k1Authenticator));
     }
 
     /// @notice An unsequenced grant may request the unbounded (max) expiry.

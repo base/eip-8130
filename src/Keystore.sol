@@ -694,11 +694,12 @@ contract Keystore {
         (bytes32 actorId, ActorConfig memory cfg, bytes memory policyData) =
             abi.decode(payload, (bytes32, ActorConfig, bytes));
 
-        // Unsequenced (JIT) only: silently skip an already-expired grant (non-zero expiry not strictly in the future)
-        // so a lapsed replayable grant can never re-land and clobber its slot — without making the change revert on
-        // onchain time. Sequenced batches are single-consume (no replay) and install an expired grant inert instead —
-        // see the doc above. A zero expiry is the "no expiry" sentinel (unlimited, per {ActorConfig}).
-        if (isUnsequenced && cfg.expiry != 0 && cfg.expiry <= block.timestamp) {
+        // Unsequenced (JIT) only: silently skip an already-expired grant so a lapsed replayable grant can never re-land
+        // and clobber its slot — without making the change revert on onchain time. Sequenced batches are single-consume
+        // (no replay) and install an expired grant inert instead — see the doc above. Use the canonical {_isExpired}
+        // (which folds in the zero = no-expiry sentinel) so the expiry boundary matches authentication exactly: a grant
+        // with `expiry == block.timestamp` is still live for that second and installs, rather than being dropped here.
+        if (isUnsequenced && _isExpired(cfg.expiry)) {
             return;
         }
 
