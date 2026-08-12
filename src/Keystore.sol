@@ -407,7 +407,7 @@ contract Keystore {
     mapping(bytes32 actorId => mapping(address account => ActorConfig)) internal _actorConfig;
 
     /// @notice Per-actor signed policy commitment. Set when the actor's scope carries Scopes.POLICY.
-    /// @dev Read only during execution (via getPolicyCommitment / getActor), never during signature validity checks.
+    /// @dev Read only during execution (via getPolicyCommitment / getActorWithPolicy), never during signature validity checks.
     mapping(bytes32 actorId => mapping(address account => bytes32)) internal _policyCommitment;
 
     /// @notice Per-actor policy manager address. Set when the actor's scope carries Scopes.POLICY.
@@ -796,8 +796,7 @@ contract Keystore {
     ///
     ///      Multichain binds chainId = 0, so the signature is replayable on EVERY chain; there is no strict
     ///      per-chain-list channel. This is intentional and mirrors the applySignedActorChanges all-chains channel.
-    ///      A signer who wants single-chain binding uses Local; scoping to an arbitrary subset of chains is a broader
-    ///      protocol change (a chainId-list binding across all signed-message typehashes) deliberately left out here.
+    ///      A signer who wants single-chain binding uses Local; scoping to an arbitrary subset of chains is unsupported.
     enum SignatureType {
         Invalid,
         Local,
@@ -935,7 +934,7 @@ contract Keystore {
     /// @notice Returns an actor's config, policy manager, and policy commitment in one read. The manager and
     ///         commitment are non-zero only for a live actor with scope & Scopes.POLICY set; a non-live actor
     ///         returns the empty config and a zero manager/commitment.
-    function getActor(address account, bytes32 actorId)
+    function getActorWithPolicy(address account, bytes32 actorId)
         external
         view
         returns (ActorConfig memory config, address policyManager, bytes32 policyCommitment)
@@ -948,7 +947,7 @@ contract Keystore {
         }
     }
 
-    /// @dev The single liveness resolver behind every read surface ({getActorConfig}, {getActor},
+    /// @dev The single liveness resolver behind every read surface ({getActorConfig}, {getActorWithPolicy},
     ///      {getPolicyCommitment}, {getPolicyManager}). A populated _actorConfig entry returns verbatim unless expired;
     ///      the k1 self (inline in AccountState) resolves to a native ecrecover owner unless disabled or expired;
     ///      anything unknown/revoked/disabled/expired resolves to the all-zero (empty) config. Centralizing this is
@@ -1071,7 +1070,7 @@ contract Keystore {
     // INTERNAL FUNCTIONS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @dev Returns whether the account's configuration is currently frozen without mutating storage.
+    /// @dev Returns whether the account's configuration is currently frozen.
     /// @dev An elapsed unlock reads as unlocked; a later {_applyLock} overwrites the stale lock fields.
     function _isLocked(address account) private view returns (bool) {
         AccountState storage st = _accountState[account];

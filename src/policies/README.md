@@ -15,7 +15,7 @@ protocol-side, not enforced by this contract.
 1. **Authorize + commit.** The account authorizes the session key with `scope = Scopes.POLICY`,
    `policy_manager = PolicyManager`, and `policy_commitment = keccak256` of an account-authorized
    [`PolicyBinding`](./PolicyManager.sol). The Keystore contract exposes this via
-   [`getActor(account, actorId)`](../Keystore.sol) (or the granular `getPolicyManager` / `getPolicyCommitment`).
+   [`getActorWithPolicy(account, actorId)`](../Keystore.sol) (or the granular `getPolicyManager` / `getPolicyCommitment`).
    That signed actor change *is* the authorization — there is no separate install step on the manager.
 2. **Use.** When the session key transacts, the protocol gate resolves the key's allowed target
    (`policy_manager(account, actorId)`) and reverts any call whose `call.to` isn't that address before dispatch, so
@@ -28,7 +28,7 @@ protocol-side, not enforced by this contract.
    revoked *or expired* key reads back a zero commitment and stops immediately: `getPolicyCommitment` (like every
    Keystore read accessor) is liveness-gated and resolves an expired actor to zero, identical to a revoked one.
    `execute` doesn't rely on this — protocol authentication already rejects expired actors before dispatch (the
-   external `executeFor` path enforces expiry itself, via a single `getActor` read) — but the gating means no off-chain
+   external `executeFor` path enforces expiry itself, via a single `getActorWithPolicy` read) — but the gating means no off-chain
    reader ever sees a live-looking commitment for a dead actor. The manager then invokes the policy, forwards a
    non-empty `executeBatch` plan to the account, and calls `onPostExecute` when applicable.
 

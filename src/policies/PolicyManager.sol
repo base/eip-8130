@@ -208,7 +208,7 @@ contract PolicyManager is ReentrancyGuard {
 
     /// @dev External-path validation: live external-pull actor, manager-match, live commitment vs binding, then
     ///      enforce. The external path has no protocol auth, so the manager gates the caller itself with a single
-    ///      liveness-resolved {Keystore.getActor} read: the actor must carry EXTERNAL_POLICY_AUTHENTICATOR (the
+    ///      liveness-resolved {Keystore.getActorWithPolicy} read: the actor must carry EXTERNAL_POLICY_AUTHENTICATOR (the
     ///      no-code sentinel marking an external-pull actor) and be gated to this manager. A non-live or ungated
     ///      actor resolves to a zero manager, failing the manager-match.
     function _enforceExternal(
@@ -219,7 +219,8 @@ contract PolicyManager is ReentrancyGuard {
     ) internal {
         address account = binding.account;
 
-        (Keystore.ActorConfig memory config, address manager, bytes32 signed) = KEYSTORE.getActor(account, actorId);
+        (Keystore.ActorConfig memory config, address manager, bytes32 signed) =
+            KEYSTORE.getActorWithPolicy(account, actorId);
         if (config.authenticator != EXTERNAL_POLICY_AUTHENTICATOR) revert InvalidActor(actorId);
         if (manager != address(this)) revert NoActivePolicy(actorId);
 
