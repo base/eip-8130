@@ -608,8 +608,10 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
             _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
         );
 
+        (, uint32 seqSigned) = _localEpochSeq(account);
         keystore.applySignedAccountChanges(account, s);
-        vm.expectRevert(Keystore.BadSequence.selector);
+        // The first apply advanced localSequence past the value the batch was signed at.
+        vm.expectRevert(abi.encodeWithSelector(Keystore.BadSequence.selector, uint64(seqSigned + 1), uint64(seqSigned)));
         keystore.applySignedAccountChanges(account, s);
     }
 

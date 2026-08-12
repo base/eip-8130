@@ -561,7 +561,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertEq(seq1, 1);
 
         // The pre-signed sequenced-at-0 batch no longer matches the advanced counter.
-        vm.expectRevert(Keystore.BadSequence.selector);
+        vm.expectRevert(abi.encodeWithSelector(Keystore.BadSequence.selector, uint64(seq1), uint64(0)));
         keystore.applySignedAccountChanges(account, seqZero);
     }
 

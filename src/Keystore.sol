@@ -58,10 +58,10 @@ contract Keystore {
 
     /// @notice The replay domain a {SignedAccountChanges} batch is bound to.
     ///
-    /// @dev Replaces the prior `uint256 chainId` argument. {Local} binds `block.chainid` and carries the full local
-    ///      epoch machinery (see {SignedAccountChanges.sequence}); {Multichain} binds chainId 0 and keeps a plain
-    ///      monotonic counter with no epochs and no unsequenced (JIT) mode. {Lock} and {Unlock} are rejected on the
-    ///      Multichain channel; {IncrementLocalEpoch} is allowed on either channel.
+    /// @dev {AccountChangeChannel.Local} binds `block.chainid` and carries the full local
+    ///      epoch machinery (see {SignedAccountChanges.sequence}); {AccountChangeChannel.Multichain} binds chainId 0 and keeps a plain
+    ///      monotonic counter with no epochs and no unsequenced (JIT) mode. {ChangeType.Lock} and {ChangeType.Unlock} are rejected on the
+    ///      Multichain channel; {ChangeType.IncrementLocalEpoch} is allowed on either channel.
     enum AccountChangeChannel {
         Local,
         Multichain
@@ -308,7 +308,9 @@ contract Keystore {
     error StaleEpoch();
 
     /// @notice A sequenced batch's sequence did not match the account's current (local or multichain) counter.
-    error BadSequence();
+    /// @param expected The account's current channel counter the batch had to match.
+    /// @param provided The sequence the batch carried.
+    error BadSequence(uint64 expected, uint64 provided);
 
     /// @notice The channel's sequence counter is at its terminal value and cannot advance.
     error SequenceSaturated();
@@ -383,6 +385,12 @@ contract Keystore {
     ///      leading 0xEF byte per EIP-3541, or out of gas). Reverting unwinds all state writes so no orphaned
     ///      EIP-8130 configuration is left behind.
     error AccountDeploymentFailed();
+
+    /// @notice The signature envelope's leading type byte is not a recognized {SignatureType} value.
+    error UnknownSignatureType(uint8 sigType);
+
+    /// @notice The signature envelope is empty (missing its leading type byte).
+    error EmptySignatureEnvelope();
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // STORAGE
@@ -591,7 +599,7 @@ contract Keystore {
             }
             if (seq != UNSEQUENCED) {
                 if (seq != st.localSequence) {
-                    revert BadSequence();
+                    revert BadSequence(st.localSequence, seq);
                 }
                 if (seq >= UNSEQUENCED - 1) {
                     revert SequenceSaturated();
@@ -609,7 +617,7 @@ contract Keystore {
             // Multichain: a plain monotonic counter, never epoch-bearing or UNSEQUENCED.
             uint64 seq = s.sequence;
             if (seq != st.multichainSequence) {
-                revert BadSequence();
+                revert BadSequence(st.multichainSequence, seq);
             }
             if (seq == type(uint64).max) {
                 revert SequenceSaturated();
@@ -660,9 +668,8 @@ contract Keystore {
             } else if (t == ChangeType.Unlock) {
                 _applyUnlock(account, s.changes[i].payload);
             } else {
-                // Defensive guard: every ChangeType must be dispatched explicitly. Unreachable today — out-of-range
-                // wire values are rejected by the enum decoder while ABI-decoding the calldata — so this forces any
-                // future ChangeType to be wired in here rather than silently falling through.
+                // Unreachable at runtime (the enum decoder rejects out-of-range values). Kept to force any future
+                // ChangeType to be dispatched here rather than silently no-op'ing.
                 revert UnknownChangeType();
             }
         }
@@ -672,24 +679,22 @@ contract Keystore {
     // SIGNED-CHANGE OP HANDLERS
     // ----------------------------------------------------------------------------------------------------------------
 
-    /// @dev AuthorizeActor. `payload = abi.encode(bytes32 actorId, ActorConfig cfg, bytes policyData)`; `cfg.expiry`
-    ///      is the granted expiry (or never, if `cfg.expiry == 0`). A plain upsert. An already-expired grant never
-    ///      reverts — whether a signed change applies never depends on the granted expiry vs. onchain time — but it is
-    ///      handled by sequencing:
+    /// @dev AuthorizeActor. `payload = abi.encode(bytes32 actorId, ActorConfig cfg, bytes policyData)`. Normally a plain
+    ///      upsert: write `cfg`/`policyData` into the actor's slot, granting authority until `cfg.expiry` (`cfg.expiry
+    ///      == 0` = no expiry). Whether the change applies never depends on the granted expiry vs. onchain time.
     ///
-    ///      - Unsequenced (JIT, `isUnsequenced`): SKIPPED (not applied). A JIT grant consumes no counter and is
-    ///        replayable, so skipping a lapsed one keeps it from ever clobbering its slot — a renewed lease cannot be
-    ///        overwritten by replaying the old, expired one. Skip is per-change, so live siblings in the same batch
-    ///        still apply (durable/dependent ops belong on the sequenced channel).
-    ///      - Sequenced (local or multichain): installed INERT — the actor is dead on arrival ({_isExpired} yields
-    ///        ActorExpired at authentication) so it grants no authority, but the slot is written and the sequence is
-    ///        consumed. The write keeps a replayed history consistent (a later RevokeActor still finds the slot) and,
-    ///        on multichain, lets a chain catching up replay a historical expiring grant (e.g. a yearly-renewed
-    ///        operator) to reach the current live grant, rather than stranding its counter behind the expired slot.
+    ///      The one wrinkle is an already-expired grant (non-zero `cfg.expiry <= block.timestamp`), handled per channel:
+    ///      - Unsequenced (JIT, `isUnsequenced`): SKIPPED (no write). A JIT batch consumes no counter and stays
+    ///        replayable, so writing a lapsed grant would let an old replay clobber a since-renewed lease. Skip is
+    ///        per-change, so live siblings in the same batch still apply.
+    ///      - Sequenced (local or multichain): written anyway but INERT — it authenticates as ActorExpired ({_isExpired})
+    ///        so it grants no authority. Sequenced batches are single-consume (not replayable), so there is no clobber
+    ///        risk; the write is still made so replayed history stays consistent (a later RevokeActor finds the slot) and
+    ///        a catching-up chain can step its counter through historical expiring grants to reach the live one.
     ///
-    ///      A JIT grant is otherwise last-write-wins on its slot until the epoch is incremented; durable reduction
-    ///      (revoke, shorter expiry, narrower scope) is a wallet responsibility — batch the reducing op with
-    ///      {IncrementLocalEpoch} to retire outstanding grants.
+    ///      A JIT grant is last-write-wins on its slot until the epoch is incremented; durable reduction (revoke, shorter
+    ///      expiry, narrower scope) is a wallet responsibility — batch it with {IncrementLocalEpoch} to retire outstanding
+    ///      grants.
     function _applyAuthorize(address account, bytes calldata payload, bool isUnsequenced) private {
         (bytes32 actorId, ActorConfig memory cfg, bytes memory policyData) =
             abi.decode(payload, (bytes32, ActorConfig, bytes));
@@ -797,12 +802,6 @@ contract Keystore {
         Local,
         Multichain
     }
-
-    /// @notice The signature envelope's leading type byte is not a recognized {SignatureType} value.
-    error UnknownSignatureType(uint8 sigType);
-
-    /// @notice The signature envelope is empty (missing its leading type byte).
-    error EmptySignatureEnvelope();
 
     /// @notice Envelope digest to sign for `hash` to be accepted for `account` on `chainId`.
     /// @dev Pass `block.chainid` for a chain-local signature ({SignatureType.Local}) or `0` for an all-chains signature
