@@ -282,6 +282,19 @@ contract SessionPolicyTest is KeystoreTest {
         );
     }
 
+    function test_nativeValue_unlimitedIdiomPermitsLargeTransfer() public {
+        // The documented "unlimited ETH" idiom: a uint160.max cap is never reached in practice.
+        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
+        scopes[0] = _anySelectorScope(bob);
+        bytes32 actorId = _install(_config(_limit(address(0), type(uint160).max, WEEK), scopes));
+        _mockActingActor(actorId);
+
+        vm.deal(account, 1_000_000 ether);
+        vm.prank(account);
+        manager.execute(lastBinding, _action(bob, 1_000_000 ether, ""));
+        assertEq(bob.balance, 1_000_000 ether);
+    }
+
     // ── Atomic multi-dimension enforcement on a single call ──
 
     function test_multiDimension_passesAllAtOnce() public {

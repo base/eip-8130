@@ -39,6 +39,11 @@ import {RecurringAllowance} from "./RecurringAllowance.sol";
 ///          closed: a call carrying `value` reverts ({NativeValueNotAllowed}) unless the config pins a native
 ///          {TokenLimit} (`token == address(0)`). Absence means "no ETH", not "unlimited ETH" — so a grant can call a
 ///          value-accepting target while sending it zero ETH, and this does not depend on the target rejecting value.
+///          Note the resulting asymmetry with ERC-20 defaults is structural, not an oversight: an ERC-20 must be
+///          called at its own address to move, so the target allowlist already gates it (omit the token ⇒ "can't
+///          touch it") and an absent cap can safely mean "unlimited amount". Native value has no such target to omit,
+///          so it fails closed instead. Both assets share the same *expressible* states — forbidden, capped, and
+///          unlimited (`limit == type(uint160).max`) — only the meaning of an omitted entry differs.
 ///
 ///      Approvals vs. periods: `approve` is debited from the *current* period at grant time, but an ERC-20 allowance
 ///      is standing on-chain state that outlives the period and is pulled by a third party this policy never sees. A
@@ -60,7 +65,11 @@ contract SessionPolicy is Policy {
     struct TokenLimit {
         /// @dev ERC-20 token address, or address(0) for native ETH (gated on each call's `value`).
         address token;
-        /// @dev Maximum spend per period (one-time: total cap). Must fit uint160.
+        /// @dev Maximum spend per period (one-time: total cap). Must fit uint160; 0 is rejected ({ZeroLimit}). To
+        ///      express an effectively unlimited budget, set `limit = type(uint160).max` (~1.46e48 wei, far exceeding
+        ///      total ETH supply): spending still accrues to the ledger (telemetry via {getCurrentSpend}) but the cap
+        ///      is never reached. For native ETH this is the *only* way to express "unlimited" — an omitted
+        ///      `address(0)` entry means "no ETH", not "unlimited ETH" (see {NativeValueNotAllowed}).
         uint256 limit;
         /// @dev Recurring period in seconds. 0 = one-time (a single cumulative cap that never resets).
         uint40 period;
