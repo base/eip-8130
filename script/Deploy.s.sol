@@ -34,7 +34,7 @@ bytes32 constant DELEGATE_SALT = 0x000000000000000000000000000000000000000000000
 /// @dev PolicyManager: 0x8130...0ac1
 bytes32 constant POLICY_MANAGER_SALT = 0x000000000000000000000000000000000000000000000000000000003c1c1ee0;
 /// @dev SessionPolicy: 0x8130...5e55
-bytes32 constant SESSION_POLICY_SALT = 0x00000000000000000000000000000000000000000000000000000001b7622c5c;
+bytes32 constant SESSION_POLICY_SALT = 0x0000000000000000000000000000000000000000000000000000000020ca10ab;
 
 /// @notice Deploys the full EIP-8130 system: Keystore, account implementations, canonical
 ///         authenticators, and the unaudited example policy contracts (PolicyManager, SessionPolicy).
