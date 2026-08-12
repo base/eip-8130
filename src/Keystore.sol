@@ -161,6 +161,12 @@ contract Keystore {
     /// @notice Typehash used to structurally hash each AccountChange within a SignedAccountChanges batch.
     bytes32 public constant ACCOUNT_CHANGE_TYPEHASH = keccak256("AccountChange(uint8 changeType,bytes payload)");
 
+    /// @notice Typehash binding a user signature to its account and chainId.
+    /// @dev NOT compliant with EIP-712, to mitigate eth_signTypedData phishing, consistent with the other 8130
+    ///      signed-message typehashes. First byte 0x9d: provably not a transaction encoding.
+    bytes32 public constant SIGNED_MESSAGE_TYPEHASH =
+        keccak256("EIP8130SignedMessage(address account,uint256 chainId,bytes32 hash)");
+
     /// @notice Local-channel sequence low-half sentinel marking an unsequenced (JIT) batch. A {SignedAccountChanges}
     ///         whose low 32 bits equal this value does not consume a sequence, so it stays replayable until the local
     ///         epoch moves. Any op may use it, but Lock and Unlock must remain standalone. Sequenced batches may run up
@@ -681,9 +687,10 @@ contract Keystore {
 
     /// @dev AuthorizeActor. `payload = abi.encode(bytes32 actorId, ActorConfig cfg, bytes policyData)`. Normally a plain
     ///      upsert: write `cfg`/`policyData` into the actor's slot, granting authority until `cfg.expiry` (`cfg.expiry
-    ///      == 0` = no expiry). Whether the change applies never depends on the granted expiry vs. onchain time.
+    ///      == 0` = no expiry). An expired grant never reverts the batch — expiry vs. onchain time is never an
+    ///      acceptance check — but it does change what the write does, per channel:
     ///
-    ///      The one wrinkle is an already-expired grant (non-zero `cfg.expiry <= block.timestamp`), handled per channel:
+    ///      For an already-expired grant (non-zero `cfg.expiry <= block.timestamp`):
     ///      - Unsequenced (JIT, `isUnsequenced`): SKIPPED (no write). A JIT batch consumes no counter and stays
     ///        replayable, so writing a lapsed grant would let an old replay clobber a since-renewed lease. Skip is
     ///        per-change, so live siblings in the same batch still apply.
@@ -779,12 +786,6 @@ contract Keystore {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // VIEW FUNCTIONS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-
-    /// @notice Typehash binding a user signature to its account and chainId.
-    /// @dev NOT compliant with EIP-712, to mitigate eth_signTypedData phishing, consistent with the other 8130
-    ///      signed-message typehashes. First byte 0x9d: provably not a transaction encoding.
-    bytes32 public constant SIGNED_MESSAGE_TYPEHASH =
-        keccak256("EIP8130SignedMessage(address account,uint256 chainId,bytes32 hash)");
 
     /// @notice The chain-scoping channel a signature envelope's leading type byte selects.
     ///
