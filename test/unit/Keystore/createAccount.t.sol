@@ -3,6 +3,7 @@ pragma solidity ^0.8.30;
 
 import {Keystore} from "../../../src/Keystore.sol";
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
+import {Scopes} from "../../../src/libraries/Scopes.sol";
 
 /// @dev Fully fuzzed, branch-complete suite for Keystore.createAccount and the pure/view
 ///      machinery it drives: computeAddress, _buildDeploymentCode, _computeEffectiveSalt / _computeActorsCommitment,
@@ -51,6 +52,25 @@ contract CreateAccountTest is KeystoreTest {
             bc[i] = bytes1(uint8(uint256(keccak256(abi.encodePacked(contentSeed, i)))));
         }
         if (bc[0] == 0xEF) bc[0] = 0x00; // EIP-3541: leading 0xEF is rejected as runtime code
+    }
+
+    /// @dev Test-side reproduction of _buildDeploymentCode from the documented loader opcodes (PUSH2 n; PUSH1 0x0e;
+    ///      PUSH1 0x00; CODECOPY; PUSH2 n; PUSH1 0x00; RETURN), independent of the contract's implementation so drift
+    ///      in either is caught.
+    function _reproduceInitCode(bytes memory bytecode) internal pure returns (bytes memory) {
+        uint16 n = uint16(bytecode.length);
+        return abi.encodePacked(bytes1(0x61), bytes2(n), hex"600e600039", bytes1(0x61), bytes2(n), hex"6000f3", bytecode);
+    }
+
+    /// @dev Test-side reproduction of _computeActorsCommitment from the documented client scheme:
+    ///      leaf_i = keccak256(actorId || authenticator || scope || policyData); commitment = keccak256(leaf_0 || ...).
+    function _reproduceActorsCommitment(Keystore.InitialActor[] memory actors) internal pure returns (bytes32) {
+        bytes32[] memory leaves = new bytes32[](actors.length);
+        for (uint256 i; i < actors.length; i++) {
+            leaves[i] =
+                keccak256(abi.encodePacked(actors[i].actorId, actors[i].authenticator, actors[i].scope, actors[i].policyData));
+        }
+        return keccak256(abi.encodePacked(leaves));
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -302,7 +322,9 @@ contract CreateAccountTest is KeystoreTest {
 
     /// @notice Verifies arbitrary valid runtime bytecode of a fuzzed length/content deploys successfully
     /// @dev The deployment header CODECOPY+RETURNs the bytes as runtime code without executing them, so any EIP-170-
-    ///      sized, non-0xEF-leading payload deploys; the deployed code length matches the requested bytecode length
+    ///      sized, non-0xEF-leading payload deploys. Asserting the deployed code equals the requested bytecode
+    ///      exactly (not just its length) validates the loader's CODECOPY/RETURN offsets in _buildDeploymentCode: a
+    ///      shifted offset could preserve the length while corrupting the returned bytes.
     function test_createAccount_success_arbitraryBytecode(uint256 lenSeed, bytes32 content, uint256 pk, bytes32 salt)
         public
     {
@@ -312,7 +334,7 @@ contract CreateAccountTest is KeystoreTest {
 
         address account = keystore.createAccount(salt, bytecode, actors);
 
-        assertEq(account.code.length, bytecode.length);
+        assertEq(account.code, bytecode);
     }
 
     /// @notice Verifies bytecode of exactly 0xFFFF bytes is accepted (the encodable maximum is inclusive)
@@ -524,5 +546,38 @@ contract CreateAccountTest is KeystoreTest {
         address addrB = keystore.computeAddress(salt, bytecodeB, actors);
 
         assertTrue(addrA != addrB);
+    }
+
+    /// @notice Verifies computeAddress matches an independent CREATE2 oracle for a mixed (ungated + policy-gated) actor
+    ///         set, validating the full salt/commitment/initcode/formula chain against a reproduction that never calls
+    ///         the contract's own helpers.
+    /// @dev The actor set mixes an ungated actor (scope 0, empty policyData) and a gated one (Scopes.POLICY, 52-byte
+    ///      policyData = manager(20) || commitment(32)) so the packed leaf encoding is exercised for both scope and
+    ///      policyData. The CREATE2 formula itself is checked via forge-std's vm.computeCreate2Address, an
+    ///      implementation independent of _prepareDeployment.
+    function test_computeAddress_success_matchesIndependentOracle(
+        bytes32 userSalt,
+        uint256 lenSeed,
+        bytes32 content,
+        address manager,
+        bytes32 policyCommitment
+    ) public view {
+        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](2);
+        actors[0] = Keystore.InitialActor({
+            actorId: bytes32(uint256(1)), authenticator: address(k1Authenticator), scope: 0, policyData: ""
+        });
+        actors[1] = Keystore.InitialActor({
+            actorId: bytes32(uint256(2)),
+            authenticator: address(k1Authenticator),
+            scope: Scopes.POLICY,
+            policyData: abi.encodePacked(manager, policyCommitment) // 20 + 32 = 52 bytes
+        });
+        bytes memory bytecode = _validBytecode(lenSeed, content);
+
+        bytes32 effectiveSalt = keccak256(abi.encodePacked(userSalt, _reproduceActorsCommitment(actors)));
+        bytes32 initCodeHash = keccak256(_reproduceInitCode(bytecode));
+        address expected = vm.computeCreate2Address(effectiveSalt, initCodeHash, address(keystore));
+
+        assertEq(keystore.computeAddress(userSalt, bytecode, actors), expected);
     }
 }

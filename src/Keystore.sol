@@ -577,29 +577,29 @@ contract Keystore {
     ///      comes entirely from the signature.
     ///
     /// @param account The account whose configuration is changed.
-    /// @param s The signed batch (channel, ordered changes, sequence word, signature).
-    function applySignedAccountChanges(address account, SignedAccountChanges calldata s)
+    /// @param batch The signed batch (channel, ordered changes, sequence word, signature).
+    function applySignedAccountChanges(address account, SignedAccountChanges calldata batch)
         external
         nonZeroAccount(account)
     {
         AccountState storage st = _accountState[account];
-        bool isLocal = s.channel == AccountChangeChannel.Local;
+        bool isLocal = batch.channel == AccountChangeChannel.Local;
         // A JIT (unsequenced) batch — local channel with the low sequence half == UNSEQUENCED — is the only replayable
         // form (it consumes no counter). This gates the AuthorizeActor expiry fail-fast: only a replayable grant needs
         // its expiry to bound replay. Multichain is never unsequenced, so this short-circuits false there.
-        bool isUnsequenced = isLocal && uint32(s.sequence) == UNSEQUENCED;
+        bool isUnsequenced = isLocal && uint32(batch.sequence) == UNSEQUENCED;
 
         // Reject an empty batch: a no-op signed change would otherwise consume a sequence (or initialize a fresh
         // account, below) without altering any configuration.
-        if (s.changes.length == 0) {
+        if (batch.changes.length == 0) {
             revert EmptyChangeSet();
         }
 
         // Epoch / sequence gate. An unsequenced (JIT) batch exists only on the local channel (low half ==
         // UNSEQUENCED) and does not consume a counter; every other batch consumes its channel's counter.
         if (isLocal) {
-            uint32 epoch = uint32(s.sequence >> 32);
-            uint32 seq = uint32(s.sequence);
+            uint32 epoch = uint32(batch.sequence >> 32);
+            uint32 seq = uint32(batch.sequence);
             if (epoch != st.localEpoch) {
                 revert StaleEpoch();
             }
@@ -621,7 +621,7 @@ contract Keystore {
             }
         } else {
             // Multichain: a plain monotonic counter, never epoch-bearing or UNSEQUENCED.
-            uint64 seq = s.sequence;
+            uint64 seq = batch.sequence;
             if (seq != st.multichainSequence) {
                 revert BadSequence(st.multichainSequence, seq);
             }
@@ -633,8 +633,8 @@ contract Keystore {
 
         // Authenticate over the digest. Authorization is flat: every signed account change is
         // admin-only, so a single scope check up front replaces any per-op authorization.
-        bytes32 digest = _changesDigest(account, s.channel, s.sequence, s.changes);
-        (, uint16 scope) = authenticateActor(account, digest, s.signature);
+        bytes32 digest = _changesDigest(account, batch.channel, batch.sequence, batch.changes);
+        (, uint16 scope) = authenticateActor(account, digest, batch.signature);
         if (scope != 0) {
             revert UnauthorizedAccountChange();
         }
@@ -645,9 +645,9 @@ contract Keystore {
         // lock a Lock earlier in the same batch just set (or a stale-unlocked one).
         bool locked = _isLocked(account);
 
-        uint256 n = s.changes.length;
+        uint256 n = batch.changes.length;
         for (uint256 i; i < n; i++) {
-            ChangeType t = s.changes[i].changeType;
+            ChangeType t = batch.changes[i].changeType;
 
             // Preconditions: freeze non-exempt ops on a locked account, and hold Lock/Unlock to a standalone local batch.
             if (locked && t != ChangeType.Unlock && t != ChangeType.IncrementLocalEpoch) {
@@ -664,15 +664,15 @@ contract Keystore {
 
             // Apply: dispatch the op to its handler.
             if (t == ChangeType.AuthorizeActor) {
-                _applyAuthorize(account, s.changes[i].payload, isUnsequenced);
+                _applyAuthorize(account, batch.changes[i].payload, isUnsequenced);
             } else if (t == ChangeType.RevokeActor) {
-                _applyRevoke(account, s.changes[i].payload);
+                _applyRevoke(account, batch.changes[i].payload);
             } else if (t == ChangeType.IncrementLocalEpoch) {
-                _applyIncrementLocalEpoch(account, s.changes[i].payload);
+                _applyIncrementLocalEpoch(account, batch.changes[i].payload);
             } else if (t == ChangeType.Lock) {
-                _applyLock(account, s.changes[i].payload);
+                _applyLock(account, batch.changes[i].payload);
             } else if (t == ChangeType.Unlock) {
-                _applyUnlock(account, s.changes[i].payload);
+                _applyUnlock(account, batch.changes[i].payload);
             } else {
                 // Unreachable at runtime (the enum decoder rejects out-of-range values). Kept to force any future
                 // ChangeType to be dispatched here rather than silently no-op'ing.
