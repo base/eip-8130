@@ -12,14 +12,13 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 ///         Guards, in source-execution order, each reverting with a custom error:
 ///           1. InvalidDataLength       — data.length < 40
 ///           2. RecursiveDelegation     — nestedAuthenticator == address(this) (blocks 1-hop recursion)
-///           3. InvalidNestedSignature  — the nested auth does not resolve to the admin actor on `delegate`
+///           3. InvalidNestedSignature  — the nested auth does not resolve to an operational actor on `delegate`
 ///         On success returns actorId = bytes32(uint256(uint160(delegate))).
 ///
-///         The delegate vouch requires the nested auth to resolve to the ADMIN actor on `delegate` (scope ==
-///         0x00). This admin-only requirement is enforced independently of the account's ERC-1271 check (via
-///         authenticateActor + an explicit scope == 0 check): a SENDER-without-POLICY key can produce a valid
-///         ERC-1271 signature, but such a key must NOT be able to vouch as a delegate, so a non-admin nested
-///         actor reverts.
+///         The delegate vouch requires the nested auth to resolve to an OPERATIONAL actor on `delegate` (per
+///         Scopes.isOperator: admin scope == 0x00, or SENDER without POLICY). This mirrors the account's ERC-1271
+///         authorization surface: a SENDER-without-POLICY key that can produce a valid ERC-1271 signature can also
+///         vouch as a delegate, while a POLICY-gated or capability-only (non-operational) nested actor reverts.
 contract DelegateAuthenticatorTest is KeystoreTest {
     uint16 constant SCOPE_SENDER = 0x01;
     uint16 constant SCOPE_POLICY = 0x02;
@@ -98,8 +97,9 @@ contract DelegateAuthenticatorTest is KeystoreTest {
         delegateAuthenticator.authenticate(hash, data);
     }
 
-    /// @dev A nested signer that is a live actor on the delegate account but holds any non-zero (non-admin) scope
-    ///      is rejected: the delegate vouch requires admin (scope == 0x00) and guard 3 reverts.
+    /// @dev A nested signer that is a live actor on the delegate account but holds a non-operational scope
+    ///      is rejected: the delegate vouch requires an operational scope (per Scopes.isOperator) and guard 3
+    ///      reverts. Clears SENDER (and POLICY) so the scope carries only non-operational capability bits.
     function test_authenticate_revert_nestedSignerIsScoped(
         uint256 ownerSeed,
         uint256 signerSeed,
@@ -110,9 +110,9 @@ contract DelegateAuthenticatorTest is KeystoreTest {
         uint256 signerPk = _boundK1Pk(signerSeed);
         vm.assume(vm.addr(ownerPk) != vm.addr(signerPk));
 
-        // Any non-zero scope → non-admin → the delegate vouch must revert. Clear POLICY so the scoped actor
-        // needs no policyData at authorization time.
-        uint16 scope = uint16(bound(uint256(scopeSeed), 1, 255)) & ~SCOPE_POLICY;
+        // Non-operational scope → the delegate vouch must revert. Clear SENDER and POLICY so the actor holds
+        // only capability bits (NONCE / SELF_PAYER / SPONSOR_PAYER) and needs no policyData at authorization time.
+        uint16 scope = uint16(bound(uint256(scopeSeed), 1, 255)) & ~SCOPE_SENDER & ~SCOPE_POLICY;
         vm.assume(scope != 0);
 
         (address delegateAccount,) = _createK1Account(ownerPk);
@@ -125,10 +125,10 @@ contract DelegateAuthenticatorTest is KeystoreTest {
         delegateAuthenticator.authenticate(hash, data);
     }
 
-    /// @dev Regression guard for the operational/admin decoupling: a SENDER-without-POLICY nested actor on the
-    ///      delegate account CAN satisfy the account's ERC-1271 (it is operational), yet it MUST NOT satisfy the
-    ///      delegate vouch, which stays admin-only. Asserts ERC-1271 validates for the actor, then the vouch reverts.
-    function test_authenticate_revert_operationalSenderCannotVouch(uint256 ownerSeed, uint256 signerSeed, bytes32 hash)
+    /// @dev The operational/signing surfaces are aligned: a SENDER-without-POLICY nested actor on the delegate
+    ///      account is operational, so it CAN satisfy both the account's ERC-1271 AND the delegate vouch. Asserts
+    ///      ERC-1271 validates for the actor, then the vouch succeeds and returns the delegate's actorId.
+    function test_authenticate_success_operationalSenderVouches(uint256 ownerSeed, uint256 signerSeed, bytes32 hash)
         public
     {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
@@ -147,10 +147,10 @@ contract DelegateAuthenticatorTest is KeystoreTest {
             _wrapLocal(_buildK1Auth(signerPk, keystore.replaySafeHash(delegateAccount, block.chainid, hash)));
         assertEq(DefaultAccount(payable(delegateAccount)).isValidSignature(hash, wrappedAuth), bytes4(0x1626ba7e));
 
-        // But it cannot vouch as a delegate — the nested check stays admin-only.
+        // And it can now vouch as a delegate — the nested check accepts any operational actor.
         bytes memory data = abi.encodePacked(delegateAccount, nestedAuth);
-        vm.expectRevert(DelegateAuthenticator.InvalidNestedSignature.selector);
-        delegateAuthenticator.authenticate(hash, data);
+        bytes32 actorId = delegateAuthenticator.authenticate(hash, data);
+        assertEq(actorId, bytes32(uint256(uint160(delegateAccount))));
     }
 
     // ── Happy paths ──
