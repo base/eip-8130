@@ -38,8 +38,7 @@ address constant TRUSTED_EXECUTOR = address(uint160(uint256(keccak256("trustedEx
 ///      example ERC-4337 on a chain without native EIP-8130 support) should delegate or deploy to a purpose-built
 ///      account, not to this one. If this bytecode is deployed anyway, it MUST sit behind an upgradeable (UUPS)
 ///      proxy: adopting those features later means swapping in different bytecode, which is only possible if the
-///      deployment is upgradeable. An upgradeable (UUPS) variant is provided as an unaudited example in a separate
-///      repository.
+///      deployment is upgradeable.
 ///
 /// @author Coinbase
 contract DefaultAccount is Receiver {
@@ -82,9 +81,7 @@ contract DefaultAccount is Receiver {
 
     /// @notice Executes a single call from the account.
     ///
-    /// @dev Equivalent to a one-element {executeBatch}. Selector-compatible with the widely deployed
-    ///      CoinbaseSmartWallet V1 `execute(address,uint256,bytes)` (0xb61d27f6), so integrations that call that ABI
-    ///      directly (e.g. SpendPermissionManager) keep working against this account.
+    /// @dev Equivalent to a one-element {executeBatch}. Included for selector-compatibility with common existing wallet implementations.
     /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a TRUSTED_EXECUTOR actor.
     /// @dev Bubbles up the inner call's revert reason verbatim (a reason-less revert propagates as an empty revert).
     ///
