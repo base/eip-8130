@@ -5,8 +5,7 @@ pragma solidity ^0.8.30;
 ///
 /// @notice Reusable recurring-allowance accounting for policies (weekly/periodic spend limits).
 ///
-/// @dev Keyed by `commitment` so the manager can remain fully stateless. Ported from
-///      base/account-policies for the EIP-8130 reference example.
+/// @dev Keyed by `commitment` so the manager can remain fully stateless.
 library RecurringAllowance {
     /// @notice Allowance bounds for a recurring spend window.
     struct Limit {

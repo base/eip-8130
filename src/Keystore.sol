@@ -610,9 +610,7 @@ contract Keystore {
                 if (seq >= UNSEQUENCED - 1) {
                     revert SequenceSaturated();
                 }
-                // Advance the local sequence before apply. A trailing IncrementLocalEpoch in the same batch
-                // overwrites this to 0, but that second write lands on an already-warm slot (~100 gas), so the
-                // combo isn't worth special-casing here.
+                // Advance the local sequence before apply.
                 st.localSequence = seq + 1;
             } else if (!_isInitialized(account)) {
                 // Mark a fresh account initialized and invalidate outstanding sequence-0 signatures. The unsequenced
@@ -795,7 +793,7 @@ contract Keystore {
     ///      out-of-range byte with {UnknownSignatureType}.
     ///
     ///      Multichain binds chainId = 0, so the signature is replayable on EVERY chain; there is no strict
-    ///      per-chain-list channel. This is intentional and mirrors the applySignedActorChanges all-chains channel.
+    ///      per-chain-list channel. This is intentional and mirrors the applySignedAccountChanges all-chains channel.
     ///      A signer who wants single-chain binding uses Local; scoping to an arbitrary subset of chains is unsupported.
     enum SignatureType {
         Invalid,
@@ -805,7 +803,7 @@ contract Keystore {
 
     /// @notice Envelope digest to sign for `hash` to be accepted for `account` on `chainId`.
     /// @dev Pass `block.chainid` for a chain-local signature ({SignatureType.Local}) or `0` for an all-chains signature
-    ///      ({SignatureType.Multichain}, mirroring the applySignedActorChanges multichain channel).
+    ///      ({SignatureType.Multichain}, mirroring the applySignedAccountChanges multichain channel).
     /// @param account Account the signature is bound to.
     /// @param chainId Chain the signature is bound to (0 = all chains).
     /// @param hash Raw message digest.
@@ -1142,7 +1140,7 @@ contract Keystore {
         // Only reject the zero authenticator (the empty-slot sentinel). A non-zero authenticator with no code is
         // accepted deliberately: authenticators may be counterfactual (deployed later) and some are intentionally
         // codeless sentinels (e.g. EXTERNAL_POLICY_AUTHENTICATOR). A bad authenticator simply fails fail-closed at
-        // authentication time, mirroring the reference PolicyManager's treatment of a zero-commitment policy actor.
+        // authentication time.
         if (config.authenticator < K1_AUTHENTICATOR) {
             revert InvalidAuthenticator();
         }

@@ -4,7 +4,7 @@ pragma solidity ^0.8.0;
 /// @dev Canonical address of the EIP-8130 Transaction Context precompile. Populated by the protocol only while it
 ///      is dispatching a transaction's calls; STATICCALL returns zero/default values elsewhere (e.g. during
 ///      validation, or on non-8130 chains where no code lives here).
-//       8310 spec puts this at 0x813000000000000000000000000000000000aa02
+//       8130 spec puts this at 0x813000000000000000000000000000000000aa02
 address constant TX_CONTEXT_ADDRESS = 0x813000000000000000000000000000000000aa02;
 
 /// @notice Reference interface for the EIP-8130 Transaction Context precompile at TX_CONTEXT_ADDRESS.
