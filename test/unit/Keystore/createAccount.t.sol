@@ -59,7 +59,8 @@ contract CreateAccountTest is KeystoreTest {
     ///      in either is caught.
     function _reproduceInitCode(bytes memory bytecode) internal pure returns (bytes memory) {
         uint16 n = uint16(bytecode.length);
-        return abi.encodePacked(bytes1(0x61), bytes2(n), hex"600e600039", bytes1(0x61), bytes2(n), hex"6000f3", bytecode);
+        return
+            abi.encodePacked(bytes1(0x61), bytes2(n), hex"600e600039", bytes1(0x61), bytes2(n), hex"6000f3", bytecode);
     }
 
     /// @dev Test-side reproduction of _computeActorsCommitment from the documented client scheme:
@@ -67,8 +68,9 @@ contract CreateAccountTest is KeystoreTest {
     function _reproduceActorsCommitment(Keystore.InitialActor[] memory actors) internal pure returns (bytes32) {
         bytes32[] memory leaves = new bytes32[](actors.length);
         for (uint256 i; i < actors.length; i++) {
-            leaves[i] =
-                keccak256(abi.encodePacked(actors[i].actorId, actors[i].authenticator, actors[i].scope, actors[i].policyData));
+            leaves[i] = keccak256(
+                abi.encodePacked(actors[i].actorId, actors[i].authenticator, actors[i].scope, actors[i].policyData)
+            );
         }
         return keccak256(abi.encodePacked(leaves));
     }
