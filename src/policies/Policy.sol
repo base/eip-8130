@@ -7,22 +7,11 @@ import {PolicyManager} from "./PolicyManager.sol";
 ///
 /// @notice Minimal base hook interface for policies coordinated by {PolicyManager}.
 ///
-/// @dev A policy turns an account-authorized *commitment* (bound to `policyConfig` via the signed actor change)
-///      plus a per-use *action* (`executionData`) into an account call plan. The plan is ABI-encoded calldata that
-///      the manager forwards to the account (e.g. `executeBatch`).
-///
-///      Config delivery: the manager always forwards `policyConfig` to {onExecute} (it MAY be empty). Callers
-///      supply the full {PolicyManager.PolicyBinding} at execute; the manager recomputes the commitment and
-///      compares it to the live signed commitment in Keystore. That single check authenticates
-///      config, validity window, and owning account — so policies MUST NOT store a config hash. There is no
-///      separate install step; config validation belongs in {onExecute} (or a helper it calls).
-///
-///      Mutable execution state (e.g. spend counters) is the exception that belongs in storage, keyed by
-///      commitment.
-///
-///      This is the example/reference shape for an EIP-8130 actor policy (`scope & Scopes.POLICY != 0`): the
-///      manager is the single call target a restricted actor may reach, and policies express *what* that actor
-///      may do. All hooks are callable only by the configured {PolicyManager}.
+/// @dev A policy turns an account-authorized commitment plus a per-use action (`executionData`) into an
+///      ABI-encoded account call plan that the manager forwards to the account. The manager verifies the
+///      supplied `policyConfig` recomputes to the actor's signed commitment before calling {onExecute}, so a
+///      policy MUST validate config in {onExecute} and MUST NOT store a config hash. Store only mutable execution
+///      state (e.g. spend counters), keyed by commitment. All hooks are callable only by {POLICY_MANAGER}.
 abstract contract Policy {
     /// @notice The {PolicyManager} instance authorized to call this policy's hooks.
     PolicyManager public immutable POLICY_MANAGER;
@@ -42,9 +31,10 @@ abstract contract Policy {
 
     /// @notice Authorize the execution and build the account call and optional post-call.
     ///
-    /// @dev MUST revert to refuse execution. `policyConfig` is the binding preimage; the manager has already
-    ///      verified it recomputes to the actor's signed commitment. If `accountCallData` is empty, the manager
-    ///      treats the call as a no-op (no account call, no {onPostExecute}, no event).
+    /// @dev Reverts with InvalidCaller when the caller is not {POLICY_MANAGER}.
+    /// @dev Implementations MUST revert to refuse execution. `policyConfig` is the binding preimage, already
+    ///      verified by the manager to recompute to the actor's signed commitment. An empty `accountCallData`
+    ///      return is treated as a no-op (no account call, no {onPostExecute}, no event).
     ///
     /// @param commitment    Identifier of the authorized binding.
     /// @param account       Account the plan will execute against.
@@ -66,7 +56,8 @@ abstract contract Policy {
 
     /// @notice Hook invoked by the manager after a non-empty account call.
     ///
-    /// @dev Called whenever {onExecute} returns non-empty `accountCallData`. `postCallData` may be empty;
+    /// @dev Reverts with InvalidCaller when the caller is not {POLICY_MANAGER}.
+    /// @dev Invoked whenever {onExecute} returns non-empty `accountCallData`; `postCallData` may be empty, so
     ///      implementations must handle that case. Default is a no-op.
     ///
     /// @param commitment  Identifier of the authorized binding.

@@ -42,6 +42,7 @@ contract CanonicalHighRatePayerAccount is DefaultAccount {
 
     /// @notice Executes a single call from the account, blocking an outbound value transfer while locked.
     ///
+    /// @dev Equivalent to a one-element {executeBatch}. Included for selector-compatibility with common existing wallet implementations.
     /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a TRUSTED_EXECUTOR actor.
     /// @dev Reverts with AccountLocked when the call carries non-zero value and the account is locked.
     /// @dev Bubbles up the inner call's revert reason verbatim (a reason-less revert propagates as an empty revert).

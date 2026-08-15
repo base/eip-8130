@@ -58,12 +58,20 @@ library RecurringAllowance {
 
     /// @notice Validates and consumes allowance for `value`, updating stored usage for the current period.
     ///
-    /// @param state Allowance state storage.
-    /// @param commitment Binding identifier.
-    /// @param limit Allowance bounds.
+    /// @dev Reverts with ZeroValue when `value` is zero.
+    /// @dev Reverts with ZeroPeriod when `limit.period` is zero.
+    /// @dev Reverts with ZeroAllowance when `limit.allowance` is zero.
+    /// @dev Reverts with InvalidStartEnd when `limit.start >= limit.end`.
+    /// @dev Reverts with BeforeStart when the current timestamp is before `limit.start`.
+    /// @dev Reverts with AfterEnd when the current timestamp is at or past `limit.end`.
+    /// @dev Reverts with ExceededAllowance when cumulative period spend would exceed `limit.allowance`.
+    ///
+    /// @param state Allowance usage storage.
+    /// @param commitment Binding identifier the usage is keyed by.
+    /// @param limit Allowance bounds for the spend window.
     /// @param value Amount to spend.
     ///
-    /// @return current Updated current-period usage.
+    /// @return current Updated current-period usage after consuming `value`.
     function useLimit(State storage state, bytes32 commitment, Limit memory limit, uint256 value)
         internal
         returns (PeriodUsage memory current)
@@ -81,16 +89,24 @@ library RecurringAllowance {
         state.lastUpdated[commitment] = current;
     }
 
-    /// @notice Return the most recent stored usage window for `commitment`.
+    /// @notice Returns the most recent stored usage window for `commitment`.
+    ///
+    /// @param state Allowance usage storage.
+    /// @param commitment Binding identifier the usage is keyed by.
+    ///
+    /// @return The most recent stored period usage (zeroed if none recorded).
     function getLastUpdated(State storage state, bytes32 commitment) internal view returns (PeriodUsage memory) {
         return state.lastUpdated[commitment];
     }
 
-    /// @notice Compute the current period window and include stored spend if still active.
+    /// @notice Computes the current period window, including stored spend if the window is still active.
     ///
-    /// @param state Allowance state storage.
-    /// @param commitment Binding identifier.
-    /// @param limit Allowance bounds.
+    /// @dev Reverts with BeforeStart when the current timestamp is before `limit.start`.
+    /// @dev Reverts with AfterEnd when the current timestamp is at or past `limit.end`.
+    ///
+    /// @param state Allowance usage storage.
+    /// @param commitment Binding identifier the usage is keyed by.
+    /// @param limit Allowance bounds for the spend window.
     ///
     /// @return Current period usage snapshot (including stored spend if still active).
     function getCurrentPeriod(State storage state, bytes32 commitment, Limit memory limit)
