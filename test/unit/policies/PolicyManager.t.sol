@@ -288,7 +288,7 @@ contract PolicyManagerTest is KeystoreTest {
 
     function _config() internal view returns (bytes memory) {
         SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = SessionPolicy.CallScope({target: target, selectorRules: new SessionPolicy.SelectorRule[](0)});
+        scopes[0] = SessionPolicy.CallScope({target: target, selectors: new bytes4[](0)});
         return abi.encode(SessionPolicy.Config({tokenLimits: new SessionPolicy.TokenLimit[](0), callScopes: scopes}));
     }
 

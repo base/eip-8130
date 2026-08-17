@@ -54,9 +54,9 @@ contract SessionMockTarget {
     }
 }
 
-/// @notice Exercises the unified {SessionPolicy}: target allowlist, per-target selector rules, recipient
-///         allowlists, per-token recurring/one-time spend limits, native-ETH limits, and the atomic
-///         multi-dimension check on a single call.
+/// @notice Exercises the unified {SessionPolicy}: target allowlist, per-target selector allowlists, per-asset
+///         recipient allowlists, per-token recurring/one-time spend limits (as the primary spend grant), native-ETH
+///         limits, and the atomic multi-dimension check on a single call.
 contract SessionPolicyTest is KeystoreTest {
     PolicyManager internal manager;
     SessionPolicy internal policy;
@@ -73,6 +73,11 @@ contract SessionPolicyTest is KeystoreTest {
     uint8 internal constant SCOPE_POLICY = 0x02;
 
     bytes4 internal constant TRANSFER = bytes4(keccak256("transfer(address,uint256)"));
+    bytes4 internal constant TRANSFER_FROM = bytes4(keccak256("transferFrom(address,address,uint256)"));
+    bytes4 internal constant APPROVE = bytes4(keccak256("approve(address,uint256)"));
+    bytes4 internal constant MINT = bytes4(keccak256("mint(address,uint256)"));
+    bytes4 internal constant OTHER_SELECTOR = bytes4(0x12345678);
+    bytes4 internal constant UNKNOWN_SELECTOR = bytes4(0xaabbccdd);
     uint40 internal constant WEEK = 7 days;
 
     uint256 internal saltNonce;
@@ -95,18 +100,14 @@ contract SessionPolicyTest is KeystoreTest {
     // ── Target gating ──
 
     function test_target_allowsListedTarget() public {
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = _anySelectorScope(address(target));
-        bytes32 actorId = _install(_config(_noLimits(), scopes));
+        bytes32 actorId = _install(_config(_noLimits(), _anySelectorScopes(address(target))));
 
         _execute(actorId, address(target), 0, abi.encodeCall(SessionMockTarget.setValue, (42)));
         assertEq(target.value(), 42);
     }
 
     function test_target_revertsUnlistedTarget() public {
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = _anySelectorScope(address(target));
-        bytes32 actorId = _install(_config(_noLimits(), scopes));
+        bytes32 actorId = _install(_config(_noLimits(), _anySelectorScopes(address(target))));
 
         _mockActingActor(actorId);
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.TargetNotAllowed.selector, address(token)));
@@ -114,14 +115,10 @@ contract SessionPolicyTest is KeystoreTest {
         manager.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1))));
     }
 
-    // ── Selector gating ──
+    // ── Selector gating (explicit CallScope, no spend cap) ──
 
     function test_selector_allowsListedSelector() public {
-        SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](1);
-        rules[0] =
-            SessionPolicy.SelectorRule({selector: SessionMockTarget.setValue.selector, recipients: _noRecipients()});
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = SessionPolicy.CallScope({target: address(target), selectorRules: rules});
+        SessionPolicy.CallScope[] memory scopes = _scope(address(target), _sel1(SessionMockTarget.setValue.selector));
         bytes32 actorId = _install(_config(_noLimits(), scopes));
 
         _execute(actorId, address(target), 0, abi.encodeCall(SessionMockTarget.setValue, (7)));
@@ -129,11 +126,7 @@ contract SessionPolicyTest is KeystoreTest {
     }
 
     function test_selector_revertsUnlistedSelector() public {
-        SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](1);
-        rules[0] =
-            SessionPolicy.SelectorRule({selector: SessionMockTarget.setValue.selector, recipients: _noRecipients()});
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = SessionPolicy.CallScope({target: address(target), selectorRules: rules});
+        SessionPolicy.CallScope[] memory scopes = _scope(address(target), _sel1(SessionMockTarget.setValue.selector));
         bytes32 actorId = _install(_config(_noLimits(), scopes));
 
         _mockActingActor(actorId);
@@ -146,21 +139,93 @@ contract SessionPolicyTest is KeystoreTest {
         manager.execute(lastBinding, _action(address(target), 0, abi.encodeCall(SessionMockTarget.other, (1))));
     }
 
-    // ── Recipient gating ──
+    // ── Case 1: a TokenLimit by itself grants the three tracked selectors ──
+
+    function test_case1_tokenLimitOnly_allowsTransfer() public {
+        bytes32 actorId = _install(_config(_limit(address(token), 500e18, WEEK), _noScopes()));
+
+        _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 300e18)));
+        assertEq(token.balanceOf(bob), 300e18);
+    }
+
+    function test_case1_tokenLimitOnly_allowsApprove() public {
+        bytes32 actorId = _install(_config(_limit(address(token), 500e18, WEEK), _noScopes()));
+
+        _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.approve, (bob, 10e18)));
+        assertEq(token.allowance(account, bob), 10e18);
+    }
+
+    function test_case1_tokenLimitOnly_revertsUntrackedSelector() public {
+        // A TokenLimit-only grant permits ONLY transfer/transferFrom/approve — any other selector is rejected.
+        bytes32 actorId = _install(_config(_limit(address(token), 500e18, WEEK), _noScopes()));
+
+        _mockActingActor(actorId);
+        vm.expectRevert(abi.encodeWithSelector(SessionPolicy.SelectorNotAllowed.selector, address(token), MINT));
+        vm.prank(account);
+        manager.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.mint, (bob, 1))));
+    }
+
+    function test_case1_tokenLimitOnly_revertsBareValueTransfer() public {
+        // Empty calldata is a plain value transfer; a TokenLimit-only target cannot receive one (needs a CallScope).
+        bytes32 actorId = _install(_config(_limit(address(token), 500e18, WEEK), _noScopes()));
+
+        _mockActingActor(actorId);
+        vm.expectRevert(abi.encodeWithSelector(SessionPolicy.TargetNotAllowed.selector, address(token)));
+        vm.prank(account);
+        manager.execute(lastBinding, _action(address(token), 0, ""));
+    }
+
+    // ── Case 2: TokenLimit + anySelector CallScope opens all selectors (untracked ones uncapped) ──
+
+    function test_case2_anySelectorOnLimitedToken_allowsUntrackedButStillCapsTracked() public {
+        SessionPolicy.TokenLimit[] memory limits = _limit(address(token), 500e18, WEEK);
+        SessionPolicy.CallScope[] memory scopes = _anySelectorScopes(address(token));
+        bytes32 actorId = _install(_config(limits, scopes));
+
+        // Untracked selector is allowed (explicit opt-in) and NOT debited.
+        _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.mint, (bob, 1e18)));
+        assertEq(token.balanceOf(bob), 1e18);
+
+        // Tracked selector is still capped.
+        _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 400e18)));
+        _mockActingActor(actorId);
+        vm.expectRevert(abi.encodeWithSelector(RecurringAllowance.ExceededAllowance.selector, 600e18, 500e18));
+        vm.prank(account);
+        manager.execute(
+            lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 200e18)))
+        );
+    }
+
+    // ── Case 3: TokenLimit + explicit selectors (caps tracked, allows listed untracked, rejects unlisted) ──
+
+    function test_case3_explicitSelectors_capsTrackedAllowsListedUntracked() public {
+        SessionPolicy.TokenLimit[] memory limits = _limit(address(token), 500e18, WEEK);
+        SessionPolicy.CallScope[] memory scopes = _scope(address(token), _sel2(TRANSFER, MINT));
+        bytes32 actorId = _install(_config(limits, scopes));
+
+        // Listed untracked selector: allowed, uncapped.
+        _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.mint, (bob, 1e18)));
+        // Listed tracked selector: capped.
+        _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 100e18)));
+
+        // Unlisted selector (approve) is rejected — the explicit list replaces the Case-1 default.
+        _mockActingActor(actorId);
+        vm.expectRevert(abi.encodeWithSelector(SessionPolicy.SelectorNotAllowed.selector, address(token), APPROVE));
+        vm.prank(account);
+        manager.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.approve, (bob, 1))));
+    }
+
+    // ── Recipient gating (on the TokenLimit) ──
 
     function test_recipient_allowsListedRecipient() public {
-        address[] memory recipients = new address[](1);
-        recipients[0] = bob;
-        bytes32 actorId = _install(_config(_noLimits(), _erc20Scope(address(token), recipients)));
+        bytes32 actorId = _install(_config(_limitTo(address(token), 500e18, WEEK, _addr1(bob)), _noScopes()));
 
         _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 100e18)));
         assertEq(token.balanceOf(bob), 100e18);
     }
 
     function test_recipient_revertsUnlistedRecipient() public {
-        address[] memory recipients = new address[](1);
-        recipients[0] = bob;
-        bytes32 actorId = _install(_config(_noLimits(), _erc20Scope(address(token), recipients)));
+        bytes32 actorId = _install(_config(_limitTo(address(token), 500e18, WEEK, _addr1(bob)), _noScopes()));
 
         _mockActingActor(actorId);
         vm.expectRevert(
@@ -172,19 +237,32 @@ contract SessionPolicyTest is KeystoreTest {
         );
     }
 
+    function test_recipient_appliesToApproveSpender() public {
+        // The recipient list is a merged destination set: it also gates approve's spender.
+        bytes32 actorId = _install(_config(_limitTo(address(token), 500e18, WEEK, _addr1(bob)), _noScopes()));
+
+        _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.approve, (bob, 1e18)));
+        assertEq(token.allowance(account, bob), 1e18);
+
+        _mockActingActor(actorId);
+        vm.expectRevert(
+            abi.encodeWithSelector(SessionPolicy.RecipientNotAllowed.selector, address(token), APPROVE, mallory)
+        );
+        vm.prank(account);
+        manager.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.approve, (mallory, 1))));
+    }
+
     // ── Recurring spend limit ──
 
     function test_recurringLimit_withinAllowance() public {
-        bytes32 actorId =
-            _install(_config(_limit(address(token), 500e18, WEEK), _erc20Scope(address(token), _noRecipients())));
+        bytes32 actorId = _install(_config(_limit(address(token), 500e18, WEEK), _noScopes()));
 
         _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 300e18)));
         assertEq(token.balanceOf(bob), 300e18);
     }
 
     function test_recurringLimit_revertsWhenExceeded() public {
-        bytes32 actorId =
-            _install(_config(_limit(address(token), 500e18, WEEK), _erc20Scope(address(token), _noRecipients())));
+        bytes32 actorId = _install(_config(_limit(address(token), 500e18, WEEK), _noScopes()));
         _mockActingActor(actorId);
 
         vm.prank(account);
@@ -200,8 +278,7 @@ contract SessionPolicyTest is KeystoreTest {
     }
 
     function test_recurringLimit_resetsNextPeriod() public {
-        bytes32 actorId =
-            _install(_config(_limit(address(token), 500e18, WEEK), _erc20Scope(address(token), _noRecipients())));
+        bytes32 actorId = _install(_config(_limit(address(token), 500e18, WEEK), _noScopes()));
         _mockActingActor(actorId);
 
         vm.prank(account);
@@ -222,8 +299,7 @@ contract SessionPolicyTest is KeystoreTest {
     // ── One-time spend limit (period == 0): cumulative, never resets ──
 
     function test_oneTimeLimit_accumulatesAcrossPeriods() public {
-        bytes32 actorId =
-            _install(_config(_limit(address(token), 500e18, 0), _erc20Scope(address(token), _noRecipients())));
+        bytes32 actorId = _install(_config(_limit(address(token), 500e18, 0), _noScopes()));
         _mockActingActor(actorId);
 
         vm.prank(account);
@@ -243,9 +319,7 @@ contract SessionPolicyTest is KeystoreTest {
     // ── Native-ETH spend limit ──
 
     function test_nativeLimit_consumesCallValue() public {
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = _anySelectorScope(bob);
-        bytes32 actorId = _install(_config(_limit(address(0), 1 ether, WEEK), scopes));
+        bytes32 actorId = _install(_config(_limit(address(0), 1 ether, WEEK), _anySelectorScopes(bob)));
         _mockActingActor(actorId);
 
         vm.prank(account);
@@ -259,9 +333,7 @@ contract SessionPolicyTest is KeystoreTest {
 
     function test_nativeValue_revertsWhenNoNativeLimit() public {
         // Fail closed: a call carrying value with no address(0) TokenLimit is rejected, not forwarded unbounded.
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = _anySelectorScope(bob);
-        bytes32 actorId = _install(_config(_noLimits(), scopes));
+        bytes32 actorId = _install(_config(_noLimits(), _anySelectorScopes(bob)));
         _mockActingActor(actorId);
 
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.NativeValueNotAllowed.selector, 1 ether));
@@ -271,8 +343,7 @@ contract SessionPolicyTest is KeystoreTest {
 
     function test_nativeValue_erc20LimitDoesNotAuthorizeEth() public {
         // A token cap (e.g. "USDC 5/month") must not implicitly permit ETH: value to any target still fails closed.
-        bytes32 actorId =
-            _install(_config(_limit(address(token), 5e6, WEEK), _erc20Scope(address(token), _noRecipients())));
+        bytes32 actorId = _install(_config(_limit(address(token), 5e6, WEEK), _noScopes()));
         _mockActingActor(actorId);
 
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.NativeValueNotAllowed.selector, 1 ether));
@@ -284,9 +355,7 @@ contract SessionPolicyTest is KeystoreTest {
 
     function test_nativeValue_unlimitedIdiomPermitsLargeTransfer() public {
         // The documented "unlimited ETH" idiom: a uint160.max cap is never reached in practice.
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = _anySelectorScope(bob);
-        bytes32 actorId = _install(_config(_limit(address(0), type(uint160).max, WEEK), scopes));
+        bytes32 actorId = _install(_config(_limit(address(0), type(uint160).max, WEEK), _anySelectorScopes(bob)));
         _mockActingActor(actorId);
 
         vm.deal(account, 1_000_000 ether);
@@ -295,13 +364,29 @@ contract SessionPolicyTest is KeystoreTest {
         assertEq(bob.balance, 1_000_000 ether);
     }
 
+    function test_nativeRecipient_gatesDestination() public {
+        // A native TokenLimit with recipients gates which target may receive ETH.
+        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](2);
+        scopes[0] = _anySelectorScope(bob);
+        scopes[1] = _anySelectorScope(mallory);
+        bytes32 actorId = _install(_config(_limitTo(address(0), 1 ether, WEEK, _addr1(bob)), scopes));
+        _mockActingActor(actorId);
+
+        // Allowed destination.
+        vm.prank(account);
+        manager.execute(lastBinding, _action(bob, 0.3 ether, ""));
+        assertEq(bob.balance, 0.3 ether);
+
+        // Disallowed destination: mallory is a valid target but not an allowed ETH recipient.
+        vm.expectRevert(abi.encodeWithSelector(SessionPolicy.RecipientNotAllowed.selector, mallory, bytes4(0), mallory));
+        vm.prank(account);
+        manager.execute(lastBinding, _action(mallory, 0.1 ether, ""));
+    }
+
     // ── Atomic multi-dimension enforcement on a single call ──
 
     function test_multiDimension_passesAllAtOnce() public {
-        address[] memory recipients = new address[](1);
-        recipients[0] = bob;
-        bytes32 actorId =
-            _install(_config(_limit(address(token), 500e18, WEEK), _erc20Scope(address(token), recipients)));
+        bytes32 actorId = _install(_config(_limitTo(address(token), 500e18, WEEK, _addr1(bob)), _noScopes()));
 
         // target + selector + recipient + within-limit all satisfied in one call.
         _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 250e18)));
@@ -309,10 +394,7 @@ contract SessionPolicyTest is KeystoreTest {
     }
 
     function test_multiDimension_recipientFailsEvenWithinLimit() public {
-        address[] memory recipients = new address[](1);
-        recipients[0] = bob;
-        bytes32 actorId =
-            _install(_config(_limit(address(token), 500e18, WEEK), _erc20Scope(address(token), recipients)));
+        bytes32 actorId = _install(_config(_limitTo(address(token), 500e18, WEEK, _addr1(bob)), _noScopes()));
 
         // Amount is within the limit, but mallory isn't an allowed recipient — the whole call is rejected.
         _mockActingActor(actorId);
@@ -328,8 +410,8 @@ contract SessionPolicyTest is KeystoreTest {
     // ── Worked example ──
     //
     // A single session key that: (1) has full, uncapped access to one ERC-20 (the "MyApp" token); (2) may spend at
-    // most $5 of USDC per month; and (3) may call the MyApp app contract as much as it wants, but only through two
-    // chosen selectors. This is the example documented in the policies README.
+    // most $5 of USDC per month (a TokenLimit-only grant); and (3) may call the MyApp app contract as much as it
+    // wants, but only through two chosen selectors.
 
     function test_workedExample_fullTokenAccess_monthlyUsdc_appSelectors() public {
         // A second ERC-20 plays the role of USDC (6 decimals); `token` (minted in setUp) is the MyApp token.
@@ -338,24 +420,15 @@ contract SessionPolicyTest is KeystoreTest {
         uint40 monthPeriod = 30 days;
         uint256 fiveUsdc = 5e6; // $5 at 6 decimals
 
-        // Spend limits: only USDC ($5/month). The MyApp token has no entry, so its transfers are uncapped.
-        SessionPolicy.TokenLimit[] memory limits = new SessionPolicy.TokenLimit[](1);
-        limits[0] = SessionPolicy.TokenLimit({token: address(usdc), limit: fiveUsdc, period: monthPeriod});
+        // Spend limits: only USDC ($5/month), a Case-1 grant (no CallScope needed for the three spend selectors).
+        SessionPolicy.TokenLimit[] memory limits = _limit(address(usdc), fiveUsdc, monthPeriod);
 
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](3);
+        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](2);
         // (a) MyApp token: full access — any selector, and no spend cap (no TokenLimit above).
         scopes[0] = _anySelectorScope(address(token));
-        // (b) USDC: transfer only, so the $5/month cap can't be sidestepped by another selector.
-        SessionPolicy.SelectorRule[] memory usdcRules = new SessionPolicy.SelectorRule[](1);
-        usdcRules[0] = SessionPolicy.SelectorRule({selector: TRANSFER, recipients: _noRecipients()});
-        scopes[1] = SessionPolicy.CallScope({target: address(usdc), selectorRules: usdcRules});
-        // (c) MyApp app contract: two chosen selectors, unlimited calls.
-        SessionPolicy.SelectorRule[] memory appRules = new SessionPolicy.SelectorRule[](2);
-        appRules[0] =
-            SessionPolicy.SelectorRule({selector: SessionMockTarget.setValue.selector, recipients: _noRecipients()});
-        appRules[1] =
-            SessionPolicy.SelectorRule({selector: SessionMockTarget.other.selector, recipients: _noRecipients()});
-        scopes[2] = SessionPolicy.CallScope({target: address(target), selectorRules: appRules});
+        // (b) MyApp app contract: two chosen selectors, unlimited calls.
+        scopes[1] =
+            _scopeOne(address(target), _sel2(SessionMockTarget.setValue.selector, SessionMockTarget.other.selector));
 
         bytes32 actorId = _install(_config(limits, scopes));
 
@@ -363,7 +436,7 @@ contract SessionPolicyTest is KeystoreTest {
         _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 750_000e18)));
         assertEq(token.balanceOf(bob), 750_000e18);
 
-        // USDC within the monthly cap.
+        // USDC within the monthly cap (Case 1: transfer permitted by the limit alone).
         _execute(actorId, address(usdc), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 3e6)));
         assertEq(usdc.balanceOf(bob), 3e6);
 
@@ -397,29 +470,8 @@ contract SessionPolicyTest is KeystoreTest {
 
     // ── Config validation (at execute) ──
 
-    function test_execute_revertsRecipientRuleOnUnsupportedSelector() public {
-        address[] memory recipients = new address[](1);
-        recipients[0] = bob;
-        // A recipient allowlist attached to a non-ERC20 selector cannot be enforced → reject at execute.
-        SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](1);
-        rules[0] = SessionPolicy.SelectorRule({selector: SessionMockTarget.setValue.selector, recipients: recipients});
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = SessionPolicy.CallScope({target: address(target), selectorRules: rules});
-
-        bytes32 actorId = _authorize(_config(_noLimits(), scopes));
-        _mockActingActor(actorId);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                SessionPolicy.RecipientRuleUnsupportedSelector.selector, SessionMockTarget.setValue.selector
-            )
-        );
-        vm.prank(account);
-        manager.execute(lastBinding, _action(address(target), 0, abi.encodeCall(SessionMockTarget.setValue, (1))));
-    }
-
     function test_execute_revertsZeroLimit() public {
-        bytes32 actorId =
-            _authorize(_config(_limit(address(token), 0, WEEK), _erc20Scope(address(token), _noRecipients())));
+        bytes32 actorId = _authorize(_config(_limit(address(token), 0, WEEK), _noScopes()));
         _mockActingActor(actorId);
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.ZeroLimit.selector, address(token)));
         vm.prank(account);
@@ -428,29 +480,15 @@ contract SessionPolicyTest is KeystoreTest {
 
     function test_execute_revertsLimitTooLarge() public {
         uint256 tooLarge = uint256(type(uint160).max) + 1;
-        bytes32 actorId =
-            _authorize(_config(_limit(address(token), tooLarge, WEEK), _erc20Scope(address(token), _noRecipients())));
+        bytes32 actorId = _authorize(_config(_limit(address(token), tooLarge, WEEK), _noScopes()));
         _mockActingActor(actorId);
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.LimitTooLarge.selector, address(token), tooLarge));
         vm.prank(account);
         manager.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1))));
     }
 
-    function test_execute_revertsAnySelectorOnLimitedToken() public {
-        // A TokenLimit only tracks transfer/transferFrom/approve; anySelector would leave other methods untracked.
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = _anySelectorScope(address(token));
-        bytes32 actorId = _authorize(_config(_limit(address(token), 500e18, WEEK), scopes));
-        _mockActingActor(actorId);
-        vm.expectRevert(abi.encodeWithSelector(SessionPolicy.AnySelectorOnLimitedToken.selector, address(token)));
-        vm.prank(account);
-        manager.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1))));
-    }
-
     function test_execute_revertsSelfTarget() public {
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = _anySelectorScope(account);
-        bytes32 actorId = _authorize(_config(_noLimits(), scopes));
+        bytes32 actorId = _authorize(_config(_noLimits(), _anySelectorScopes(account)));
         _mockActingActor(actorId);
         vm.expectRevert(SessionPolicy.SelfTargetNotAllowed.selector);
         vm.prank(account);
@@ -459,9 +497,9 @@ contract SessionPolicyTest is KeystoreTest {
 
     function test_execute_revertsDuplicateTokenLimit() public {
         SessionPolicy.TokenLimit[] memory limits = new SessionPolicy.TokenLimit[](2);
-        limits[0] = SessionPolicy.TokenLimit({token: address(token), limit: 100e18, period: WEEK});
-        limits[1] = SessionPolicy.TokenLimit({token: address(token), limit: 200e18, period: WEEK});
-        bytes32 actorId = _authorize(_config(limits, _erc20Scope(address(token), _noRecipients())));
+        limits[0] = _tl(address(token), 100e18, WEEK, _noRecipients());
+        limits[1] = _tl(address(token), 200e18, WEEK, _noRecipients());
+        bytes32 actorId = _authorize(_config(limits, _noScopes()));
         _mockActingActor(actorId);
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.DuplicateTokenLimit.selector, address(token)));
         vm.prank(account);
@@ -479,15 +517,11 @@ contract SessionPolicyTest is KeystoreTest {
         manager.execute(lastBinding, _action(address(target), 0, ""));
     }
 
-    function test_execute_revertsDuplicateSelectorRule() public {
-        SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](2);
-        rules[0] = SessionPolicy.SelectorRule({selector: TRANSFER, recipients: _noRecipients()});
-        rules[1] = SessionPolicy.SelectorRule({selector: TRANSFER, recipients: _noRecipients()});
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = SessionPolicy.CallScope({target: address(token), selectorRules: rules});
+    function test_execute_revertsDuplicateSelector() public {
+        SessionPolicy.CallScope[] memory scopes = _scope(address(token), _sel2(TRANSFER, TRANSFER));
         bytes32 actorId = _authorize(_config(_noLimits(), scopes));
         _mockActingActor(actorId);
-        vm.expectRevert(abi.encodeWithSelector(SessionPolicy.DuplicateSelectorRule.selector, address(token), TRANSFER));
+        vm.expectRevert(abi.encodeWithSelector(SessionPolicy.DuplicateSelector.selector, address(token), TRANSFER));
         vm.prank(account);
         manager.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1))));
     }
@@ -496,9 +530,7 @@ contract SessionPolicyTest is KeystoreTest {
 
     function test_execute_revertsOnPolicyConfigMismatch() public {
         // Execute must re-supply the exact committed binding; the manager recomputes the commitment.
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = _anySelectorScope(address(target));
-        bytes32 actorId = _authorize(_config(_noLimits(), scopes));
+        bytes32 actorId = _authorize(_config(_noLimits(), _anySelectorScopes(address(target))));
         bytes32 commitment = keystore.getPolicyCommitment(account, actorId);
 
         PolicyManager.PolicyBinding memory wrong = lastBinding;
@@ -515,9 +547,7 @@ contract SessionPolicyTest is KeystoreTest {
 
     function test_execute_revertsMissingSelectorForShortData() public {
         // 1–3 bytes of calldata carry no usable selector, so the call is rejected rather than guessed.
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = _anySelectorScope(address(target));
-        bytes32 actorId = _install(_config(_noLimits(), scopes));
+        bytes32 actorId = _install(_config(_noLimits(), _anySelectorScopes(address(target))));
 
         _mockActingActor(actorId);
         vm.expectRevert(SessionPolicy.MissingSelector.selector);
@@ -528,18 +558,13 @@ contract SessionPolicyTest is KeystoreTest {
     function test_execute_acceptsTransferDespiteDirtySelectorWord() public {
         // ABI-encoded `transfer` packs the selector into the high 4 bytes of the first word and the address into
         // the remainder — so a raw mload into bytes4 leaves dirty low bytes. The mask must still match TRANSFER.
-        bytes32 actorId =
-            _install(_config(_limit(address(token), 500e18, WEEK), _erc20Scope(address(token), _noRecipients())));
+        bytes32 actorId = _install(_config(_limit(address(token), 500e18, WEEK), _noScopes()));
         _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1e18)));
         assertEq(token.balanceOf(bob), 1e18);
     }
 
     function test_execute_revertsTransferFromNotSelf() public {
-        SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](1);
-        rules[0] = SessionPolicy.SelectorRule({selector: TRANSFER_FROM, recipients: _noRecipients()});
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = SessionPolicy.CallScope({target: address(token), selectorRules: rules});
-        bytes32 actorId = _install(_config(_limit(address(token), 500e18, WEEK), scopes));
+        bytes32 actorId = _install(_config(_limit(address(token), 500e18, WEEK), _noScopes()));
 
         // Approve the account to pull from mallory so the ERC-20 call would succeed absent the policy check.
         token.mint(mallory, 100e18);
@@ -555,13 +580,8 @@ contract SessionPolicyTest is KeystoreTest {
     }
 
     function test_execute_allowsApproveDecodesSpender() public {
-        // A limited token pinning approve exercises the APPROVE leg of the ERC-20 decoder (`selector == APPROVE`).
-        SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](1);
-        rules[0] =
-            SessionPolicy.SelectorRule({selector: SessionMockERC20.approve.selector, recipients: _noRecipients()});
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = SessionPolicy.CallScope({target: address(token), selectorRules: rules});
-        bytes32 actorId = _install(_config(_limit(address(token), 500e18, WEEK), scopes));
+        // A Case-1 limited token exercises the APPROVE leg of the ERC-20 decoder (`selector == APPROVE`).
+        bytes32 actorId = _install(_config(_limit(address(token), 500e18, WEEK), _noScopes()));
 
         _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.approve, (bob, 1e18)));
         assertEq(token.allowance(account, bob), 1e18);
@@ -570,12 +590,8 @@ contract SessionPolicyTest is KeystoreTest {
     function test_execute_allowsSelfTransferFromDecodesAmount() public {
         // A self-transferFrom (from == account) with a token limit passes the TransferFromNotSelf gate and reaches
         // the ERC-20 amount decode — the else (transferFrom) leg of _decodeErc20 — then consumes the decoded amount.
-        SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](1);
-        rules[0] = SessionPolicy.SelectorRule({selector: TRANSFER_FROM, recipients: _noRecipients()});
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = SessionPolicy.CallScope({target: address(token), selectorRules: rules});
         (bytes32 actorId, bytes32 commitment) =
-            _authorizeWithCommitment(_config(_limit(address(token), 500e18, WEEK), scopes));
+            _authorizeWithCommitment(_config(_limit(address(token), 500e18, WEEK), _noScopes()));
 
         // Fund the account and let it pull from itself so the underlying transferFrom succeeds.
         token.mint(account, 100e18);
@@ -585,13 +601,7 @@ contract SessionPolicyTest is KeystoreTest {
         _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.transferFrom, (account, bob, 10e18)));
 
         // The decoded amount was consumed against the token cap, proving the transferFrom decode leg ran.
-        assertEq(
-            policy.getCurrentSpend(
-                commitment, SessionPolicy.TokenLimit({token: address(token), limit: 500e18, period: WEEK})
-            )
-            .spend,
-            10e18
-        );
+        assertEq(policy.getCurrentSpend(commitment, _tl(address(token), 500e18, WEEK, _noRecipients())).spend, 10e18);
         assertEq(token.balanceOf(bob), 10e18);
     }
 
@@ -602,8 +612,7 @@ contract SessionPolicyTest is KeystoreTest {
         SessionPolicyHarness harness = new SessionPolicyHarness(address(manager));
         uint256 tooLarge = uint256(type(uint160).max) + 1;
 
-        SessionPolicy.TokenLimit[] memory limits = new SessionPolicy.TokenLimit[](1);
-        limits[0] = SessionPolicy.TokenLimit({token: address(token), limit: tooLarge, period: WEEK});
+        SessionPolicy.TokenLimit[] memory limits = _limit(address(token), tooLarge, WEEK);
         SessionPolicy.Config memory cfg =
             SessionPolicy.Config({tokenLimits: limits, callScopes: new SessionPolicy.CallScope[](0)});
 
@@ -612,10 +621,8 @@ contract SessionPolicyTest is KeystoreTest {
     }
 
     function test_execute_allowsEmptyCalldata() public {
-        // 0 bytes of calldata is a plain value call: it skips selector gating entirely.
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = _anySelectorScope(bob);
-        bytes32 actorId = _install(_config(_noLimits(), scopes));
+        // 0 bytes of calldata is a plain value call against a CallScope target: it skips selector gating entirely.
+        bytes32 actorId = _install(_config(_noLimits(), _anySelectorScopes(bob)));
 
         _execute(actorId, bob, 0, "");
     }
@@ -624,25 +631,17 @@ contract SessionPolicyTest is KeystoreTest {
 
     function test_execute_zeroAmountTransferSkipsSpend() public {
         // A zero-value transfer on a limited token must not touch spend accounting (the library rejects zero spends).
-        (bytes32 actorId, bytes32 commitment) = _authorizeWithCommitment(
-            _config(_limit(address(token), 500e18, WEEK), _erc20Scope(address(token), _noRecipients()))
-        );
+        (bytes32 actorId, bytes32 commitment) =
+            _authorizeWithCommitment(_config(_limit(address(token), 500e18, WEEK), _noScopes()));
 
         _execute(actorId, address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 0)));
 
-        assertEq(
-            policy.getCurrentSpend(
-                commitment, SessionPolicy.TokenLimit({token: address(token), limit: 500e18, period: WEEK})
-            )
-            .spend,
-            0
-        );
+        assertEq(policy.getCurrentSpend(commitment, _tl(address(token), 500e18, WEEK, _noRecipients())).spend, 0);
     }
 
     function test_execute_revertsMalformedTransfer() public {
-        // A limited token pins the transfer selector; truncated transfer calldata (< 68 bytes) can't be decoded.
-        bytes32 actorId =
-            _install(_config(_limit(address(token), 500e18, WEEK), _erc20Scope(address(token), _noRecipients())));
+        // A Case-1 limited token; truncated transfer calldata (< 68 bytes) can't be decoded.
+        bytes32 actorId = _install(_config(_limit(address(token), 500e18, WEEK), _noScopes()));
 
         _mockActingActor(actorId);
         bytes memory malformed = abi.encodePacked(TRANSFER, bytes32(uint256(uint160(bob)))); // selector + 32 = 36 bytes
@@ -652,12 +651,8 @@ contract SessionPolicyTest is KeystoreTest {
     }
 
     function test_execute_revertsMalformedTransferFrom() public {
-        // Exercises the transferFrom decode branch: a pinned transferFrom selector with calldata < 100 bytes.
-        SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](1);
-        rules[0] = SessionPolicy.SelectorRule({selector: TRANSFER_FROM, recipients: _noRecipients()});
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = SessionPolicy.CallScope({target: address(token), selectorRules: rules});
-        bytes32 actorId = _install(_config(_limit(address(token), 500e18, WEEK), scopes));
+        // Exercises the transferFrom decode branch: a Case-1 limited token with calldata < 100 bytes.
+        bytes32 actorId = _install(_config(_limit(address(token), 500e18, WEEK), _noScopes()));
 
         _mockActingActor(actorId);
         bytes memory malformed = abi.encodePacked(TRANSFER_FROM, bytes32(0), bytes32(0)); // selector + 64 = 68 < 100
@@ -668,14 +663,12 @@ contract SessionPolicyTest is KeystoreTest {
 
     // ── Views ──
 
-    function test_views_reflectCommittedErc20Scope() public {
-        address[] memory recipients = new address[](1);
-        recipients[0] = bob;
-        (, bytes32 commitment) = _authorizeWithCommitment(
-            _config(_limit(address(token), 500e18, WEEK), _erc20Scope(address(token), recipients))
-        );
+    function test_views_reflectCommittedLimitedToken() public {
+        (, bytes32 commitment) =
+            _authorizeWithCommitment(_config(_limitTo(address(token), 500e18, WEEK, _addr1(bob)), _noScopes()));
         SessionPolicy.Config memory cfg = abi.decode(lastBinding.policyConfig, (SessionPolicy.Config));
 
+        // A TokenLimit-only token is callable (Case 1), reporting anySelector == false.
         (bool allowed, bool anySelector) = policy.isTargetAllowed(cfg, address(token));
         assertTrue(allowed);
         assertFalse(anySelector);
@@ -684,6 +677,10 @@ contract SessionPolicyTest is KeystoreTest {
         assertTrue(selAllowed);
         assertTrue(recipientBound);
 
+        // A non-tracked selector is not allowed on a Case-1 token.
+        (bool mintAllowed,) = policy.getSelectorRule(cfg, address(token), MINT);
+        assertFalse(mintAllowed);
+
         assertTrue(policy.isRecipientAllowed(cfg, address(token), TRANSFER, bob));
         assertFalse(policy.isRecipientAllowed(cfg, address(token), TRANSFER, mallory));
 
@@ -691,6 +688,9 @@ contract SessionPolicyTest is KeystoreTest {
         assertTrue(set);
         assertEq(allowance, 500e18);
         assertEq(period, WEEK);
+
+        assertEq(policy.getTokenRecipients(cfg, address(token)).length, 1);
+        assertEq(policy.getTokenRecipients(cfg, address(token))[0], bob);
 
         assertEq(policy.getCurrentSpend(commitment, cfg.tokenLimits[0]).spend, 0);
     }
@@ -703,7 +703,7 @@ contract SessionPolicyTest is KeystoreTest {
         assertTrue(allowed);
         assertTrue(anySelector);
 
-        // Unlisted target resolves to the zero scope.
+        // Unlisted target (and not a limited token) resolves to not-allowed.
         (bool otherAllowed,) = policy.isTargetAllowed(cfg, address(token));
         assertFalse(otherAllowed);
 
@@ -713,39 +713,38 @@ contract SessionPolicyTest is KeystoreTest {
         assertEq(period, type(uint40).max);
     }
 
-    /// @notice Exercises the mismatch/empty branches of getSelectorRule and isRecipientAllowed: a non-matching
-    ///         target is skipped, an any-selector scope resolves without a recipient binding, an unknown selector
-    ///         resolves to (false,false), a non-matching rule is skipped, and an empty recipient list allows anyone.
+    /// @notice Exercises the mismatch/empty branches of the views: a non-matching target is skipped, an any-selector
+    ///         scope resolves without a recipient binding, an unknown selector on an explicit scope resolves to
+    ///         (false,false), and recipient gating comes from the TokenLimit.
     function test_views_selectorAndRecipientEdges() public view {
-        address[] memory bobOnly = new address[](1);
-        bobOnly[0] = bob;
-
-        // token scope: TRANSFER bound to [bob]; OTHER open to anyone (empty recipient list).
-        SessionPolicy.SelectorRule[] memory tokenRules = new SessionPolicy.SelectorRule[](2);
-        tokenRules[0] = SessionPolicy.SelectorRule({selector: TRANSFER, recipients: bobOnly});
-        tokenRules[1] = SessionPolicy.SelectorRule({selector: OTHER_SELECTOR, recipients: _noRecipients()});
+        SessionPolicy.TokenLimit[] memory limits = _limitTo(address(token), 500e18, WEEK, _addr1(bob));
 
         SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](2);
-        scopes[0] = SessionPolicy.CallScope({target: address(token), selectorRules: tokenRules});
-        scopes[1] = _anySelectorScope(address(target)); // any selector (empty rules)
+        scopes[0] = _scopeOne(address(token), _sel1(TRANSFER)); // Case 3: explicit selectors on the limited token
+        scopes[1] = _anySelectorScope(address(target)); // any selector (empty list), no limit
 
-        SessionPolicy.Config memory cfg = SessionPolicy.Config({tokenLimits: _noLimits(), callScopes: scopes});
+        SessionPolicy.Config memory cfg = SessionPolicy.Config({tokenLimits: limits, callScopes: scopes});
 
-        // getSelectorRule: querying `target` skips scope[0] (target mismatch) and matches the any-selector scope[1].
+        // getSelectorRule: any-selector scope allows any selector, with no recipient binding (no limit on target).
         (bool allowed, bool recipientBound) = policy.getSelectorRule(cfg, address(target), TRANSFER);
         assertTrue(allowed);
         assertFalse(recipientBound);
 
-        // getSelectorRule: matched target, unknown selector → (false, false).
+        // getSelectorRule: explicit scope on token, unknown selector → (false, false).
         (allowed, recipientBound) = policy.getSelectorRule(cfg, address(token), UNKNOWN_SELECTOR);
         assertFalse(allowed);
         assertFalse(recipientBound);
 
-        // isRecipientAllowed: `target` matches the any-selector scope but has no rules → false.
-        assertFalse(policy.isRecipientAllowed(cfg, address(target), TRANSFER, bob));
+        // getSelectorRule: token/TRANSFER is listed and the limit pins recipients → recipientBound true.
+        (allowed, recipientBound) = policy.getSelectorRule(cfg, address(token), TRANSFER);
+        assertTrue(allowed);
+        assertTrue(recipientBound);
 
-        // isRecipientAllowed: token/OTHER skips the TRANSFER rule then hits the empty-recipients rule → anyone allowed.
+        // isRecipientAllowed: untracked selector is unrestricted.
         assertTrue(policy.isRecipientAllowed(cfg, address(token), OTHER_SELECTOR, mallory));
+
+        // isRecipientAllowed: no limit on target → unrestricted.
+        assertTrue(policy.isRecipientAllowed(cfg, address(target), TRANSFER, mallory));
 
         // isRecipientAllowed: token/TRANSFER is bound to bob only.
         assertTrue(policy.isRecipientAllowed(cfg, address(token), TRANSFER, bob));
@@ -754,9 +753,8 @@ contract SessionPolicyTest is KeystoreTest {
 
     /// @notice getCurrentSpend short-circuits to an empty usage when the queried limit is zero.
     function test_getCurrentSpend_zeroLimitReturnsEmpty() public view {
-        RecurringAllowance.PeriodUsage memory u = policy.getCurrentSpend(
-            bytes32(0), SessionPolicy.TokenLimit({token: address(token), limit: 0, period: WEEK})
-        );
+        RecurringAllowance.PeriodUsage memory u =
+            policy.getCurrentSpend(bytes32(0), _tl(address(token), 0, WEEK, _noRecipients()));
         assertEq(u.start, 0);
         assertEq(u.end, 0);
         assertEq(u.spend, 0);
@@ -766,16 +764,10 @@ contract SessionPolicyTest is KeystoreTest {
     function test_getCurrentSpend_revertsLimitTooLarge() public {
         uint256 tooLarge = uint256(type(uint160).max) + 1;
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.LimitTooLarge.selector, address(token), tooLarge));
-        policy.getCurrentSpend(
-            bytes32(0), SessionPolicy.TokenLimit({token: address(token), limit: tooLarge, period: WEEK})
-        );
+        policy.getCurrentSpend(bytes32(0), _tl(address(token), tooLarge, WEEK, _noRecipients()));
     }
 
     // ── Helpers ──
-
-    bytes4 internal constant TRANSFER_FROM = bytes4(keccak256("transferFrom(address,address,uint256)"));
-    bytes4 internal constant OTHER_SELECTOR = bytes4(0x12345678);
-    bytes4 internal constant UNKNOWN_SELECTOR = bytes4(0xaabbccdd);
 
     function _anySelectorScopes(address t) internal pure returns (SessionPolicy.CallScope[] memory scopes) {
         scopes = new SessionPolicy.CallScope[](1);
@@ -824,33 +816,71 @@ contract SessionPolicyTest is KeystoreTest {
         return new SessionPolicy.TokenLimit[](0);
     }
 
-    function _limit(address tkn, uint256 lim, uint40 period)
-        internal
-        pure
-        returns (SessionPolicy.TokenLimit[] memory limits)
-    {
-        limits = new SessionPolicy.TokenLimit[](1);
-        limits[0] = SessionPolicy.TokenLimit({token: tkn, limit: lim, period: period});
+    function _noScopes() internal pure returns (SessionPolicy.CallScope[] memory) {
+        return new SessionPolicy.CallScope[](0);
     }
 
     function _noRecipients() internal pure returns (address[] memory) {
         return new address[](0);
     }
 
-    function _anySelectorScope(address t) internal pure returns (SessionPolicy.CallScope memory) {
-        return SessionPolicy.CallScope({target: t, selectorRules: new SessionPolicy.SelectorRule[](0)});
+    function _addr1(address a) internal pure returns (address[] memory arr) {
+        arr = new address[](1);
+        arr[0] = a;
     }
 
-    /// @dev A single call scope on `tkn` allowing ERC-20 `transfer` with the given recipient allowlist.
-    function _erc20Scope(address tkn, address[] memory recipients)
+    function _tl(address tkn, uint256 lim, uint40 period, address[] memory recipients)
+        internal
+        pure
+        returns (SessionPolicy.TokenLimit memory)
+    {
+        return SessionPolicy.TokenLimit({token: tkn, limit: lim, period: period, recipients: recipients});
+    }
+
+    function _limit(address tkn, uint256 lim, uint40 period)
+        internal
+        pure
+        returns (SessionPolicy.TokenLimit[] memory limits)
+    {
+        limits = new SessionPolicy.TokenLimit[](1);
+        limits[0] = _tl(tkn, lim, period, _noRecipients());
+    }
+
+    function _limitTo(address tkn, uint256 lim, uint40 period, address[] memory recipients)
+        internal
+        pure
+        returns (SessionPolicy.TokenLimit[] memory limits)
+    {
+        limits = new SessionPolicy.TokenLimit[](1);
+        limits[0] = _tl(tkn, lim, period, recipients);
+    }
+
+    function _sel1(bytes4 a) internal pure returns (bytes4[] memory s) {
+        s = new bytes4[](1);
+        s[0] = a;
+    }
+
+    function _sel2(bytes4 a, bytes4 b) internal pure returns (bytes4[] memory s) {
+        s = new bytes4[](2);
+        s[0] = a;
+        s[1] = b;
+    }
+
+    function _anySelectorScope(address t) internal pure returns (SessionPolicy.CallScope memory) {
+        return SessionPolicy.CallScope({target: t, selectors: new bytes4[](0)});
+    }
+
+    function _scopeOne(address t, bytes4[] memory selectors) internal pure returns (SessionPolicy.CallScope memory) {
+        return SessionPolicy.CallScope({target: t, selectors: selectors});
+    }
+
+    function _scope(address t, bytes4[] memory selectors)
         internal
         pure
         returns (SessionPolicy.CallScope[] memory scopes)
     {
-        SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](1);
-        rules[0] = SessionPolicy.SelectorRule({selector: TRANSFER, recipients: recipients});
         scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = SessionPolicy.CallScope({target: tkn, selectorRules: rules});
+        scopes[0] = _scopeOne(t, selectors);
     }
 
     function _createAccountWithRootAndManager() internal returns (address) {
@@ -931,6 +961,7 @@ contract SessionPolicyHarness is SessionPolicy {
         pure
         returns (bool set, uint160 allowance, uint40 period)
     {
-        return _findTokenLimit(config, token);
+        (bool s, SessionPolicy.TokenLimit memory tl) = _findTokenLimit(config, token);
+        return (s, uint160(tl.limit), tl.period == 0 ? ONE_TIME_PERIOD : tl.period);
     }
 }

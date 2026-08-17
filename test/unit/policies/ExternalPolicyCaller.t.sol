@@ -232,8 +232,9 @@ contract ExternalPolicyCallerTest is KeystoreTest {
 
         // Nothing moved: the attack reverted, so the victim's shared spend counter and balances are untouched.
         assertEq(token.balanceOf(recipient), 0);
-        SessionPolicy.TokenLimit memory victimLimit =
-            SessionPolicy.TokenLimit({token: address(token), limit: 100e6, period: MONTH});
+        SessionPolicy.TokenLimit memory victimLimit = SessionPolicy.TokenLimit({
+            token: address(token), limit: 100e6, period: MONTH, recipients: new address[](0)
+        });
         assertEq(policy.getCurrentSpend(victimCommitment, victimLimit).spend, 0);
     }
 
@@ -264,16 +265,16 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         );
     }
 
-    /// @dev SessionPolicy config: `transfer` only on `token`, with a USDC-style recurring spend limit.
+    /// @dev SessionPolicy config: a Case-1 USDC-style recurring spend limit on `token` (the limit alone authorizes
+    ///      the tracked ERC-20 selectors, so no CallScope is needed).
     /// @dev `public` and invoked via `this._config(...)` from `_binding` so its nested-struct abi.encode stays in its
     ///      own stack frame; inlining it merges that frame into every test and trips a via_ir stack-too-deep.
     function _config(uint256 limit, uint40 period) public view returns (bytes memory) {
         SessionPolicy.TokenLimit[] memory limits = new SessionPolicy.TokenLimit[](1);
-        limits[0] = SessionPolicy.TokenLimit({token: address(token), limit: limit, period: period});
-        SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](1);
-        rules[0] = SessionPolicy.SelectorRule({selector: ExtMockERC20.transfer.selector, recipients: new address[](0)});
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = SessionPolicy.CallScope({target: address(token), selectorRules: rules});
+        limits[0] = SessionPolicy.TokenLimit({
+            token: address(token), limit: limit, period: period, recipients: new address[](0)
+        });
+        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](0);
         return abi.encode(SessionPolicy.Config({tokenLimits: limits, callScopes: scopes}));
     }
 

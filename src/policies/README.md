@@ -57,18 +57,30 @@ The manager validates exactly **one** binding per `execute` call, so authorizing
 selector **and** recipient **and** spend-limit": each `onExecute` validates config shape then scans the
 authenticated calldata config. Only mutable spend usage lives onchain.
 
-Recipient allowlists and spend-limit accounting require decoding a call's arguments, which is only possible for
-selectors whose ABI is known: `SessionPolicy` hardcodes the standard ERC-20 set (`transfer`, `transferFrom`,
-`approve`). A recipient allowlist may only be attached to one of those (enforced at execute); spend limits are
-consumed for those selectors on a limited token (`approve` included, so an allowance cannot exceed the remaining
-budget), native-ETH limits from each call's `value`, and every other selector is governed by target/selector gating
-alone. `anySelector` on a limited token is rejected at execute — pin an explicit selector allowlist instead.
+A **`TokenLimit` is the primary spend grant**: adding one for a token both caps it and, by itself, authorizes the
+key to move it via the three tracked ERC-20 selectors (`transfer`, `transferFrom`, `approve`). Access resolves per
+call:
+
+- **Case 1 — `TokenLimit` alone** (no `CallScope`): the key may call only those three selectors on the token, each
+  debited from the cap and gated by the limit's `recipients`. Nothing else on the token is callable.
+- **Case 2 — `TokenLimit` + a `CallScope` with an empty selector list** (`anySelector`): the key may call *any*
+  selector. The three tracked selectors stay debited/recipient-gated; every other selector is allowed but **not**
+  debited — an explicit opt-in to untracked, value-moving methods (`increaseAllowance`, ERC-4626 `withdraw`, …).
+- **Case 3 — `TokenLimit` + a `CallScope` with an explicit selector list**: exactly the listed selectors (tracked
+  ones still debited/recipient-gated). An explicit list *replaces* the Case-1 default.
+
+A `CallScope` on a target with **no** `TokenLimit` is a pure call allowlist (no spend semantics). Recipient gating
+lives on the `TokenLimit`: for an ERC-20 it gates the decoded destination of the tracked selectors (`to` for
+transfer/transferFrom, `spender` for approve — a deliberate merge); for native ETH (`token == address(0)`) it gates
+the call `target`. Native value fails closed (a call carrying `value` reverts unless a native `TokenLimit` is set).
+Recipient gating and spend accounting can only decode the hardcoded ERC-20 set, so `safeTransferFrom` and other
+value-moving methods are never tracked — reachable only via the Case-2 / Case-3 opt-in.
 
 #### Worked example
 
 Configure one session key that (1) has full, uncapped access to one ERC-20 (the "MyApp" token), (2) may spend at
 most **$5 of USDC per month**, and (3) may call the MyApp app contract as much as it wants, but only through two
-chosen selectors. Three call scopes + one spend limit:
+chosen selectors. One spend limit + two call scopes:
 
 ```solidity
 address MYAPP_TOKEN; // the "MyApp" ERC-20
@@ -77,25 +89,22 @@ address MYAPP;       // the MyApp app contract
 bytes4  selStake = MyApp.stake.selector;
 bytes4  selClaim = MyApp.claim.selector;
 
-// Spend limits: ONLY USDC ($5/month). MyApp token has no entry, so it is uncapped.
+// Spend limits: ONLY USDC ($5/month) — a Case-1 grant. The limit alone authorizes the three tracked ERC-20
+// selectors and caps every one of them, so the budget can't be sidestepped via approve/transferFrom. The MyApp
+// token has no entry, so it is uncapped.
 SessionPolicy.TokenLimit[] memory limits = new SessionPolicy.TokenLimit[](1);
-limits[0] = SessionPolicy.TokenLimit({token: USDC, limit: 5e6, period: 30 days});
+limits[0] = SessionPolicy.TokenLimit({token: USDC, limit: 5e6, period: 30 days, recipients: new address[](0)});
 
-SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](3);
+SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](2);
 
-// (a) MyApp token: full access — empty rules => any selector; no TokenLimit => no spend cap.
-scopes[0] = SessionPolicy.CallScope({target: MYAPP_TOKEN, selectorRules: new SessionPolicy.SelectorRule[](0)});
+// (a) MyApp token: full access — empty selector list => any selector; no TokenLimit => no spend cap.
+scopes[0] = SessionPolicy.CallScope({target: MYAPP_TOKEN, selectors: new bytes4[](0)});
 
-// (b) USDC: `transfer` only, so the $5/month cap can't be sidestepped by another selector.
-SessionPolicy.SelectorRule[] memory usdcRules = new SessionPolicy.SelectorRule[](1);
-usdcRules[0] = SessionPolicy.SelectorRule({selector: IERC20.transfer.selector, recipients: new address[](0)});
-scopes[1] = SessionPolicy.CallScope({target: USDC, selectorRules: usdcRules});
-
-// (c) MyApp contract: two chosen selectors, unlimited calls.
-SessionPolicy.SelectorRule[] memory appRules = new SessionPolicy.SelectorRule[](2);
-appRules[0] = SessionPolicy.SelectorRule({selector: selStake, recipients: new address[](0)});
-appRules[1] = SessionPolicy.SelectorRule({selector: selClaim, recipients: new address[](0)});
-scopes[2] = SessionPolicy.CallScope({target: MYAPP, selectorRules: appRules});
+// (b) MyApp contract: two chosen selectors, unlimited calls.
+bytes4[] memory appSelectors = new bytes4[](2);
+appSelectors[0] = selStake;
+appSelectors[1] = selClaim;
+scopes[1] = SessionPolicy.CallScope({target: MYAPP, selectors: appSelectors});
 
 bytes memory policyConfig = abi.encode(SessionPolicy.Config({tokenLimits: limits, callScopes: scopes}));
 ```
@@ -103,9 +112,10 @@ bytes memory policyConfig = abi.encode(SessionPolicy.Config({tokenLimits: limits
 With that authorized, the key may transfer any amount of the MyApp token, spend up to $5 of USDC per rolling month
 (refreshing the next month), and call `stake` / `claim` on MyApp without limit — while a USDC transfer over budget
 reverts `ExceededAllowance`, a third MyApp selector reverts `SelectorNotAllowed`, and any other contract reverts
-`TargetNotAllowed`. Two choices to note: modeling "full token access" as *any selector* also permits `approve` /
-`transferFrom` on that token (use a single `transfer` rule to restrict to transfers); and USDC is pinned to
-`transfer` precisely so the cap is airtight. End-to-end test:
+`TargetNotAllowed`. Two choices to note: the USDC cap needs no explicit `CallScope` — the `TokenLimit` alone grants
+and caps the three tracked selectors (add a Case-3 `CallScope` listing `[transfer]` if you also want to forbid
+`approve` / `transferFrom`); and modeling "full token access" as *any selector* also permits `approve` /
+`transferFrom` on the MyApp token. End-to-end test:
 [`test_workedExample_fullTokenAccess_monthlyUsdc_appSelectors`](../../../test/unit/policies/SessionPolicy.t.sol).
 
 ### External callers (subscriptions)

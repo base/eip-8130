@@ -76,33 +76,18 @@ contract SessionPolicyGasTest is KeystoreTest {
     }
 
     function test_gas_execute_selectorGating() public {
-        SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](1);
-        rules[0] =
-            SessionPolicy.SelectorRule({selector: SessionMockTarget.setValue.selector, recipients: _noRecipients()});
-        SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = SessionPolicy.CallScope({target: address(target), selectorRules: rules});
-        bytes32 actorId = _install(_config(_noLimits(), scopes));
+        bytes32 actorId =
+            _install(_config(_noLimits(), _selScope(address(target), SessionMockTarget.setValue.selector)));
 
         bytes memory ed = _action(address(target), 0, abi.encodeCall(SessionMockTarget.setValue, (7)));
         emit log_named_uint("execute: target + selector gating, cold", _measureCold(actorId, ed));
         emit log_named_uint("execute: target + selector gating, warm", _measure(actorId, ed));
     }
 
-    function test_gas_execute_recipientGating_noLimit() public {
-        address[] memory recipients = new address[](1);
-        recipients[0] = bob;
-        bytes32 actorId = _install(_config(_noLimits(), _erc20Scope(address(token), recipients)));
-
-        bytes memory ed = _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1e18)));
-        emit log_named_uint("execute: target + selector + recipient gating (no limit), cold", _measureCold(actorId, ed));
-        emit log_named_uint("execute: target + selector + recipient gating (no limit), warm", _measure(actorId, ed));
-    }
-
     // ── Execute: spend-limit accounting (the only path with an SSTORE on the happy path) ──
 
     function test_gas_execute_spendLimitOnly() public {
-        bytes32 actorId =
-            _install(_config(_limit(address(token), 500e18, WEEK), _erc20Scope(address(token), _noRecipients())));
+        bytes32 actorId = _install(_config(_limit(address(token), 500e18, WEEK), _noScopes()));
 
         // Cold: first spend allocates the period-usage slot (zero -> non-zero SSTORE).
         bytes memory ed = _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1e18)));
@@ -112,10 +97,7 @@ contract SessionPolicyGasTest is KeystoreTest {
     }
 
     function test_gas_execute_spendLimit_plus_recipientGating() public {
-        address[] memory recipients = new address[](1);
-        recipients[0] = bob;
-        bytes32 actorId =
-            _install(_config(_limit(address(token), 500e18, WEEK), _erc20Scope(address(token), recipients)));
+        bytes32 actorId = _install(_config(_limitTo(address(token), 500e18, WEEK, _addr1(bob)), _noScopes()));
 
         bytes memory ed = _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1e18)));
         emit log_named_uint("execute: spend limit + recipient gating, cold", _measureCold(actorId, ed));
@@ -156,13 +138,7 @@ contract SessionPolicyGasTest is KeystoreTest {
         }
         {
             SessionMockTarget t = new SessionMockTarget();
-            SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](1);
-            rules[0] = SessionPolicy.SelectorRule({
-                selector: SessionMockTarget.setValue.selector, recipients: _noRecipients()
-            });
-            SessionPolicy.CallScope[] memory scopes = new SessionPolicy.CallScope[](1);
-            scopes[0] = SessionPolicy.CallScope({target: address(t), selectorRules: rules});
-            bytes32 a = _install(_config(_noLimits(), scopes));
+            bytes32 a = _install(_config(_noLimits(), _selScope(address(t), SessionMockTarget.setValue.selector)));
             _row(
                 "target + selector gating            ",
                 a,
@@ -170,19 +146,8 @@ contract SessionPolicyGasTest is KeystoreTest {
             );
         }
         {
-            address[] memory recipients = new address[](1);
-            recipients[0] = bob;
             SessionMockERC20 tk = _freshToken();
-            bytes32 a = _install(_config(_noLimits(), _erc20Scope(address(tk), recipients)));
-            _row(
-                "target + selector + recipient       ",
-                a,
-                _action(address(tk), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1e18)))
-            );
-        }
-        {
-            SessionMockERC20 tk = _freshToken();
-            bytes32 a = _install(_config(_limit(address(tk), 500e18, WEEK), _erc20Scope(address(tk), _noRecipients())));
+            bytes32 a = _install(_config(_limit(address(tk), 500e18, WEEK), _noScopes()));
             _row(
                 "spend limit only (transfer)         ",
                 a,
@@ -190,10 +155,8 @@ contract SessionPolicyGasTest is KeystoreTest {
             );
         }
         {
-            address[] memory recipients = new address[](1);
-            recipients[0] = bob;
             SessionMockERC20 tk = _freshToken();
-            bytes32 a = _install(_config(_limit(address(tk), 500e18, WEEK), _erc20Scope(address(tk), recipients)));
+            bytes32 a = _install(_config(_limitTo(address(tk), 500e18, WEEK, _addr1(bob)), _noScopes()));
             _row(
                 "spend limit + recipient gating      ",
                 a,
@@ -301,32 +264,46 @@ contract SessionPolicyGasTest is KeystoreTest {
         return new SessionPolicy.TokenLimit[](0);
     }
 
+    function _noScopes() internal pure returns (SessionPolicy.CallScope[] memory) {
+        return new SessionPolicy.CallScope[](0);
+    }
+
     function _limit(address tkn, uint256 lim, uint40 period)
         internal
         pure
         returns (SessionPolicy.TokenLimit[] memory limits)
     {
         limits = new SessionPolicy.TokenLimit[](1);
-        limits[0] = SessionPolicy.TokenLimit({token: tkn, limit: lim, period: period});
+        limits[0] = SessionPolicy.TokenLimit({token: tkn, limit: lim, period: period, recipients: _noRecipients()});
+    }
+
+    function _limitTo(address tkn, uint256 lim, uint40 period, address[] memory recipients)
+        internal
+        pure
+        returns (SessionPolicy.TokenLimit[] memory limits)
+    {
+        limits = new SessionPolicy.TokenLimit[](1);
+        limits[0] = SessionPolicy.TokenLimit({token: tkn, limit: lim, period: period, recipients: recipients});
     }
 
     function _noRecipients() internal pure returns (address[] memory) {
         return new address[](0);
     }
 
-    function _anySelectorScope(address t) internal pure returns (SessionPolicy.CallScope memory) {
-        return SessionPolicy.CallScope({target: t, selectorRules: new SessionPolicy.SelectorRule[](0)});
+    function _addr1(address a) internal pure returns (address[] memory arr) {
+        arr = new address[](1);
+        arr[0] = a;
     }
 
-    function _erc20Scope(address tkn, address[] memory recipients)
-        internal
-        pure
-        returns (SessionPolicy.CallScope[] memory scopes)
-    {
-        SessionPolicy.SelectorRule[] memory rules = new SessionPolicy.SelectorRule[](1);
-        rules[0] = SessionPolicy.SelectorRule({selector: TRANSFER, recipients: recipients});
+    function _anySelectorScope(address t) internal pure returns (SessionPolicy.CallScope memory) {
+        return SessionPolicy.CallScope({target: t, selectors: new bytes4[](0)});
+    }
+
+    function _selScope(address t, bytes4 sel) internal pure returns (SessionPolicy.CallScope[] memory scopes) {
+        bytes4[] memory s = new bytes4[](1);
+        s[0] = sel;
         scopes = new SessionPolicy.CallScope[](1);
-        scopes[0] = SessionPolicy.CallScope({target: tkn, selectorRules: rules});
+        scopes[0] = SessionPolicy.CallScope({target: t, selectors: s});
     }
 
     function _createAccountWithRootAndManager() internal returns (address) {
