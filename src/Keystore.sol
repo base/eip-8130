@@ -249,6 +249,19 @@ contract Keystore {
     /// @param actorId The revoked actor's identifier.
     event ActorRevoked(address indexed account, bytes32 indexed actorId);
 
+    /// @notice Emitted when an unsequenced (JIT) AuthorizeActor change is skipped because its grant is already
+    ///         expired, so no write is made.
+    ///
+    /// @dev A JIT batch consumes no sequence counter and stays replayable, so an already-expired grant is skipped
+    ///      rather than written — preventing a lapsed replay from clobbering a since-renewed slot. The skip is
+    ///      per-change: live siblings in the same batch still apply. Sequenced batches never skip (they install an
+    ///      expired grant inert instead), so they never emit this.
+    ///
+    /// @param account The account the change targeted.
+    /// @param actorId The actor whose already-expired grant was skipped.
+    /// @param expiry The skipped grant's expiry timestamp.
+    event ExpiredActorChangeSkipped(address indexed account, bytes32 indexed actorId, uint48 expiry);
+
     /// @notice Emitted when a new account is created.
     ///
     /// @param account The created account address.
@@ -689,9 +702,9 @@ contract Keystore {
     ///      acceptance check — but it does change what the write does, per channel:
     ///
     ///      For an already-expired grant (non-zero `cfg.expiry <= block.timestamp`):
-    ///      - Unsequenced (JIT, `isUnsequenced`): SKIPPED (no write). A JIT batch consumes no counter and stays
-    ///        replayable, so writing a lapsed grant would let an old replay clobber a since-renewed lease. Skip is
-    ///        per-change, so live siblings in the same batch still apply.
+    ///      - Unsequenced (JIT, `isUnsequenced`): SKIPPED (no write; emits {ExpiredActorChangeSkipped}). A JIT batch
+    ///        consumes no counter and stays replayable, so writing a lapsed grant would let an old replay clobber a
+    ///        since-renewed lease. Skip is per-change, so live siblings in the same batch still apply.
     ///      - Sequenced (local or multichain): written anyway but INERT — it authenticates as ActorExpired ({_isExpired})
     ///        so it grants no authority. Sequenced batches are single-consume (not replayable), so there is no clobber
     ///        risk; the write is still made so replayed history stays consistent (a later RevokeActor finds the slot) and
@@ -710,6 +723,7 @@ contract Keystore {
         // (which folds in the zero = no-expiry sentinel) so the expiry boundary matches authentication exactly: a grant
         // with `expiry == block.timestamp` is still live for that second and installs, rather than being dropped here.
         if (isUnsequenced && _isExpired(cfg.expiry)) {
+            emit ExpiredActorChangeSkipped(account, actorId, cfg.expiry);
             return;
         }
 

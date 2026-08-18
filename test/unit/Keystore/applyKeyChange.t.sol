@@ -130,11 +130,10 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
 
         // No revert despite the already-expired grant. Use a strictly-past expiry: an actor is expired only once
         // block.timestamp > expiry (see {_isExpired}), so `expiry == now` is still live and would install.
-        _applyUnsequenced(
-            pk,
-            account,
-            _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, uint48(block.timestamp - 1), ""))
-        );
+        uint48 expiry = uint48(block.timestamp - 1);
+        vm.expectEmit(true, true, false, true, address(keystore));
+        emit Keystore.ExpiredActorChangeSkipped(account, ACTOR_A, expiry);
+        _applyUnsequenced(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, expiry, "")));
 
         // Skipped, not installed inert: the slot was never written, so an explicit revoke finds nothing.
         assertFalse(_isActor(account, ACTOR_A));
@@ -149,10 +148,14 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
 
+        uint48 expiredAt = uint48(block.timestamp - 1);
         Keystore.AccountChange[] memory changes = new Keystore.AccountChange[](2);
-        changes[0] = _authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, uint48(block.timestamp - 1), ""); // expired
+        changes[0] = _authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, expiredAt, ""); // expired
         changes[1] = _authorizeChange(ACTOR_B, address(k1Authenticator), SENDER, _future(1 days), ""); // live
 
+        // Only the expired change emits the skip event (per-change, not whole-batch).
+        vm.expectEmit(true, true, false, true, address(keystore));
+        emit Keystore.ExpiredActorChangeSkipped(account, ACTOR_A, expiredAt);
         _applyUnsequenced(pk, account, changes);
 
         assertFalse(_isActor(account, ACTOR_A)); // expired -> skipped
