@@ -19,21 +19,21 @@ address constant CREATE2_FACTORY = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
 
 bytes32 constant DEFAULT_SALT = bytes32(0);
 
-/// @dev Keystore: 0x8130...00ac (hash entropy: 335384035)
+/// @dev Keystore: 0x8130...00ac
 bytes32 constant KEYSTORE_SALT = 0x45bad482b56864e546f102ee290204d998c71cc33cfcfa09af9505dfe6c8f85d;
-/// @dev DefaultAccount: 0x8130...adef (hash entropy: 582861055)
+/// @dev DefaultAccount: 0x8130...adef
 bytes32 constant DEFAULT_ACCOUNT_SALT = 0x0000000000000000000000000000000000000000000000000000000022bdc0ff;
-/// @dev CanonicalHighRatePayerAccount: 0x8130...fa57 (hash entropy: 2674469126)
+/// @dev CanonicalHighRatePayerAccount: 0x8130...fa57
 bytes32 constant HIGH_RATE_PAYER_SALT = 0x000000000000000000000000000000000000000000000000000000009f692906;
-/// @dev P256Authenticator: 0x8130...a256 (hash entropy: 5389279355)
+/// @dev P256Authenticator: 0x8130...a256
 bytes32 constant P256_SALT = 0x000000000000000000000000000000000000000000000000000000014139e07b;
-/// @dev WebAuthnAuthenticator: 0x8130...f1d0 (hash entropy: 5884909220)
+/// @dev WebAuthnAuthenticator: 0x8130...f1d0
 bytes32 constant WEBAUTHN_SALT = 0x000000000000000000000000000000000000000000000000000000015ec496a4;
-/// @dev DelegateAuthenticator: 0x8130...ade1 (hash entropy: 1601941761)
+/// @dev DelegateAuthenticator: 0x8130...ade1
 bytes32 constant DELEGATE_SALT = 0x000000000000000000000000000000000000000000000000000000005f7bb101;
-/// @dev PolicyManager: 0x8130...0ac1 (hash entropy: 5079503282)
+/// @dev PolicyManager: 0x8130...0ac1
 bytes32 constant POLICY_MANAGER_SALT = 0x000000000000000000000000000000000000000000000000000000012ec311b2;
-/// @dev SessionPolicy: 0x8130...5e55 (hash entropy: 3851510261)
+/// @dev SessionPolicy: 0x8130...5e55
 bytes32 constant SESSION_POLICY_SALT = 0x00000000000000000000000000000000000000000000000000000000e59161f5;
 
 /// @notice Deploys the full EIP-8130 system: Keystore, account implementations, canonical
