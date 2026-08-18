@@ -96,14 +96,19 @@ contract SessionPolicy is Policy {
 
     /// @notice The full committed configuration for a binding.
     struct Config {
+        /// @dev Per-token (and native-ETH) spend caps, and the primary spend grant for each token.
         TokenLimit[] tokenLimits;
+        /// @dev Allowed call targets and their selectors.
         CallScope[] callScopes;
     }
 
     /// @notice Per-use action: a single call the session key wants the account to make.
     struct Action {
+        /// @dev Target contract the account will call.
         address target;
+        /// @dev Wei forwarded with the call.
         uint256 value;
+        /// @dev Calldata for the call (empty = plain value transfer).
         bytes data;
     }
 
@@ -126,37 +131,49 @@ contract SessionPolicy is Policy {
     ///         bare value transfer was attempted against a {TokenLimit}-only target (which permits only the three
     ///         spend selectors, not a plain `receive()`).
     error TargetNotAllowed(address target);
+
     /// @notice `selector` is not permitted on `target` (a {TokenLimit}-only target permits only the tracked ERC-20
     ///         selectors; an explicit {CallScope} permits only its listed selectors).
     error SelectorNotAllowed(address target, bytes4 selector);
+
     /// @notice `recipient` (decoded ERC-20 destination, or the call `target` for native) is not in the asset's
     ///         committed recipient allowlist.
     error RecipientNotAllowed(address target, bytes4 selector, address recipient);
+
     /// @notice The action carried 1–3 bytes of calldata: too short to hold a 4-byte selector, so it is rejected rather
     ///         than guessed.
     error MissingSelector();
+
     /// @notice A configured spend `limit` exceeds uint160 and cannot be stored in the normalized allowance field.
     error LimitTooLarge(address token, uint256 limit);
+
     /// @notice A configured spend limit was zero, which would be a no-op cap; reject to fail closed.
     error ZeroLimit(address token);
+
     /// @notice The action carried native `value` but the config pins no native-ETH limit (`token == address(0)`).
     ///         Native value fails closed: unlike an ERC-20 (which requires calling an allowlisted token contract to
     ///         move), value rides on any call to any allowlisted target, so an absent native limit is treated as "no
     ///         ETH", not "unlimited ETH". To permit ETH, add a native {TokenLimit} with a positive cap.
     error NativeValueNotAllowed(uint256 value);
+
     /// @notice A supported ERC-20 call's calldata was too short to decode its (recipient, amount) arguments.
     error MalformedTokenCall(bytes4 selector);
+
     /// @notice A call scope targeted the account itself. The account is always an authorized caller of its own
     ///         `executeBatch`, so allowing a session key to call it would let the key re-enter with an arbitrary
     ///         batch that bypasses every policy check. Reject to fail closed.
     error SelfTargetNotAllowed();
+
     /// @notice A `transferFrom` moved funds from an address other than the account. A session key may only spend the
     ///         account's own resources, not third-party allowances the account happens to hold.
     error TransferFromNotSelf(address from);
+
     /// @notice Duplicate `TokenLimit.token` in the committed config (would silently widen / ambiguate grants).
     error DuplicateTokenLimit(address token);
+
     /// @notice Duplicate `CallScope.target` in the committed config.
     error DuplicateCallScope(address target);
+
     /// @notice Duplicate selector within a single call scope.
     error DuplicateSelector(address target, bytes4 selector);
 
@@ -304,6 +321,14 @@ contract SessionPolicy is Policy {
     /// @dev Validates config, enforces every configured dimension against a single decoded {Action} by linear scan,
     ///      then returns the account call plan (and empty postCallData). The manager has already authenticated
     ///      `policyConfig` via the binding commitment.
+    ///
+    /// @param commitment    Binding commitment authorizing this execution.
+    /// @param account       Account the plan will execute against.
+    /// @param policyConfig  ABI-encoded {Config} committed by the account.
+    /// @param executionData ABI-encoded {Action} for this call.
+    ///
+    /// @return accountCallData ABI-encoded {DefaultAccount.executeBatch} plan for the single action.
+    /// @return postCallData    Always empty (no post-call hook).
     function _onExecute(
         bytes32 commitment,
         address account,
@@ -374,8 +399,17 @@ contract SessionPolicy is Policy {
 
     // ── Internal helpers ──
 
-    /// @dev Validates the committed {Config}. Rejects zero/oversized limits, self-targets, and duplicates (token /
-    ///      target / selector).
+    /// @dev Validates the committed {Config} shape and rejects duplicates.
+    ///
+    /// @dev Reverts with ZeroLimit when a token limit is zero.
+    /// @dev Reverts with LimitTooLarge when a token limit exceeds uint160.
+    /// @dev Reverts with DuplicateTokenLimit when a token appears twice in `tokenLimits`.
+    /// @dev Reverts with DuplicateCallScope when a target appears twice in `callScopes`.
+    /// @dev Reverts with SelfTargetNotAllowed when a call scope targets `account`.
+    /// @dev Reverts with DuplicateSelector when a selector appears twice within a call scope.
+    ///
+    /// @param account Account the config is validated against (used for the self-target check).
+    /// @param config  Committed policy configuration to validate.
     function _validateConfig(address account, Config memory config) internal pure {
         for (uint256 i; i < config.tokenLimits.length; i++) {
             TokenLimit memory tl = config.tokenLimits[i];
@@ -405,7 +439,8 @@ contract SessionPolicy is Policy {
         }
     }
 
-    /// @dev Consume `amount` against a token's cap. Skips zero amounts (the library rejects zero-value spends).
+    /// @dev Consumes `amount` against a token's cap; skips zero amounts. Reverts with ExceededAllowance when the
+    ///      cumulative period spend exceeds the cap.
     function _consume(bytes32 commitment, address token, uint160 allowance, uint40 period, uint256 amount) internal {
         if (amount == 0) return;
         _usage.useLimit(
@@ -425,6 +460,8 @@ contract SessionPolicy is Policy {
         return limit.period == 0 ? ONE_TIME_PERIOD : limit.period;
     }
 
+    /// @dev Finds the {TokenLimit} for `token`, reporting whether one is set. Reverts with LimitTooLarge if its limit
+    ///      exceeds uint160 (defensive; {_validateConfig} already rejects it).
     function _findTokenLimit(Config memory config, address token)
         internal
         pure
@@ -442,6 +479,8 @@ contract SessionPolicy is Policy {
         return (false, limit);
     }
 
+    /// @dev Finds the {CallScope} for `target`, reporting whether it was found and whether it pins no selectors
+    ///      (anySelector).
     function _findScope(Config memory config, address target)
         internal
         pure
@@ -456,6 +495,7 @@ contract SessionPolicy is Policy {
         return (false, false, scope);
     }
 
+    /// @dev True if `selector` is listed in `scope`.
     function _selectorIn(CallScope memory scope, bytes4 selector) internal pure returns (bool) {
         for (uint256 j; j < scope.selectors.length; j++) {
             if (scope.selectors[j] == selector) return true;
@@ -463,6 +503,7 @@ contract SessionPolicy is Policy {
         return false;
     }
 
+    /// @dev True if `recipient` is in `recipients`.
     function _recipientIn(address[] memory recipients, address recipient) internal pure returns (bool) {
         for (uint256 i; i < recipients.length; i++) {
             if (recipients[i] == recipient) return true;
@@ -475,16 +516,16 @@ contract SessionPolicy is Policy {
         return selector == TRANSFER || selector == TRANSFER_FROM || selector == APPROVE;
     }
 
-    /// @dev Reads the leading 4-byte selector from `data` (caller guarantees `data.length >= 4`). Masks to a clean
-    ///      bytes4 so dirty low bytes cannot survive into equality comparisons.
+    /// @dev Reads the leading 4-byte selector from `data` (caller guarantees length >= 4), masked to a clean bytes4
+    ///      so dirty low bytes cannot survive into equality comparisons.
     function _selectorOf(bytes memory data) internal pure returns (bytes4 selector) {
         assembly ("memory-safe") {
             selector := and(mload(add(data, 0x20)), shl(224, 0xffffffff))
         }
     }
 
-    /// @dev Decode (recipient, amount) for the supported ERC-20 selectors. `recipient` is `to` for transfer /
-    ///      transferFrom and `spender` for approve.
+    /// @dev Decodes (recipient, amount) from a supported ERC-20 call (`recipient` is `to`, or `spender` for approve).
+    ///      Reverts with MalformedTokenCall when the calldata is too short.
     function _decodeErc20(bytes4 selector, bytes memory data)
         internal
         pure
@@ -510,7 +551,8 @@ contract SessionPolicy is Policy {
         recipient = address(uint160(recipientWord));
     }
 
-    /// @dev Decode the `from` (source) address of a `transferFrom(address from, address to, uint256 amount)` call.
+    /// @dev Decodes the `from` (source) address of a `transferFrom` call. Reverts with MalformedTokenCall when the
+    ///      calldata is too short.
     function _decodeTransferFromSender(bytes memory data) internal pure returns (address from) {
         if (data.length < 4 + 96) revert MalformedTokenCall(TRANSFER_FROM);
         uint256 fromWord;
