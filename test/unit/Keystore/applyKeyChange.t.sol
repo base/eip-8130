@@ -7,8 +7,9 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice §10 test matrix for the authority / environment ops driven through {applySignedAccountChanges}:
 ///         AuthorizeActor (sequenced + unsequenced), RevokeActor, IncrementLocalEpoch, the op-ordering fence,
-///         and the sequenced-channel replay/saturation edges. Lock/unlock (admin-only),
-///         and multichain regression live in applyAccountChange.t.sol.
+///         and the sequenced-channel replay/saturation edges. STRAWMAN (pre-PPS): the account-wide lock is gone;
+///         actor changes are never frozen and front-run safety is the per-actor revoke delay. Multichain regression
+///         lives in applyAccountChange.t.sol.
 contract ApplySignedAccountChangesTest is KeystoreTest {
     // Non-self, non-owner actor ids: small distinct constants that never collide with a real (address-derived) actorId
     // used in these tests.
@@ -45,7 +46,7 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, ACTOR_A);
         assertEq(cfg.authenticator, address(k1Authenticator));
         assertEq(cfg.scope, SENDER);
-        assertEq(cfg.expiry, _future(1 days));
+        assertEq(cfg.revokeDelayOrExpiry, _future(1 days));
         // Unsequenced batches never consume the counter.
         assertEq(_localSeqWord(account), seqBefore);
     }
@@ -68,7 +69,7 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
 
         Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, ACTOR_A);
         assertEq(cfg.scope, SENDER);
-        assertEq(cfg.expiry, expiry);
+        assertEq(cfg.revokeDelayOrExpiry, expiry);
     }
 
     /// @notice A stale unsequenced (JIT) grant cannot clobber a renewed slot: once its granted expiry has passed the
@@ -88,7 +89,7 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
             _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, shortExpiry, ""))
         );
         keystore.applySignedAccountChanges(account, oldLease);
-        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, shortExpiry);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).revokeDelayOrExpiry, shortExpiry);
 
         // Lease lapses, then the actor is renewed with a longer expiry (epoch unchanged).
         vm.warp(uint256(shortExpiry) + 1);
@@ -96,11 +97,11 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         _applyUnsequenced(
             pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, longExpiry, ""))
         );
-        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, longExpiry);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).revokeDelayOrExpiry, longExpiry);
 
         // Replaying the now-expired old lease is skipped: no revert, and the renewal is untouched.
         keystore.applySignedAccountChanges(account, oldLease);
-        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, longExpiry);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).revokeDelayOrExpiry, longExpiry);
     }
 
     /// @notice An unsequenced batch signed at a stale epoch reverts StaleEpoch.
@@ -173,13 +174,18 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         assertEq(keystore.getActorConfig(account, ACTOR_A).authenticator, address(k1Authenticator));
     }
 
-    /// @notice An unsequenced grant may request the unbounded (max) expiry.
+    /// @notice STRAWMAN (pre-PPS): a pre-scheduled (pendingRevoke) unsequenced grant may request the unbounded (max)
+    ///         absolute expiry.
     function test_authorizeUnsequenced_success_unboundedExpiry(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
 
-        _applyUnsequenced(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, UNBOUNDED, "")));
-        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, UNBOUNDED);
+        _applyUnsequenced(
+            pk, account, _one(_authorizeChangeRaw(ACTOR_A, address(k1Authenticator), SENDER, UNBOUNDED, true, ""))
+        );
+        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, ACTOR_A);
+        assertEq(cfg.revokeDelayOrExpiry, UNBOUNDED);
+        assertTrue(cfg.pendingRevoke);
     }
 
     /// @notice A grant may use expiry 0, the "no expiry" sentinel: it lands and never lapses.
@@ -188,7 +194,7 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         (address account,) = _createK1Account(pk);
 
         _applyUnsequenced(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, 0, "")));
-        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, 0);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).revokeDelayOrExpiry, 0);
 
         // Never lapses: still authorized far in the future.
         vm.warp(block.timestamp + 3650 days);
@@ -208,7 +214,7 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
             pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), NONCE, _future(2 days), ""))
         );
         assertEq(keystore.getActorConfig(account, ACTOR_A).scope, NONCE);
-        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, _future(2 days));
+        assertEq(keystore.getActorConfig(account, ACTOR_A).revokeDelayOrExpiry, _future(2 days));
     }
 
     /// @notice Unsequenced upserts are last-write-wins: the final applied grant's expiry stands, regardless of order.
@@ -221,13 +227,13 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         (address accA,) = _createK1Account(pk);
         _applyUnsequenced(pk, accA, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, t1, "")));
         _applyUnsequenced(pk, accA, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, t2, "")));
-        assertEq(keystore.getActorConfig(accA, ACTOR_A).expiry, t2);
+        assertEq(keystore.getActorConfig(accA, ACTOR_A).revokeDelayOrExpiry, t2);
 
         // Order (T2, T1): ends at T1 (last write wins; a shorter expiry is allowed).
         (address accB,) = _createK1AccountWithSalt(pk, bytes32(uint256(1)));
         _applyUnsequenced(pk, accB, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, t2, "")));
         _applyUnsequenced(pk, accB, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, t1, "")));
-        assertEq(keystore.getActorConfig(accB, ACTOR_A).expiry, t1);
+        assertEq(keystore.getActorConfig(accB, ACTOR_A).revokeDelayOrExpiry, t1);
     }
 
     /// @notice A different authenticator under the same actorId is not possible (id derives from the authenticator);
@@ -290,7 +296,7 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         uint48 e2 = _future(1 days);
         _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, e2, "")));
         assertTrue(_isActor(account, ACTOR_A));
-        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, e2);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).revokeDelayOrExpiry, e2);
     }
 
     /// @notice A sequenced scope widen (adding grant bits) is bump-free.
@@ -312,7 +318,7 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
 
         uint48 higher = _future(5 days);
         _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, higher, "")));
-        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, higher);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).revokeDelayOrExpiry, higher);
     }
 
     /// @notice A sequenced expiry lowering lands on its own (reduction is not contract-enforced to bump).
@@ -323,7 +329,7 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
 
         uint48 lower = _future(1 days);
         _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, lower, "")));
-        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, lower);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).revokeDelayOrExpiry, lower);
     }
 
     /// @notice A sequenced scope narrowing lands on its own (reduction is not contract-enforced to bump).
@@ -349,48 +355,168 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         ch[1] = _bumpChange();
         _applyLocal(pk, account, ch);
 
-        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, lower);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).revokeDelayOrExpiry, lower);
         (uint32 epoch,) = _localEpochSeq(account);
         assertEq(epoch, 1);
+    }
+
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+    // KEY ROTATION WITHOUT AN ACCOUNT-WIDE LOCK (STRAWMAN, pre-PPS)
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+
+    /// @notice The headline scenario (e.g. an x402 facilitator): a high-throughput account adds a new signing key and
+    ///         retires an old one in one batch, with no lock/unlock dance. The retiring key stays live through its
+    ///         revoke delay so its in-flight signatures still settle, while the freshly added key is immediately usable
+    ///         and other keys are untouched.
+    function test_rotation_success_addNewAndRetireOldNoLock(uint256 ownerSeed, uint256 keyASeed, uint256 keyBSeed)
+        public
+    {
+        uint256 ownerPk = _boundK1Pk(ownerSeed);
+        uint256 keyAPk = _boundK1Pk(keyASeed);
+        uint256 keyBPk = _boundK1Pk(keyBSeed);
+        vm.assume(ownerPk != keyAPk && ownerPk != keyBPk && keyAPk != keyBPk);
+        (address account,) = _createK1Account(ownerPk);
+
+        bytes32 keyAId = bytes32(uint256(uint160(vm.addr(keyAPk))));
+        bytes32 keyBId = bytes32(uint256(uint160(vm.addr(keyBPk))));
+        uint48 delay = 1 days;
+        bytes32 hash = keccak256("settle payment");
+
+        // Old key A is live with a revoke delay.
+        _applyLocal(
+            ownerPk, account, _one(_authorizeChangeWithDelay(keyAId, address(k1Authenticator), SENDER, delay, ""))
+        );
+
+        // One batch, no lock: add new key B (immediately usable) AND initiate retirement of key A.
+        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
+        ch[0] = _authorizeChangeWithDelay(keyBId, address(k1Authenticator), SENDER, delay, "");
+        ch[1] = _revokeChange(keyAId);
+        _applyLocal(ownerPk, account, ch);
+
+        // Key B is immediately authorized.
+        (bytes32 idB,) = keystore.authenticateActor(account, hash, _buildK1Auth(keyBPk, hash));
+        assertEq(idB, keyBId);
+
+        // Key A is still live during its revoke window, so an in-flight signature still settles.
+        (bytes32 idA,) = keystore.authenticateActor(account, hash, _buildK1Auth(keyAPk, hash));
+        assertEq(idA, keyAId);
+
+        // After the window, key A has lapsed but key B keeps working — no throughput lost during the rotation.
+        vm.warp(block.timestamp + delay + 1);
+        assertFalse(_isActor(account, keyAId));
+        assertTrue(_isActor(account, keyBId));
+    }
+
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+
+    /// @notice A live actor (pendingRevoke == false) may carry any revoke delay up to MAX_REVOKE_DELAY.
+    function test_authorize_success_liveActorAtMaxRevokeDelay(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        uint48 maxDelay = keystore.MAX_REVOKE_DELAY();
+
+        _applyLocal(
+            pk, account, _one(_authorizeChangeWithDelay(ACTOR_A, address(k1Authenticator), SENDER, maxDelay, ""))
+        );
+        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, ACTOR_A);
+        assertFalse(cfg.pendingRevoke);
+        assertEq(cfg.revokeDelayOrExpiry, maxDelay);
+        assertTrue(_isActor(account, ACTOR_A)); // live regardless of the delay value
+    }
+
+    /// @notice A live actor whose revoke delay exceeds MAX_REVOKE_DELAY reverts RevokeDelayTooLong, so an admin cannot
+    ///         mint an effectively-unremovable actor.
+    function test_authorize_revert_revokeDelayTooLong(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        uint48 tooLong = keystore.MAX_REVOKE_DELAY() + 1;
+
+        Keystore.SignedAccountChanges memory s = _localBatch(
+            pk, account, _one(_authorizeChangeWithDelay(ACTOR_A, address(k1Authenticator), SENDER, tooLong, ""))
+        );
+        vm.expectRevert(Keystore.RevokeDelayTooLong.selector);
+        keystore.applySignedAccountChanges(account, s);
+    }
+
+    /// @notice The ceiling applies only to the delay interpretation: a pre-scheduled (pendingRevoke) grant may set an
+    ///         absolute expiry far beyond MAX_REVOKE_DELAY, since that field is an expiry, not a delay.
+    function test_authorize_success_pendingRevokeExpiryExceedsCeiling(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        uint48 farExpiry = uint48(block.timestamp) + keystore.MAX_REVOKE_DELAY() + 365 days;
+
+        _applyLocal(
+            pk, account, _one(_authorizeChangeRaw(ACTOR_A, address(k1Authenticator), SENDER, farExpiry, true, ""))
+        );
+        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, ACTOR_A);
+        assertTrue(cfg.pendingRevoke);
+        assertEq(cfg.revokeDelayOrExpiry, farExpiry);
+        assertTrue(_isActor(account, ACTOR_A));
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // REVOKE
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice A bare revoke of a live actor lands and clears the slot (reduction is not contract-enforced to bump).
-    function test_revoke_success_bareRevokeOfLiveActor(uint256 pk) public {
+    /// @notice STRAWMAN (pre-PPS): a revoke of a live actor is two-step. It keeps the actor live for its configured
+    ///         revoke delay (converting the delay to an absolute expiry), then the actor lapses. This is the per-actor
+    ///         front-run window that replaces the account-wide lock: an in-flight signature still settles inside it.
+    function test_revoke_success_twoStepSchedulesExpiry(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
+        uint48 delay = 1 days;
+        _applyLocal(pk, account, _one(_authorizeChangeWithDelay(ACTOR_A, address(k1Authenticator), SENDER, delay, "")));
 
+        uint256 t0 = block.timestamp;
         _applyLocal(pk, account, _one(_revokeChange(ACTOR_A)));
+
+        // Still live during the delay window; its config now reads as pending-revoke with the scheduled expiry.
+        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, ACTOR_A);
+        assertTrue(cfg.pendingRevoke);
+        assertEq(cfg.revokeDelayOrExpiry, uint48(t0 + delay));
+        assertTrue(_isActor(account, ACTOR_A));
+
+        vm.warp(t0 + delay + 1);
         assertFalse(_isActor(account, ACTOR_A));
     }
 
+    /// @notice Re-revoking an actor whose two-step revocation is already pending reverts AlreadyRevoking — a second
+    ///         initiation would only push the expiry further out, weakening the guarantee.
+    function test_revoke_revert_alreadyRevoking(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+        _applyLocal(pk, account, _one(_authorizeChangeWithDelay(ACTOR_A, address(k1Authenticator), SENDER, 1 days, "")));
+        _applyLocal(pk, account, _one(_revokeChange(ACTOR_A)));
+
+        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, _one(_revokeChange(ACTOR_A)));
+        vm.expectRevert(Keystore.AlreadyRevoking.selector);
+        keystore.applySignedAccountChanges(account, s);
+    }
+
     /// @notice Documents the accepted footgun: a bare revoke is NOT durable while a replayable unsequenced grant for
-    ///         the same actor is outstanding — replaying it re-installs the actor into the emptied slot. Durable
-    ///         teardown requires an IncrementLocalEpoch (see test_revoke_success_revokeBumpThenReplayFails).
+    ///         the same actor is outstanding — replaying it re-installs a fresh live actor over the pending-revoke one.
+    ///         Durable teardown requires an IncrementLocalEpoch (see test_revoke_success_revokeBumpThenReplayFails).
     function test_revoke_bareRevokeNotDurable_replayReinstalls(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
 
-        // An outstanding unsequenced grant for ACTOR_A, captured before it first lands.
+        // An outstanding unsequenced grant for a live ACTOR_A (zero revoke delay), captured before it first lands.
         Keystore.SignedAccountChanges memory grant = _signBatch(
             pk,
             account,
             Keystore.AccountChangeChannel.Local,
             _unseqWord(account),
-            _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
+            _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, UNBOUNDED, ""))
         );
         keystore.applySignedAccountChanges(account, grant);
         assertTrue(_isActor(account, ACTOR_A));
 
-        // Bare revoke lands...
+        // Bare revoke lands (delay 0 → expiry now); step past it so the actor lapses.
         _applyLocal(pk, account, _one(_revokeChange(ACTOR_A)));
+        vm.warp(block.timestamp + 1);
         assertFalse(_isActor(account, ACTOR_A));
 
-        // ...but the epoch never moved, so the original grant replays straight back into the emptied slot.
+        // ...but the epoch never moved, so the original grant replays straight back into the slot as a fresh live actor.
         keystore.applySignedAccountChanges(account, grant);
         assertTrue(_isActor(account, ACTOR_A));
     }
@@ -399,7 +525,7 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
     function test_revoke_success_revokeBumpThenReplayFails(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, UNBOUNDED, "")));
 
         // A grant signed at the pre-bump epoch (unsequenced), captured before the revoke+bump lands.
         Keystore.SignedAccountChanges memory oldGrant = _signBatch(
@@ -407,29 +533,18 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
             account,
             Keystore.AccountChangeChannel.Local,
             _unseqWord(account),
-            _one(_authorizeChange(ACTOR_B, address(k1Authenticator), SENDER, _future(1 days), ""))
+            _one(_authorizeChange(ACTOR_B, address(k1Authenticator), SENDER, UNBOUNDED, ""))
         );
 
         Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
         ch[0] = _revokeChange(ACTOR_A);
         ch[1] = _bumpChange();
         _applyLocal(pk, account, ch);
+        vm.warp(block.timestamp + 1); // step past the zero-delay revoke expiry
         assertFalse(_isActor(account, ACTOR_A));
 
         vm.expectRevert(Keystore.StaleEpoch.selector);
         keystore.applySignedAccountChanges(account, oldGrant);
-    }
-
-    /// @notice Revoking an already-lapsed actor is GC-equivalent and lands as a bare single-op batch.
-    function test_revoke_success_lapsedActorNoBump(uint256 pk) public {
-        pk = _boundK1Pk(pk);
-        (address account,) = _createK1Account(pk);
-        uint48 e = _future(1 days);
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, e, "")));
-
-        vm.warp(uint256(e) + 1);
-        _applyLocal(pk, account, _one(_revokeChange(ACTOR_A))); // no bump needed
-        assertFalse(_isActor(account, ACTOR_A));
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -548,52 +663,24 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
     // ORDERING / BATCHING
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice `[lock, revoke]` reverts LockChangeMustBeStandalone: a Lock may not share a batch with any other change.
-    function test_ordering_revert_lockNotStandalone(uint256 pk) public {
-        pk = _boundK1Pk(pk);
-        (address account,) = _createK1Account(pk);
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
-
-        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
-        ch[0] = _lockChange(1 hours);
-        ch[1] = _revokeChange(ACTOR_A);
-
-        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, ch);
-        vm.expectRevert(Keystore.LockChangeMustBeStandalone.selector);
-        keystore.applySignedAccountChanges(account, s);
-    }
-
-    /// @notice `[revoke, bump]` succeeds: an authority op and an environment op (epoch increment) still freely share a
-    ///         batch — only Lock/Unlock are standalone — and the revoke is retired durably by the bump.
+    /// @notice STRAWMAN (pre-PPS): `[revoke, bump]` succeeds. With the account-wide lock removed there are no
+    ///         standalone-op restrictions, so an authority op and an environment op (epoch increment) freely share a
+    ///         batch. The revoke is two-step (delay 0 here → expiry == now), and the bump retires replayable grants;
+    ///         after warping past the expiry the actor is durably gone.
     function test_ordering_success_revokeThenBump(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, UNBOUNDED, "")));
 
         Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
         ch[0] = _revokeChange(ACTOR_A);
         ch[1] = _bumpChange();
         _applyLocal(pk, account, ch);
 
+        vm.warp(block.timestamp + 1); // step past the (zero-delay) revoke expiry
         assertFalse(_isActor(account, ACTOR_A));
         (uint32 epoch,) = _localEpochSeq(account);
         assertEq(epoch, 1);
-    }
-
-    /// @notice `[unlock, bump]` reverts LockChangeMustBeStandalone: an Unlock may not share a batch with any other
-    ///         change, even an environment op. Unlocking then bumping requires two separate signed batches.
-    function test_unlock_revert_notStandalone(uint256 pk) public {
-        pk = _boundK1Pk(pk);
-        (address account,) = _createK1Account(pk);
-        _signedLock(pk, account, 1 hours);
-
-        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
-        ch[0] = _unlockChange();
-        ch[1] = _bumpChange();
-
-        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, ch);
-        vm.expectRevert(Keystore.LockChangeMustBeStandalone.selector);
-        keystore.applySignedAccountChanges(account, s);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -674,18 +761,21 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         assertEq(resolvedId, actorId);
     }
 
-    /// @notice A `[revoke, bump]` batch emits ActorRevoked(account, actorId).
-    function test_revoke_success_emitsActorRevoked(uint256 pk) public {
+    /// @notice STRAWMAN (pre-PPS): a `[revoke, bump]` batch for an explicit actor emits
+    ///         ActorRevokeInitiated(account, actorId, expiry) (two-step), not ActorRevoked (which is now reserved for
+    ///         the immediate inline-self revoke).
+    function test_revoke_success_emitsActorRevokeInitiated(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
+        uint48 delay = 1 days;
+        _applyLocal(pk, account, _one(_authorizeChangeWithDelay(ACTOR_A, address(k1Authenticator), SENDER, delay, "")));
 
         Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](2);
         ch[0] = _revokeChange(ACTOR_A);
         ch[1] = _bumpChange();
 
         vm.expectEmit(true, true, false, true, address(keystore));
-        emit Keystore.ActorRevoked(account, ACTOR_A);
+        emit Keystore.ActorRevokeInitiated(account, ACTOR_A, uint48(block.timestamp + delay));
         _applyLocal(pk, account, ch);
     }
 }

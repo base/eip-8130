@@ -48,16 +48,6 @@ contract KeystoreBranchCoverageTest is KeystoreTest {
         keystore.applySignedAccountChanges(account, s);
     }
 
-    /// @notice Unlock carries an empty payload; a non-empty one reverts InvalidChangePayload (checked before state).
-    function test_unlock_revert_nonEmptyPayload() public {
-        (address account,) = _createK1Account(OWNER_PK);
-        Keystore.AccountChange memory change =
-            Keystore.AccountChange({changeType: Keystore.ChangeType.Unlock, payload: hex"01"});
-        Keystore.SignedAccountChanges memory s = _localBatch(OWNER_PK, account, _one(change));
-        vm.expectRevert(Keystore.InvalidChangePayload.selector);
-        keystore.applySignedAccountChanges(account, s);
-    }
-
     // ── getActorConfig: expired inline self ──
 
     /// @notice getActorConfig returns the empty config for the inline self once its granted expiry has elapsed.
@@ -76,28 +66,6 @@ contract KeystoreBranchCoverageTest is KeystoreTest {
 
         // Expired: the self path returns the empty config rather than the stale slot.
         assertEq(keystore.getActorConfig(account, selfId).authenticator, address(0));
-    }
-
-    // ── getLockStatus: elapsed pending unlock ──
-
-    /// @notice Once a pending unlock's timestamp has elapsed, getLockStatus reports the clean unlocked state.
-    function test_getLockStatus_success_elapsedUnlockReportsUnlocked() public {
-        (address account,) = _createK1Account(OWNER_PK);
-
-        _signedLock(OWNER_PK, account, 100);
-        _signedUnlock(OWNER_PK, account); // initiates: unlocksAt = now + 100
-
-        (bool lockedBefore, bool initiatedBefore,,) = keystore.getLockStatus(account);
-        assertTrue(lockedBefore);
-        assertTrue(initiatedBefore);
-
-        vm.warp(block.timestamp + 101);
-
-        (bool locked, bool initiated, uint48 unlocksAt, uint16 delay) = keystore.getLockStatus(account);
-        assertFalse(locked);
-        assertFalse(initiated);
-        assertEq(unlocksAt, 0);
-        assertEq(delay, 0);
     }
 
     // ── Multichain sequence saturation ──

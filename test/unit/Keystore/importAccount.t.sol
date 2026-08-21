@@ -60,12 +60,13 @@ contract ImportAccountTest is KeystoreTest {
     // retains the full Actor/ActorConfig typehash structure; for imported (always unrestricted) actors the config
     // fields are zero and policyData is empty.
     bytes32 constant ACTOR_INITIALIZATION_TYPEHASH = keccak256(
-        "ActorInitialization(bytes32 accountId,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"
+        "ActorInitialization(bytes32 accountId,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 revokeDelayOrExpiry,uint16 scope,bool pendingRevoke)"
     );
     bytes32 constant ACTOR_TYPEHASH = keccak256(
-        "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"
+        "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 revokeDelayOrExpiry,uint16 scope,bool pendingRevoke)"
     );
-    bytes32 constant ACTOR_CONFIG_TYPEHASH = keccak256("ActorConfig(address authenticator,uint48 expiry,uint16 scope)");
+    bytes32 constant ACTOR_CONFIG_TYPEHASH =
+        keccak256("ActorConfig(address authenticator,uint48 revokeDelayOrExpiry,uint16 scope,bool pendingRevoke)");
 
     // ── digest helpers ──
 
@@ -85,9 +86,12 @@ contract ImportAccountTest is KeystoreTest {
     {
         bytes32[] memory actorHashes = new bytes32[](initialActors.length);
         for (uint256 i; i < initialActors.length; i++) {
-            // Hash the actor's real scope; expiry is always 0 at import. policyData is hashed into the Actor hash.
+            // Hash the actor's real scope; revokeDelayOrExpiry and pendingRevoke are (0, false) at import. policyData
+            // is hashed into the Actor hash.
             bytes32 configHash = keccak256(
-                abi.encode(ACTOR_CONFIG_TYPEHASH, initialActors[i].authenticator, uint48(0), initialActors[i].scope)
+                abi.encode(
+                    ACTOR_CONFIG_TYPEHASH, initialActors[i].authenticator, uint48(0), initialActors[i].scope, false
+                )
             );
             actorHashes[i] = keccak256(
                 abi.encode(ACTOR_TYPEHASH, initialActors[i].actorId, configHash, keccak256(initialActors[i].policyData))
@@ -152,25 +156,6 @@ contract ImportAccountTest is KeystoreTest {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // REVERTS (source-execution order)
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-
-    /// @notice Verifies importAccount reverts when the account is hard-locked (onlyUnlocked runs before all else).
-    /// @dev A lock op sets unlocksAt = type(uint48).max, so the account stays locked regardless of warp; any non-zero
-    ///      unlock delay locks it. The onlyUnlocked modifier trips before the chainId/sequence/signature checks, so
-    ///      the account is a controllable EOA (its inline default-EOA self signs the lock) and the actors/sig are
-    ///      never reached.
-    function test_importAccount_revert_accountIsLocked(uint256 ownerSeed, uint16 delay, bool multichain) public {
-        uint256 ownerPk = _boundK1Pk(ownerSeed);
-        vm.assume(delay != 0);
-        address account = vm.addr(ownerPk);
-
-        Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(account);
-        uint256 chainId = _acceptedChainId(multichain);
-
-        _signedLock(ownerPk, account, delay);
-
-        vm.expectRevert(Keystore.AccountIsLocked.selector);
-        keystore.importAccount(account, chainId, actors, "");
-    }
 
     /// @notice Verifies importAccount reverts for a chainId that is neither 0 (multichain) nor the current chain.
     /// @dev Exercises the `chainId != 0 && chainId != block.chainid` guard, which runs before any signature work.
@@ -506,7 +491,7 @@ contract ImportAccountTest is KeystoreTest {
             Keystore.ActorConfig memory config = keystore.getActorConfig(address(wallet), actorId);
             assertEq(config.authenticator, address(k1Authenticator));
             assertEq(config.scope, 0);
-            assertEq(config.expiry, 0);
+            assertEq(config.revokeDelayOrExpiry, 0);
         }
     }
 

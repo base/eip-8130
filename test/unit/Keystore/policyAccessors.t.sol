@@ -606,7 +606,7 @@ contract PolicyAccessorsTest is KeystoreTest {
             keystore.getActorWithPolicy(account, actorId);
         assertEq(config.authenticator, address(0));
         assertEq(config.scope, uint16(0));
-        assertEq(config.expiry, uint48(0));
+        assertEq(config.revokeDelayOrExpiry, uint48(0));
         assertEq(outManager, address(0));
         assertEq(outCommitment, bytes32(0));
     }
