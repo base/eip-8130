@@ -257,7 +257,7 @@ contract DefaultAccountTest is KeystoreTest {
     }
 
     /// @notice A TRUSTED_EXECUTOR actor with an unbounded (expiry == 0) grant may drive execution.
-    /// @dev Covers the `config.expiry != 0` false leg of the expiry guard (the && short-circuits before the
+    /// @dev Covers the `config.revokeDelayOrExpiry != 0` false leg of the expiry guard (the && short-circuits before the
     ///      timestamp comparison), which the UNBOUNDED-expiry executor helper never exercises.
     function test_executeBatch_success_trustedExecutorZeroExpiry(uint256 execSeed, uint256 v) public {
         (address account,) = _createK1Account(ACTOR_PK);
@@ -287,8 +287,10 @@ contract DefaultAccountTest is KeystoreTest {
         vm.assume(executor != account && executor != vm.addr(ACTOR_PK));
 
         vm.warp(1000);
-        Keystore.ActorConfig memory stale =
-            Keystore.ActorConfig({authenticator: TRUSTED_EXECUTOR, expiry: 500, scope: 0}); // expiry < now
+        // pendingRevoke == true with a scheduled expiry < now: a stale, expired executor config.
+        Keystore.ActorConfig memory stale = Keystore.ActorConfig({
+            authenticator: TRUSTED_EXECUTOR, revokeDelayOrExpiry: 500, scope: 0, pendingRevoke: true
+        });
         vm.mockCall(
             address(keystore),
             abi.encodeWithSelector(Keystore.getActorConfig.selector, account, bytes32(uint256(uint160(executor)))),

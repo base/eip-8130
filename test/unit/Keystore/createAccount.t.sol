@@ -274,7 +274,7 @@ contract CreateAccountTest is KeystoreTest {
         Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, actorId);
         assertEq(cfg.authenticator, authenticator);
         assertEq(cfg.scope, 0x00);
-        assertEq(cfg.expiry, 0);
+        assertEq(cfg.revokeDelayOrExpiry, 0);
         assertTrue(_isActor(account, actorId));
     }
 
@@ -293,16 +293,10 @@ contract CreateAccountTest is KeystoreTest {
         Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, actorId);
         assertEq(cfg.authenticator, address(k1Authenticator));
         assertEq(cfg.scope, 0x00);
-        assertEq(cfg.expiry, 0);
+        assertEq(cfg.revokeDelayOrExpiry, 0);
 
         assertEq(keystore.getChangeSequences(account).localSequence, 1);
         assertEq(keystore.getChangeSequences(account).multichain, 0);
-
-        (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 unlockDelay) = keystore.getLockStatus(account);
-        assertFalse(locked);
-        assertFalse(hasInitiatedUnlock);
-        assertEq(unlocksAt, 0);
-        assertEq(unlockDelay, 0);
     }
 
     /// @notice Verifies createAccount marks the account's implicit secp256k1 self key revoked by default

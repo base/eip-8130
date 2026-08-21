@@ -5,9 +5,10 @@ import {Keystore} from "../../../src/Keystore.sol";
 import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
-/// @notice §10 test matrix for the account-environment surface driven through {applySignedAccountChanges}: the lock
-///         / unlock ops (admin-authorized), the Multichain channel (no epochs, no unsequenced mode), and the
-///         split-layout regression checks.
+/// @notice §10 test matrix for the account-environment surface driven through {applySignedAccountChanges}: the
+///         Multichain channel (no epochs, no unsequenced mode) and the split-layout regression checks. STRAWMAN
+///         (pre-PPS): the account-wide lock/unlock ops were removed from Keystore (payer-tier freezing now lives in
+///         the account implementation), so their tests were removed here; see CanonicalHighRatePayerAccount tests.
 contract AccountEnvironmentTest is KeystoreTest {
     bytes32 constant ACTOR_A = bytes32(uint256(0xA1));
     bytes32 constant ACTOR_B = bytes32(uint256(0xB2));
@@ -28,248 +29,6 @@ contract AccountEnvironmentTest is KeystoreTest {
         vm.assume(account != address(keystore));
         vm.assume(account != VM_ADDRESS);
         vm.assume(account != CONSOLE);
-    }
-
-    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    // LOCK / UNLOCK
-    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-
-    /// @notice A lock op hard-locks the account (delay stored, isLocked true, max-sentinel unlocksAt).
-    function test_lock_success_setsHardLock(uint256 pkSeed, uint16 delay) public {
-        uint256 pk = _boundK1Pk(pkSeed);
-        address account = vm.addr(pk);
-        _assumeSafeAccount(account);
-        delay = uint16(bound(delay, 1, type(uint16).max));
-
-        _signedLock(pk, account, delay);
-
-        (bool locked, bool init, uint48 unlocksAt, uint16 storedDelay) = keystore.getLockStatus(account);
-        assertTrue(locked);
-        assertFalse(init);
-        assertEq(unlocksAt, type(uint48).max);
-        assertEq(storedDelay, delay);
-        assertTrue(keystore.isLocked(account));
-    }
-
-    /// @notice A lock op emits AccountLocked(account, delay).
-    function test_lock_success_emitsAccountLocked(uint256 pkSeed, uint16 delay) public {
-        uint256 pk = _boundK1Pk(pkSeed);
-        address account = vm.addr(pk);
-        _assumeSafeAccount(account);
-        delay = uint16(bound(delay, 1, type(uint16).max));
-
-        vm.expectEmit(true, false, false, true, address(keystore));
-        emit Keystore.AccountLocked(account, delay);
-        _signedLock(pk, account, delay);
-    }
-
-    /// @notice A lock op with a zero unlock delay reverts ZeroUnlockDelay.
-    function test_lock_revert_zeroDelay(uint256 pkSeed) public {
-        uint256 pk = _boundK1Pk(pkSeed);
-        address account = vm.addr(pk);
-        _assumeSafeAccount(account);
-
-        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, _one(_lockChange(0)));
-        vm.expectRevert(Keystore.ZeroUnlockDelay.selector);
-        keystore.applySignedAccountChanges(account, s);
-    }
-
-    /// @notice A second lock while already hard-locked reverts AccountIsLocked.
-    function test_lock_revert_whenAlreadyLocked(uint256 pkSeed, uint16 d1, uint16 d2) public {
-        uint256 pk = _boundK1Pk(pkSeed);
-        address account = vm.addr(pk);
-        _assumeSafeAccount(account);
-        d1 = uint16(bound(d1, 1, type(uint16).max));
-        d2 = uint16(bound(d2, 1, type(uint16).max));
-
-        _signedLock(pk, account, d1);
-        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, _one(_lockChange(d2)));
-        vm.expectRevert(Keystore.AccountIsLocked.selector);
-        keystore.applySignedAccountChanges(account, s);
-    }
-
-    /// @notice `[Lock, Unlock, Lock]` reverts LockChangeMustBeStandalone: the standalone rule rejects the multi-op
-    ///         batch on its first (Lock) change. Because a lock transition can never interleave with another change
-    ///         in one batch, a lock/unlock desync is structurally impossible.
-    function test_lock_revert_lockUnlockLockSameBatch(uint256 pkSeed, uint16 d1, uint16 d2) public {
-        uint256 pk = _boundK1Pk(pkSeed);
-        address account = vm.addr(pk);
-        _assumeSafeAccount(account);
-        d1 = uint16(bound(d1, 1, type(uint16).max));
-        d2 = uint16(bound(d2, 1, type(uint16).max));
-
-        Keystore.AccountChange[] memory ch = new Keystore.AccountChange[](3);
-        ch[0] = _lockChange(d1);
-        ch[1] = _unlockChange();
-        ch[2] = _lockChange(d2);
-
-        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, ch);
-        vm.expectRevert(Keystore.LockChangeMustBeStandalone.selector);
-        keystore.applySignedAccountChanges(account, s);
-    }
-
-    /// @notice An unlock on a never-locked account reverts NotLocked.
-    function test_unlock_revert_whenNeverLocked(uint256 pkSeed) public {
-        uint256 pk = _boundK1Pk(pkSeed);
-        address account = vm.addr(pk);
-        _assumeSafeAccount(account);
-
-        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, _one(_unlockChange()));
-        vm.expectRevert(Keystore.NotLocked.selector);
-        keystore.applySignedAccountChanges(account, s);
-    }
-
-    /// @notice An unlock op sets unlocksAt = now + delay, zeroes the stored delay, emits AccountUnlockInitiated.
-    function test_unlock_success_initiates(uint256 pkSeed, uint16 delay, uint256 t0) public {
-        uint256 pk = _boundK1Pk(pkSeed);
-        address account = vm.addr(pk);
-        _assumeSafeAccount(account);
-        delay = uint16(bound(delay, 1, type(uint16).max));
-        t0 = bound(t0, block.timestamp, 1e12);
-
-        _signedLock(pk, account, delay);
-        vm.warp(t0);
-
-        vm.expectEmit(true, false, false, true, address(keystore));
-        emit Keystore.AccountUnlockInitiated(account, uint48(t0 + delay));
-        _signedUnlock(pk, account);
-
-        (bool locked, bool init, uint48 unlocksAt, uint16 storedDelay) = keystore.getLockStatus(account);
-        assertTrue(locked);
-        assertTrue(init);
-        assertEq(unlocksAt, uint48(t0 + delay));
-        assertEq(storedDelay, 0);
-    }
-
-    /// @notice A second unlock after one was already initiated reverts NotLocked.
-    function test_unlock_revert_whenAlreadyInitiated(uint256 pkSeed, uint16 delay, uint256 t0) public {
-        uint256 pk = _boundK1Pk(pkSeed);
-        address account = vm.addr(pk);
-        _assumeSafeAccount(account);
-        delay = uint16(bound(delay, 1, type(uint16).max));
-        t0 = bound(t0, block.timestamp, 1e9);
-
-        _signedLock(pk, account, delay);
-        vm.warp(t0);
-        _signedUnlock(pk, account);
-
-        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, _one(_unlockChange()));
-        vm.expectRevert(Keystore.NotLocked.selector);
-        keystore.applySignedAccountChanges(account, s);
-    }
-
-    /// @notice An account can be re-locked once a prior unlock delay has fully elapsed.
-    function test_lock_success_relockAfterUnlockElapsed(uint256 pkSeed, uint16 d1, uint16 d2, uint256 t0) public {
-        uint256 pk = _boundK1Pk(pkSeed);
-        address account = vm.addr(pk);
-        _assumeSafeAccount(account);
-        d1 = uint16(bound(d1, 1, type(uint16).max));
-        d2 = uint16(bound(d2, 1, type(uint16).max));
-        t0 = bound(t0, block.timestamp, 1e9);
-
-        _signedLock(pk, account, d1);
-        vm.warp(t0);
-        _signedUnlock(pk, account);
-        vm.warp(t0 + d1); // at unlocksAt: unlocked
-        assertFalse(keystore.isLocked(account));
-
-        _signedLock(pk, account, d2);
-        assertTrue(keystore.isLocked(account));
-    }
-
-    /// @notice While locked, an authority op (authorize) reverts AccountIsLocked but an environment op (bump)
-    ///         succeeds — the lock freezes the actor set, not the epoch.
-    function test_lock_bumpSucceedsAuthorizeFails(uint256 pkSeed) public {
-        uint256 pk = _boundK1Pk(pkSeed);
-        address account = vm.addr(pk);
-        _assumeSafeAccount(account);
-
-        _signedLock(pk, account, 1 hours);
-
-        // Bump under lock: allowed.
-        _applyLocal(pk, account, _one(_bumpChange()));
-        (uint32 epoch,) = _localEpochSeq(account);
-        assertEq(epoch, 1);
-
-        // Authorize under lock: rejected.
-        Keystore.SignedAccountChanges memory s = _localBatch(
-            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
-        );
-        vm.expectRevert(Keystore.AccountIsLocked.selector);
-        keystore.applySignedAccountChanges(account, s);
-    }
-
-    /// @notice After a full unlock cycle elapses, an authority op is accepted again (lazy lock clear).
-    function test_lock_success_authorizeAfterFullUnlockCycle(uint256 pkSeed, uint16 delay, uint256 t0) public {
-        uint256 pk = _boundK1Pk(pkSeed);
-        (address account,) = _createK1Account(pk);
-        delay = uint16(bound(delay, 1, type(uint16).max));
-        t0 = bound(t0, block.timestamp, 1e9);
-
-        _signedLock(pk, account, delay);
-        vm.warp(t0);
-        _signedUnlock(pk, account);
-        vm.warp(t0 + delay); // unlocked
-        assertFalse(keystore.isLocked(account));
-
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
-        assertTrue(_isActor(account, ACTOR_A));
-    }
-
-    /// @notice Lock-residue overwrite. A full lock -> initiate-unlock -> elapse cycle leaves FLAG_UNLOCK_INITIATED set
-    ///         and a now-elapsed unlocksAt in storage (lock reads never clear them). A fresh Lock over that residue must
-    ///         land a CLEAN hard-lock: FLAG_LOCKED set, FLAG_UNLOCK_INITIATED clear (init == false), and lockUnion
-    ///         holding the NEW delay rather than the stale timestamp. This pins the load-bearing `& ~FLAG_UNLOCK_INITIATED`
-    ///         clear in _applyLock: dropping it would leave a delay-valued union under a set INITIATED flag (the
-    ///         union-corruption bug).
-    function test_lock_success_overwritesElapsedUnlockResidue(uint256 pkSeed, uint16 d1, uint16 d2, uint256 t0) public {
-        uint256 pk = _boundK1Pk(pkSeed);
-        address account = vm.addr(pk);
-        _assumeSafeAccount(account);
-        d1 = uint16(bound(d1, 1, type(uint16).max));
-        d2 = uint16(bound(d2, 1, type(uint16).max));
-        t0 = bound(t0, block.timestamp, 1e9);
-
-        // Lock, initiate unlock, and let the delay fully elapse. Storage residue now reads unlocked but still carries
-        // FLAG_LOCKED | FLAG_UNLOCK_INITIATED with an elapsed timestamp in lockUnion.
-        _signedLock(pk, account, d1);
-        vm.warp(t0);
-        _signedUnlock(pk, account);
-        vm.warp(t0 + d1);
-        assertFalse(keystore.isLocked(account));
-
-        // Re-lock over the residue.
-        _signedLock(pk, account, d2);
-
-        // Clean hard-lock: INITIATED cleared and the union holds the new delay (surfaced as storedDelay), not the
-        // stale timestamp.
-        (bool locked, bool init, uint48 unlocksAt, uint16 storedDelay) = keystore.getLockStatus(account);
-        assertTrue(locked);
-        assertFalse(init);
-        assertEq(unlocksAt, type(uint48).max);
-        assertEq(storedDelay, d2);
-    }
-
-    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    // ADMIN-ONLY LOCK CHANGES
-    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-
-    /// @notice A scoped (non-admin) actor cannot initiate an Unlock — every signed change is admin-only
-    ///         (UnauthorizedAccountChange).
-    function test_lock_revert_scopedActorCannotUnlock(uint256 ownerSeed, uint256 scopedSeed) public {
-        uint256 ownerPk = _boundK1Pk(ownerSeed);
-        uint256 scopedPk = _boundK1Pk(scopedSeed);
-        vm.assume(vm.addr(ownerPk) != vm.addr(scopedPk));
-        (address account,) = _createK1Account(ownerPk);
-        bytes32 scopedId = bytes32(uint256(uint160(vm.addr(scopedPk))));
-
-        _applyLocal(ownerPk, account, _one(_authorizeChange(scopedId, address(k1Authenticator), SENDER, UNBOUNDED, "")));
-        _signedLock(ownerPk, account, 1 hours);
-        assertTrue(keystore.isLocked(account));
-
-        Keystore.SignedAccountChanges memory s = _localBatch(scopedPk, account, _one(_unlockChange()));
-        vm.expectRevert(Keystore.UnauthorizedAccountChange.selector);
-        keystore.applySignedAccountChanges(account, s);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -313,9 +72,12 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertEq(_multichainSeq(account), mcBefore + 1);
         assertFalse(_isActor(account, ACTOR_A));
 
-        // It is nonetheless present: an explicit revoke succeeds (presence is checked without expiry), proving the
-        // slot was written rather than skipped. Reverts UnknownActor if the slot were empty.
-        _revokeActor(account, pk, ACTOR_A);
+        // It is nonetheless present: STRAWMAN (pre-PPS) an installed-expired grant is stored pending-revoke, so an
+        // explicit revoke reverts AlreadyRevoking (an EMPTY slot would revert UnknownActor) — proving the slot was
+        // written rather than skipped.
+        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, _one(_revokeChange(ACTOR_A)));
+        vm.expectRevert(Keystore.AlreadyRevoking.selector);
+        keystore.applySignedAccountChanges(account, s);
     }
 
     /// @notice New-chain catch-up: a chain onboarded late replays the full multichain history in order. Historical
@@ -342,7 +104,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         _applyMultichain(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, liveNow, "")));
 
         assertTrue(_isActor(account, ACTOR_A));
-        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, liveNow);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).revokeDelayOrExpiry, liveNow);
         assertEq(_multichainSeq(account), 3); // all three slots consumed, gap-free
     }
 
@@ -382,7 +144,11 @@ contract AccountEnvironmentTest is KeystoreTest {
         // Sequence consumed (no revert); the actor is present but not live.
         assertEq(_localSeqWord(account), seqBefore + 1);
         assertFalse(_isActor(account, ACTOR_A));
-        _revokeActor(account, pk, ACTOR_A); // present -> explicit revoke succeeds (reverts UnknownActor if empty)
+        // Present: STRAWMAN (pre-PPS) the installed-expired grant is pending-revoke, so an explicit revoke reverts
+        // AlreadyRevoking (an EMPTY slot would revert UnknownActor).
+        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, _one(_revokeChange(ACTOR_A)));
+        vm.expectRevert(Keystore.AlreadyRevoking.selector);
+        keystore.applySignedAccountChanges(account, s);
     }
 
     /// @notice A Multichain IncrementLocalEpoch bumps the local epoch (resetting the local sequence) and consumes the
@@ -399,27 +165,6 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertEq(epochAfter, epochBefore + 1);
         assertEq(seqAfter, 0); // local sequence reset by the epoch bump
         assertEq(_multichainSeq(account), mcBefore + 1);
-    }
-
-    /// @notice A Lock on the Multichain channel reverts ChangeRequiresLocalChannel.
-    function test_multichain_revert_lockRejected(uint256 pk, uint16 delay) public {
-        pk = _boundK1Pk(pk);
-        (address account,) = _createK1Account(pk);
-        delay = uint16(bound(delay, 1, type(uint16).max));
-
-        Keystore.SignedAccountChanges memory s = _multichainBatch(pk, account, _one(_lockChange(delay)));
-        vm.expectRevert(Keystore.ChangeRequiresLocalChannel.selector);
-        keystore.applySignedAccountChanges(account, s);
-    }
-
-    /// @notice an Unlock on the Multichain channel reverts ChangeRequiresLocalChannel.
-    function test_multichain_revert_unlockRejected(uint256 pk) public {
-        pk = _boundK1Pk(pk);
-        (address account,) = _createK1Account(pk);
-
-        Keystore.SignedAccountChanges memory s = _multichainBatch(pk, account, _one(_unlockChange()));
-        vm.expectRevert(Keystore.ChangeRequiresLocalChannel.selector);
-        keystore.applySignedAccountChanges(account, s);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡

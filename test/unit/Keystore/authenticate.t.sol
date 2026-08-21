@@ -141,13 +141,13 @@ contract AuthenticateTest is KeystoreTest {
         keystore.authenticateActor(account, hash, auth);
     }
 
-    /// @notice After a K1 actor is revoked its config is cleared, so re-presenting its signature mismatches.
-    /// @dev Revoke deletes `_actorConfig[actorId]`, leaving authenticator == 0 != K1 on the non-self K1 path.
-    function test_authenticateActor_revert_authenticatorMismatch_revokedActor(
-        uint256 ownerSeed,
-        uint256 actorSeed,
-        bytes32 hash
-    ) public {
+    /// @notice STRAWMAN (pre-PPS): after a K1 actor's two-step revocation elapses, re-presenting its signature reverts
+    ///         ActorExpired. Revoke no longer clears `_actorConfig[actorId]` — it flips pendingRevoke and schedules an
+    ///         expiry — so the stored authenticator still matches K1 and the failure surfaces at the expiry guard.
+    ///         (`_revokeActor` warps one second past the zero-delay expiry, so the actor has lapsed.)
+    function test_authenticateActor_revert_actorExpired_revokedActor(uint256 ownerSeed, uint256 actorSeed, bytes32 hash)
+        public
+    {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         uint256 actorPk = _boundK1Pk(actorSeed);
         vm.assume(vm.addr(ownerPk) != vm.addr(actorPk));
@@ -157,7 +157,7 @@ contract AuthenticateTest is KeystoreTest {
         _authorizeActorWithScope(account, ownerPk, actorId, address(k1Authenticator), 0x00);
         _revokeActor(account, ownerPk, actorId);
 
-        vm.expectRevert(Keystore.AuthenticatorMismatch.selector);
+        vm.expectRevert(Keystore.ActorExpired.selector);
         keystore.authenticateActor(account, hash, _buildK1Auth(actorPk, hash));
     }
 
@@ -185,7 +185,7 @@ contract AuthenticateTest is KeystoreTest {
     }
 
     /// @notice A non-self K1 session actor expires and can no longer authenticate.
-    /// @dev _authenticateK1 non-self branch (config.expiry != 0 && block.timestamp > expiry).
+    /// @dev _authenticateK1 non-self branch (config.revokeDelayOrExpiry != 0 && block.timestamp > expiry).
     function test_authenticateActor_revert_actorExpired_nonSelfK1(
         uint256 ownerSeed,
         uint256 sessionSeed,

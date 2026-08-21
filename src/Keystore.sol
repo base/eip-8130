@@ -6,7 +6,7 @@ import {IAuthenticator} from "./interfaces/IAuthenticator.sol";
 import {Scopes} from "./libraries/Scopes.sol";
 
 /// @notice Keystore system contract for EIP-8130.
-///         Manages actor authorization, account creation, change sequencing, and account lock. This contract is
+///         Manages actor authorization, account creation, and change sequencing. This contract is
 ///         also the canonical reference for the EIP-8130 Keystore ABI: its public structs, events,
 ///         and function signatures are the spec surface, and there is no separate interface file to keep in sync.
 ///
@@ -23,12 +23,16 @@ contract Keystore {
         uint32 localSequence; // current local counter; reset to 0 by IncrementLocalEpoch
     }
 
-    /// @notice An actor's authorization: authenticator, expiry, and scope. Field order matches the normative
-    ///         `actor_config` slot layout: authenticator(20) ‖ expiry(6) ‖ scope(2) ‖ reserved(4).
+    /// @notice An actor's authorization: authenticator, revokeDelayOrExpiry, scope, and pendingRevoke. Field order
+    ///         matches the normative `actor_config` slot layout:
+    ///         authenticator(20) ‖ revokeDelayOrExpiry(6) ‖ scope(2) ‖ pendingRevoke(1) ‖ reserved(3).
     struct ActorConfig {
         address authenticator;
-        uint48 expiry; // Unix seconds; 0 = no expiry. Actor invalid once block.timestamp > expiry
+        // Union selected by `pendingRevoke`: false => revoke delay in seconds (actor live, capped by MAX_REVOKE_DELAY);
+        // true => absolute expiry (actor invalid once block.timestamp > this). Pre-scheduled keys set pendingRevoke.
+        uint48 revokeDelayOrExpiry;
         uint16 scope;
+        bool pendingRevoke;
     }
 
     /// @notice Initial actor for account creation and import. Carries its scope and, when scope & Scopes.POLICY is
@@ -43,25 +47,21 @@ contract Keystore {
 
     /// @notice The operation an {AccountChange} applies within an {applySignedAccountChanges} batch.
     ///
-    /// @dev ABI-encodes as uint8. A locked account freezes every op except Unlock and IncrementLocalEpoch, enforced by
-    ///      the guard in {applySignedAccountChanges} (Unlock additionally self-checks it is hard-locked). Lock and
-    ///      Unlock are Local-only and must each be the batch's only op.
+    /// @dev ABI-encodes as uint8. All ops are admin-only and may share a batch.
     enum ChangeType {
         // Authority ops (mutate who can act).
-        AuthorizeActor, // payload: abi.encode(bytes32 actorId, ActorConfig cfg, bytes policyData); cfg.expiry is the granted expiry
+        AuthorizeActor, // payload: abi.encode(bytes32 actorId, ActorConfig cfg, bytes policyData)
         RevokeActor, // payload: abi.encode(bytes32 actorId)
         // Environment ops (mutate the rules ops are checked against).
-        IncrementLocalEpoch, // Either channel; payload: empty (length == 0 enforced)
-        Lock, // Local only; payload: abi.encode(uint16 unlockDelay)
-        Unlock // Local only; payload: empty (length == 0 enforced)
+        IncrementLocalEpoch // Either channel; payload: empty (length == 0 enforced)
     }
 
     /// @notice The replay domain a {SignedAccountChanges} batch is bound to.
     ///
     /// @dev {AccountChangeChannel.Local} binds `block.chainid` and carries the full local
     ///      epoch machinery (see {SignedAccountChanges.sequence}); {AccountChangeChannel.Multichain} binds chainId 0 and keeps a plain
-    ///      monotonic counter with no epochs and no unsequenced (JIT) mode. {ChangeType.Lock} and {ChangeType.Unlock} are rejected on the
-    ///      Multichain channel; {ChangeType.IncrementLocalEpoch} is allowed on either channel.
+    ///      monotonic counter with no epochs and no unsequenced (JIT) mode. {ChangeType.IncrementLocalEpoch} is allowed
+    ///      on either channel.
     enum AccountChangeChannel {
         Local,
         Multichain
@@ -90,19 +90,18 @@ contract Keystore {
         bytes signature;
     }
 
-    /// @notice Per-account packed state: sequences, lock status, and the inline home for the account's k1 self key.
+    /// @notice Per-account packed state: sequences, flags, and the inline home for the account's k1 self key.
     ///
-    /// @dev Packed into a single storage slot; the field layout is normative (nodes read the raw slot for mempool
-    ///      rate-limit tiering, see the EIP's Account Lock section). Field order and widths match the spec's
-    ///      account-state table: multichainSequence, localSequence, localEpoch, flags, lockUnion, defaultEOAExpiry,
-    ///      defaultEOAScope, then 1 reserved byte that MUST stay zero.
+    /// @dev Packed into a single storage slot; the field layout is normative. Field order and widths match the spec's
+    ///      account-state table: multichainSequence, localSequence, localEpoch, flags, defaultEOAExpiry,
+    ///      defaultEOAScope, then 7 reserved bytes that MUST stay zero.
     ///      The local replay counter is stored as two adjacent uint32 fields — `localSequence` (low) then `localEpoch`
     ///      (high) — which occupy the same 8 bytes as, and read identically to, the single `localEpoch(32)||
     ///      localSequence(32)` word committed in a signed batch's `sequence` (see {getChangeSequences}). Storing
     ///      them split keeps the layout size-neutral (still one slot) while removing pack/unpack math from the hot path.
     ///      The combined local word marks local initialization; the multichain counter covers global-only activity.
     ///      {IncrementLocalEpoch} resets the sequence while keeping the combined local word non-zero.
-    ///      See {FLAG_REVOKE_DEFAULT_EOA}, {FLAG_LOCKED}, and {FLAG_UNLOCK_INITIATED} for `flags` and `lockUnion`.
+    ///      See {FLAG_REVOKE_DEFAULT_EOA} for `flags`.
     ///      The defaultEOA* fields are the inline home for the account's own secp256k1 ("self") key, whose actorId is
     ///      `ActorId.fromAddress(account)`. When FLAG_REVOKE_DEFAULT_EOA is unset, a k1 signature recovering to the
     ///      account authenticates with this inline config (all-zero = full owner; non-zero scope/expiry = a
@@ -114,11 +113,10 @@ contract Keystore {
         uint64 multichainSequence; // 8 bytes
         uint32 localSequence; // 4 bytes – low half of the signed local word
         uint32 localEpoch; // 4 bytes – high half of the signed local word
-        uint8 flags; // 1 byte – bitfield: bit 0 CONTRACT_ESTABLISHED, bit 1 REVOKE_DEFAULT_EOA, bit 2 LOCKED, bit 3 UNLOCK_INITIATED
-        uint48 lockUnion; // 6 bytes – union: unlockDelay while UNLOCK_INITIATED clear, else unlocksAt (timestamp)
+        uint8 flags; // 1 byte – bitfield: bit 0 CONTRACT_ESTABLISHED, bit 1 REVOKE_DEFAULT_EOA
         uint48 defaultEOAExpiry; // 6 bytes – inline self k1 expiry (Unix seconds; 0 = no expiry)
         uint16 defaultEOAScope; // 2 bytes – inline self k1 scope (0 = full owner)
-        // 1 byte reserved (remaining slot byte); MUST stay zero.
+        // 7 bytes reserved (remaining slot bytes); MUST stay zero.
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -136,17 +134,17 @@ contract Keystore {
     ///      against another. `chainId` is either the current chain or 0 for a multichain import. Initial actors are
     ///      hashed structurally below.
     bytes32 public constant ACTOR_INITIALIZATION_TYPEHASH = keccak256(
-        "ActorInitialization(bytes32 accountId,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"
+        "ActorInitialization(bytes32 accountId,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 revokeDelayOrExpiry,uint16 scope,bool pendingRevoke)"
     );
 
     /// @notice Typehash used to structurally hash each Actor within an ActorInitialization import digest.
     bytes32 public constant ACTOR_TYPEHASH = keccak256(
-        "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"
+        "Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 revokeDelayOrExpiry,uint16 scope,bool pendingRevoke)"
     );
 
     /// @notice Typehash used to structurally hash an Actor's ActorConfig within an import digest.
     bytes32 public constant ACTOR_CONFIG_TYPEHASH =
-        keccak256("ActorConfig(address authenticator,uint48 expiry,uint16 scope)");
+        keccak256("ActorConfig(address authenticator,uint48 revokeDelayOrExpiry,uint16 scope,bool pendingRevoke)");
 
     /// @notice Typehash binding a signed account-change batch to its account, chainId, and sequence.
     ///
@@ -216,14 +214,9 @@ contract Keystore {
     ///         clears it (re-enabling the inline self, possibly scoped).
     uint8 public constant FLAG_REVOKE_DEFAULT_EOA = 0x02;
 
-    /// @notice AccountState.flags bit (spec `LOCKED`): identifies a lock record. The account is frozen unless an
-    ///         initiated unlock's timestamp has elapsed; expired lock bits remain until a later Lock overwrites them.
-    uint8 public constant FLAG_LOCKED = 0x04;
-
-    /// @notice AccountState.flags bit (spec `UNLOCK_INITIATED`): selects how the packed `lockUnion` field is read.
-    ///         While clear, `lockUnion` holds the configured unlock delay (seconds); while set, it holds unlocksAt
-    ///         (the timestamp at which the pending unlock takes effect). Only meaningful when FLAG_LOCKED is set.
-    uint8 public constant FLAG_UNLOCK_INITIATED = 0x08;
+    /// @notice Upper bound on a live actor's revoke delay ({ActorConfig.revokeDelayOrExpiry} while pendingRevoke is
+    ///         false), so an actor can never be made effectively unremovable (self-brick). Value is a tunable.
+    uint48 public constant MAX_REVOKE_DELAY = 7 days;
 
     /// @dev secp256k1 half-order (n/2). Per EIP-2, only the lower-half `s` value is accepted to reject signature
     ///      malleability. Equal to (secp256k1n - 1) / 2.
@@ -243,11 +236,18 @@ contract Keystore {
     ///        payload is 32 bytes for an ungated actor and 84 bytes for a policy-gated one.
     event ActorAuthorized(address indexed account, bytes32 indexed actorId, bytes actorData);
 
-    /// @notice Emitted when an actor is revoked from an account.
+    /// @notice Emitted when an actor is revoked from an account (immediate; the inline k1 self key).
     ///
     /// @param account The account whose actor was revoked.
     /// @param actorId The revoked actor's identifier.
     event ActorRevoked(address indexed account, bytes32 indexed actorId);
+
+    /// @notice Emitted when a two-step revocation is initiated for an actor; it stays live until `expiry`.
+    ///
+    /// @param account The account whose actor is being revoked.
+    /// @param actorId The actor being revoked.
+    /// @param expiry The timestamp after which the actor is no longer live.
+    event ActorRevokeInitiated(address indexed account, bytes32 indexed actorId, uint48 expiry);
 
     /// @notice Emitted when a new account is created.
     ///
@@ -267,18 +267,6 @@ contract Keystore {
     /// @param target The delegation target.
     event DelegationApplied(address indexed account, address target);
 
-    /// @notice Emitted when an account is locked.
-    ///
-    /// @param account The locked account.
-    /// @param unlockDelay The configured unlock delay in seconds.
-    event AccountLocked(address indexed account, uint16 unlockDelay);
-
-    /// @notice Emitted when an account's unlock is initiated.
-    ///
-    /// @param account The account whose unlock was initiated.
-    /// @param unlocksAt The timestamp at which the account will unlock.
-    event AccountUnlockInitiated(address indexed account, uint48 unlocksAt);
-
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // ERRORS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -288,9 +276,6 @@ contract Keystore {
 
     /// @notice The account already has EIP-8130 state, so it cannot be created or imported again.
     error AlreadyInitialized();
-
-    /// @notice The operation is not permitted while the account is locked.
-    error AccountIsLocked();
 
     /// @notice The signed chainId is neither 0 (multichain) nor the current chain.
     error InvalidChainId();
@@ -302,12 +287,11 @@ contract Keystore {
     ///         word.
     error InvalidImportSignature();
 
-    /// @notice A lock op carried a zero unlock delay.
-    error ZeroUnlockDelay();
+    /// @notice An AuthorizeActor set a live actor's revoke delay above {MAX_REVOKE_DELAY}.
+    error RevokeDelayTooLong();
 
-    /// @notice An unlock op was requested when the account was not in the hard-locked state (FLAG_LOCKED set,
-    ///         FLAG_UNLOCK_INITIATED clear) — i.e. never locked, or an unlock was already initiated.
-    error NotLocked();
+    /// @notice A RevokeActor targeted an actor whose two-step revocation is already pending.
+    error AlreadyRevoking();
 
     /// @notice The batch's committed local epoch does not match the account's current local epoch: every unlanded
     ///         local signature at a prior epoch is dead. Applies to sequenced and unsequenced Local batches.
@@ -324,11 +308,8 @@ contract Keystore {
     /// @notice The local epoch is at its terminal value and cannot be incremented.
     error EpochSaturated();
 
-    /// @notice A local-only change (Lock or Unlock) was submitted on the Multichain channel.
-    error ChangeRequiresLocalChannel();
-
     /// @notice A change payload did not match the shape required by its ChangeType (e.g. a non-empty payload on
-    ///         IncrementLocalEpoch / Unlock).
+    ///         IncrementLocalEpoch).
     error InvalidChangePayload();
 
     /// @notice A signed batch carried no changes. An empty batch is rejected so it can neither consume a sequence nor
@@ -337,10 +318,6 @@ contract Keystore {
 
     /// @notice An actor authorization targeted the zero actorId, which is not a usable actor identifier.
     error InvalidActorId();
-
-    /// @notice A Lock or Unlock appeared in a batch alongside other changes. Lock/unlock must be the sole change in
-    ///         their batch, so a lock transition can never interleave with actor changes in the same signed batch.
-    error LockChangeMustBeStandalone();
 
     /// @notice Defensive guard for an unhandled ChangeType in the apply loop. Unreachable in practice — out-of-range
     ///         wire values are rejected by the enum decoder during ABI-decoding — but forces any future ChangeType to
@@ -420,15 +397,6 @@ contract Keystore {
     // MODIFIERS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice Modifier to check if an account is unlocked.
-    /// @dev Reverts with AccountIsLocked when the account is locked.
-    modifier onlyUnlocked(address account) {
-        if (_isLocked(account)) {
-            revert AccountIsLocked();
-        }
-        _;
-    }
-
     /// @notice Modifier to check if an account is not the zero address.
     /// @dev Reverts with ZeroAccount when the account is the zero address.
     modifier nonZeroAccount(address account) {
@@ -503,7 +471,6 @@ contract Keystore {
     ///         ERC-1271 signature over a typed import digest. The implicit default-EOA key is disabled after import.
     ///
     /// @dev Uses a custom (non-EIP-712) digest to partially mitigate eth_signTypedData phishing.
-    /// @dev Reverts with AccountIsLocked when the account is locked.
     /// @dev Reverts with InvalidChainId when `chainId` is neither 0 (multichain) nor the current chain.
     /// @dev Reverts with AlreadyInitialized when the account already has EIP-8130 state.
     /// @dev Reverts with InvalidImportSignature when the account has no bytecode or its ERC-1271 check does not return
@@ -522,7 +489,7 @@ contract Keystore {
         uint256 chainId,
         InitialActor[] calldata initialActors,
         bytes calldata signature
-    ) external onlyUnlocked(account) {
+    ) external {
         if (chainId != 0 && chainId != block.chainid) {
             revert InvalidChainId();
         }
@@ -553,11 +520,10 @@ contract Keystore {
     }
 
     /// @notice The sole signed-change entry point: applies an ordered, atomic batch of account changes (authorize,
-    ///         revoke, increment-local-epoch, lock, unlock) authenticated by `s.signature`.
+    ///         revoke, increment-local-epoch) authenticated by `s.signature`.
     ///
     /// @dev The governing axiom is Replay: a signed local change is valid only while it could still be validly
-    ///      applied — the committed local epoch must match and grants self-expire (`cfg.expiry > now`, unless
-    ///      `cfg.expiry == 0` which is the never-expiring sentinel).
+    ///      applied — the committed local epoch must match and pre-scheduled grants self-expire.
     ///
     ///      Reduction is NOT contract-enforced. Removing authority durably (revoke, shorter expiry, narrower scope)
     ///      requires retiring the signatures that granted it, which on the local channel means a {IncrementLocalEpoch};
@@ -566,15 +532,12 @@ contract Keystore {
     ///
     ///      Authorization is flat: every signed account change is admin-only, so a single up-front scope check
     ///      (signer scope must be 0) authorizes the whole batch — there is no per-op authorization and no per-op
-    ///      sequencing restriction. Lock and Unlock are Local-only and must also be standalone; IncrementLocalEpoch is
-    ///      allowed on either channel. Other ops may share a non-empty batch.
+    ///      sequencing restriction. IncrementLocalEpoch is allowed on either channel; other ops may share a batch.
     ///
     ///      Pipeline (in order): (1) split the sequence word; (2) reject a stale epoch on Local batches;
     ///      (3) validate/advance the sequence counter BEFORE apply (reentrancy discipline); (4) compute the digest
-    ///      via {_changesDigest}, authenticate, and reject a non-admin signer; (5) iterate
-    ///      changes enforcing channel and lock policy (Lock/Unlock rejected on Multichain; authority ops
-    ///      rejected while the account is locked; Lock/Unlock must be standalone). Anyone may relay — authorization
-    ///      comes entirely from the signature.
+    ///      via {_changesDigest}, authenticate, and reject a non-admin signer; (5) iterate and dispatch changes.
+    ///      Anyone may relay — authorization comes entirely from the signature.
     ///
     /// @param account The account whose configuration is changed.
     /// @param batch The signed batch (channel, ordered changes, sequence word, signature).
@@ -637,28 +600,9 @@ contract Keystore {
             revert UnauthorizedAccountChange();
         }
 
-        // Lock state at batch entry gates every op below. This snapshot is EXACT for the whole batch: the only ops
-        // that mutate lock state (Lock/Unlock) must be standalone, so no op observes a lock state that a peer changed
-        // mid-loop. Relaxing standalone re-opens snapshot staleness — a later authority op could then run against a
-        // lock a Lock earlier in the same batch just set (or a stale-unlocked one).
-        bool locked = _isLocked(account);
-
         uint256 n = batch.changes.length;
         for (uint256 i; i < n; i++) {
             ChangeType t = batch.changes[i].changeType;
-
-            // Preconditions: freeze non-exempt ops on a locked account, and hold Lock/Unlock to a standalone local batch.
-            if (locked && t != ChangeType.Unlock && t != ChangeType.IncrementLocalEpoch) {
-                revert AccountIsLocked();
-            }
-            if (t == ChangeType.Lock || t == ChangeType.Unlock) {
-                if (!isLocal) {
-                    revert ChangeRequiresLocalChannel();
-                }
-                if (n != 1) {
-                    revert LockChangeMustBeStandalone();
-                }
-            }
 
             // Apply: dispatch the op to its handler.
             if (t == ChangeType.AuthorizeActor) {
@@ -667,10 +611,6 @@ contract Keystore {
                 _applyRevoke(account, batch.changes[i].payload);
             } else if (t == ChangeType.IncrementLocalEpoch) {
                 _applyIncrementLocalEpoch(account, batch.changes[i].payload);
-            } else if (t == ChangeType.Lock) {
-                _applyLock(account, batch.changes[i].payload);
-            } else if (t == ChangeType.Unlock) {
-                _applyUnlock(account, batch.changes[i].payload);
             } else {
                 // Unreachable at runtime (the enum decoder rejects out-of-range values). Kept to force any future
                 // ChangeType to be dispatched here rather than silently no-op'ing.
@@ -684,18 +624,20 @@ contract Keystore {
     // ----------------------------------------------------------------------------------------------------------------
 
     /// @dev AuthorizeActor. `payload = abi.encode(bytes32 actorId, ActorConfig cfg, bytes policyData)`. Normally a plain
-    ///      upsert: write `cfg`/`policyData` into the actor's slot, granting authority until `cfg.expiry` (`cfg.expiry
-    ///      == 0` = no expiry). An expired grant never reverts the batch — expiry vs. onchain time is never an
+    ///      upsert: write `cfg`/`policyData` into the actor's slot. A live grant's `cfg.revokeDelayOrExpiry` is a revoke
+    ///      delay bounded by {MAX_REVOKE_DELAY} (else RevokeDelayTooLong); a `pendingRevoke` grant's is an absolute
+    ///      expiry. An expired (pendingRevoke) grant never reverts the batch — expiry vs. onchain time is never an
     ///      acceptance check — but it does change what the write does, per channel:
     ///
-    ///      For an already-expired grant (non-zero `cfg.expiry <= block.timestamp`):
+    ///      For an already-expired pendingRevoke grant (`cfg.revokeDelayOrExpiry <= block.timestamp`):
     ///      - Unsequenced (JIT, `isUnsequenced`): SKIPPED (no write). A JIT batch consumes no counter and stays
     ///        replayable, so writing a lapsed grant would let an old replay clobber a since-renewed lease. Skip is
     ///        per-change, so live siblings in the same batch still apply.
-    ///      - Sequenced (local or multichain): written anyway but INERT — it authenticates as ActorExpired ({_isExpired})
-    ///        so it grants no authority. Sequenced batches are single-consume (not replayable), so there is no clobber
-    ///        risk; the write is still made so replayed history stays consistent (a later RevokeActor finds the slot) and
-    ///        a catching-up chain can step its counter through historical expiring grants to reach the live one.
+    ///      - Sequenced (local or multichain): written anyway but INERT — it authenticates as ActorExpired
+    ///        ({_isActorExpired}) so it grants no authority. Sequenced batches are single-consume (not replayable), so
+    ///        there is no clobber risk; the write is still made so replayed history stays consistent (a later RevokeActor
+    ///        finds the slot) and a catching-up chain can step its counter through historical expiring grants to reach
+    ///        the live one.
     ///
     ///      A JIT grant is last-write-wins on its slot until the epoch is incremented; durable reduction (revoke, shorter
     ///      expiry, narrower scope) is a wallet responsibility — batch it with {IncrementLocalEpoch} to retire outstanding
@@ -704,34 +646,53 @@ contract Keystore {
         (bytes32 actorId, ActorConfig memory cfg, bytes memory policyData) =
             abi.decode(payload, (bytes32, ActorConfig, bytes));
 
+        // Cap a live actor's revoke delay so it can never be made effectively unremovable (self-brick).
+        if (!cfg.pendingRevoke && cfg.revokeDelayOrExpiry > MAX_REVOKE_DELAY) {
+            revert RevokeDelayTooLong();
+        }
+
         // Unsequenced (JIT) only: silently skip an already-expired grant so a lapsed replayable grant can never re-land
         // and clobber its slot — without making the change revert on onchain time. Sequenced batches are single-consume
-        // (no replay) and install an expired grant inert instead — see the doc above. Use the canonical {_isExpired}
-        // (which folds in the zero = no-expiry sentinel) so the expiry boundary matches authentication exactly: a grant
-        // with `expiry == block.timestamp` is still live for that second and installs, rather than being dropped here.
-        if (isUnsequenced && _isExpired(cfg.expiry)) {
+        // (no replay) and install an expired grant inert instead — see the doc above. {_isActorExpired} treats only a
+        // pendingRevoke grant as expired, and a grant with `expiry == block.timestamp` is still live for that second.
+        if (isUnsequenced && _isActorExpired(cfg)) {
             return;
         }
 
         _authorizeActor(account, actorId, cfg, policyData);
     }
 
-    /// @dev RevokeActor. `payload = abi.encode(bytes32 actorId)`. Clears the actor's config and policy slots (and
-    ///      disables the inline k1 self for the self-actorId), emitting ActorRevoked; reverts UnknownActor if the
-    ///      actor is not currently live. Not durable against an outstanding replayable unsequenced grant for the same
-    ///      actorId (which would re-install into the emptied slot); batch a {IncrementLocalEpoch} for durable teardown.
+    /// @dev RevokeActor. `payload = abi.encode(bytes32 actorId)`. Two-step for an explicit actor: instead of clearing
+    ///      the slot it flips `pendingRevoke` and converts the stored revoke delay into an absolute expiry
+    ///      (`revokeDelayOrExpiry += block.timestamp`), so the actor stays live for `delay` more seconds (the front-run
+    ///      window). The inline k1 self has no delay, so it is revoked immediately, emitting ActorRevoked. Reverts
+    ///      UnknownActor if the actor is not authorized, AlreadyRevoking if a revoke is already pending. Not durable
+    ///      against an outstanding replayable unsequenced grant for the same actorId (which would re-install the slot);
+    ///      batch a {IncrementLocalEpoch} for durable teardown.
     function _applyRevoke(address account, bytes calldata payload) private {
         bytes32 actorId = abi.decode(payload, (bytes32));
         if (!_isAuthorized(account, actorId)) {
             revert UnknownActor();
         }
-        delete _actorConfig[actorId][account];
-        delete _policyCommitment[actorId][account];
-        delete _policyManager[actorId][account];
-        if (actorId == _selfActorId(account)) {
+
+        // Inline k1 self (no _actorConfig entry): no revoke-delay concept, so revoke immediately.
+        if (actorId == _selfActorId(account) && _actorConfig[actorId][account].authenticator < K1_AUTHENTICATOR) {
+            delete _policyCommitment[actorId][account];
+            delete _policyManager[actorId][account];
             _disableInlineSelf(_accountState[account]);
+            emit ActorRevoked(account, actorId);
+            return;
         }
-        emit ActorRevoked(account, actorId);
+
+        // Explicit actor: schedule the revoke; reject a second initiation (it would only push the expiry out).
+        ActorConfig storage cfg = _actorConfig[actorId][account];
+        if (cfg.pendingRevoke) {
+            revert AlreadyRevoking();
+        }
+        uint48 expiry = uint48(block.timestamp + cfg.revokeDelayOrExpiry);
+        cfg.pendingRevoke = true;
+        cfg.revokeDelayOrExpiry = expiry;
+        emit ActorRevokeInitiated(account, actorId, expiry);
     }
 
     /// @dev IncrementLocalEpoch. Empty payload. Strict increment of the local epoch, resetting the local sequence to 0
@@ -749,37 +710,6 @@ contract Keystore {
         }
         st.localEpoch += 1;
         st.localSequence = 0;
-    }
-
-    /// @dev Lock. Local-only; `payload = abi.encode(uint16 unlockDelay)`. Must be standalone. The caller
-    ///      ({applySignedAccountChanges}) guarantees the account is unlocked before dispatch, so this overwrites any
-    ///      residue from an elapsed prior lock unconditionally.
-    function _applyLock(address account, bytes calldata payload) private {
-        AccountState storage st = _accountState[account];
-        uint16 unlockDelay = abi.decode(payload, (uint16));
-        if (unlockDelay == 0) {
-            revert ZeroUnlockDelay();
-        }
-        st.flags = (st.flags | FLAG_LOCKED) & ~FLAG_UNLOCK_INITIATED;
-        st.lockUnion = unlockDelay;
-        emit AccountLocked(account, unlockDelay);
-    }
-
-    /// @dev Unlock. Local-only; empty payload. Only from the hard-locked state with no pending unlock; sets the
-    ///      effective unlock timestamp from the stored delay.
-    function _applyUnlock(address account, bytes calldata payload) private {
-        if (payload.length != 0) {
-            revert InvalidChangePayload();
-        }
-        AccountState storage st = _accountState[account];
-        uint8 flags = st.flags;
-        if (flags & FLAG_LOCKED == 0 || flags & FLAG_UNLOCK_INITIATED != 0) {
-            revert NotLocked();
-        }
-        uint48 unlocksAt = uint48(block.timestamp + uint16(st.lockUnion));
-        st.flags = flags | FLAG_UNLOCK_INITIATED;
-        st.lockUnion = unlocksAt;
-        emit AccountUnlockInitiated(account, unlocksAt);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -962,10 +892,13 @@ contract Keystore {
                 if (_isExpired(st.defaultEOAExpiry)) {
                     return _emptyActorConfig();
                 }
-                return
-                    ActorConfig({
-                        authenticator: K1_AUTHENTICATOR, scope: st.defaultEOAScope, expiry: st.defaultEOAExpiry
-                    });
+                // Inline self expiry is a plain absolute value, surfaced as a pendingRevoke config for readers.
+                return ActorConfig({
+                    authenticator: K1_AUTHENTICATOR,
+                    scope: st.defaultEOAScope,
+                    revokeDelayOrExpiry: st.defaultEOAExpiry,
+                    pendingRevoke: st.defaultEOAExpiry != 0
+                });
             }
         }
 
@@ -973,14 +906,14 @@ contract Keystore {
         // (0x1) or a contract, so `>= K1_AUTHENTICATOR` is the "slot populated" test. An expired entry reports empty.
         ActorConfig memory config = _actorConfig[actorId][account];
         if (config.authenticator >= K1_AUTHENTICATOR) {
-            return _isExpired(config.expiry) ? _emptyActorConfig() : config;
+            return _isActorExpired(config) ? _emptyActorConfig() : config;
         }
         return config;
     }
 
     /// @dev The all-zero ActorConfig returned for a non-live actor (unknown, disabled, or expired).
     function _emptyActorConfig() private pure returns (ActorConfig memory) {
-        return ActorConfig({authenticator: address(0), expiry: 0, scope: 0});
+        return ActorConfig({authenticator: address(0), revokeDelayOrExpiry: 0, scope: 0, pendingRevoke: false});
     }
 
     /// @notice The actor's policy commitment, or 0 when the actor is not live. Gating is by liveness (see
@@ -1013,15 +946,6 @@ contract Keystore {
         });
     }
 
-    /// @notice Returns whether the account is currently locked (configuration frozen).
-    ///
-    /// @param account The account to check.
-    ///
-    /// @return True if the account is locked at the current block timestamp.
-    function isLocked(address account) external view returns (bool) {
-        return _isLocked(account);
-    }
-
     /// @notice Whether the account was keystore-established (createAccount or importAccount) rather than backed by a
     ///         proven address key. See {FLAG_CONTRACT_ESTABLISHED}.
     ///
@@ -1032,56 +956,9 @@ contract Keystore {
         return _accountState[account].flags & FLAG_CONTRACT_ESTABLISHED != 0;
     }
 
-    /// @notice Returns the account's full lock status.
-    ///
-    /// @param account The account to read.
-    ///
-    /// @return locked True if the account is locked at the current block timestamp.
-    /// @return hasInitiatedUnlock True if an unlock has been initiated but not yet elapsed.
-    /// @return unlocksAt The timestamp at which the account unlocks (type(uint48).max while hard-locked).
-    /// @return unlockDelay The configured unlock delay in seconds.
-    function getLockStatus(address account)
-        external
-        view
-        returns (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 unlockDelay)
-    {
-        AccountState storage st = _accountState[account];
-        uint8 flags = st.flags;
-        if (flags & FLAG_LOCKED == 0) {
-            // Unlocked: no lock bits set.
-            return (false, false, 0, 0);
-        }
-        if (flags & FLAG_UNLOCK_INITIATED == 0) {
-            // Hard-locked: lockUnion holds the configured delay; synthesize the max sentinel for unlocksAt.
-            return (true, false, type(uint48).max, uint16(st.lockUnion));
-        }
-        // Unlock initiated: lockUnion holds the effective unlock timestamp. Once it has elapsed the account is
-        // effectively unlocked, so report the clean unlocked state instead of surfacing the stale timestamp. Storage is
-        // not canonicalized (lock reads are non-clearing); a later Lock overwrites the residue.
-        uint48 unlockTime = st.lockUnion;
-        if (block.timestamp >= unlockTime) {
-            return (false, false, 0, 0);
-        }
-        return (true, true, unlockTime, 0);
-    }
-
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // INTERNAL FUNCTIONS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-
-    /// @dev Returns whether the account's configuration is currently frozen.
-    /// @dev An elapsed unlock reads as unlocked; a later {_applyLock} overwrites the stale lock fields.
-    function _isLocked(address account) private view returns (bool) {
-        AccountState storage st = _accountState[account];
-        uint8 flags = st.flags;
-        if (flags & FLAG_LOCKED == 0) {
-            return false;
-        }
-        if (flags & FLAG_UNLOCK_INITIATED == 0) {
-            return true;
-        }
-        return block.timestamp < st.lockUnion; // pending unlock: frozen until the timestamp elapses
-    }
 
     /// @dev True after bootstrap or any successful signed change. The epoch and multichain counter keep initialization
     ///      observable when the current local sequence is zero.
@@ -1119,8 +996,12 @@ contract Keystore {
             // Initial actors carry scope verbatim (0x00 = unrestricted admin) and never an expiry. When
             // scope & Scopes.POLICY is set, policyData is validated by the same frozen rule as authorizeActor
             // (52 bytes). Authorizing the self-actorId as k1 writes its scope into the inline default-EOA fields.
-            ActorConfig memory config =
-                ActorConfig({authenticator: initialActors[i].authenticator, scope: initialActors[i].scope, expiry: 0});
+            ActorConfig memory config = ActorConfig({
+                authenticator: initialActors[i].authenticator,
+                scope: initialActors[i].scope,
+                revokeDelayOrExpiry: 0,
+                pendingRevoke: false
+            });
             _authorizeActor(account, initialActors[i].actorId, config, initialActors[i].policyData);
         }
     }
@@ -1161,7 +1042,8 @@ contract Keystore {
                 // authorize. Re-enabling a previously revoked self is just the flag clear below.
                 delete _actorConfig[actorId][account]; // mutual exclusion: drop any non-k1 self
                 st.defaultEOAScope = config.scope;
-                st.defaultEOAExpiry = config.expiry;
+                // Inline self stores only an absolute expiry (pendingRevoke); a live grant's delay is not an expiry.
+                st.defaultEOAExpiry = config.pendingRevoke ? config.revokeDelayOrExpiry : 0;
                 st.flags &= ~FLAG_REVOKE_DEFAULT_EOA; // enable the inline self
             } else {
                 // Upsert: overwrite any existing non-k1 self in place.
@@ -1198,8 +1080,8 @@ contract Keystore {
     }
 
     /// @dev Emit ActorAuthorized with a tightly packed payload. The base packs to 32 bytes
-    ///      (authenticator(20) || expiry(6) || scope(2) || reserved(4 zero bytes)); the policy gate
-    ///      (manager(20) || commitment(32), 52 bytes) is appended only when scope & Scopes.POLICY != 0.
+    ///      (authenticator(20) || revokeDelayOrExpiry(6) || scope(2) || pendingRevoke(1) || reserved(3 zero bytes)); the
+    ///      policy gate (manager(20) || commitment(32), 52 bytes) is appended only when scope & Scopes.POLICY != 0.
     function _emitActorAuthorized(
         address account,
         bytes32 actorId,
@@ -1207,9 +1089,18 @@ contract Keystore {
         address manager,
         bytes32 commitment
     ) private {
+        bytes1 pendingRevoke = config.pendingRevoke ? bytes1(0x01) : bytes1(0x00);
         bytes memory actorData = (config.scope & Scopes.POLICY != 0)
-            ? abi.encodePacked(config.authenticator, config.expiry, config.scope, bytes4(0), manager, commitment)
-            : abi.encodePacked(config.authenticator, config.expiry, config.scope, bytes4(0));
+            ? abi.encodePacked(
+                config.authenticator,
+                config.revokeDelayOrExpiry,
+                config.scope,
+                pendingRevoke,
+                bytes3(0),
+                manager,
+                commitment
+            )
+            : abi.encodePacked(config.authenticator, config.revokeDelayOrExpiry, config.scope, pendingRevoke, bytes3(0));
         emit ActorAuthorized(account, actorId, actorData);
     }
 
@@ -1348,11 +1239,13 @@ contract Keystore {
     {
         bytes32[] memory actorHashes = new bytes32[](initialActors.length);
         for (uint256 i; i < initialActors.length; i++) {
-            // Expiry is forced to 0 at import — an actor-provided expiry is never accepted here. policyData is
-            // hashed via keccak256 into the Actor struct hash. The typehash structure matches the importAccount
-            // signature payload in EIP-8130.
+            // revokeDelayOrExpiry and pendingRevoke are forced to (0, false) at import — an actor-provided value is
+            // never accepted here. policyData is hashed via keccak256 into the Actor struct hash. The typehash
+            // structure matches the importAccount signature payload in EIP-8130.
             bytes32 configHash = keccak256(
-                abi.encode(ACTOR_CONFIG_TYPEHASH, initialActors[i].authenticator, uint48(0), initialActors[i].scope)
+                abi.encode(
+                    ACTOR_CONFIG_TYPEHASH, initialActors[i].authenticator, uint48(0), initialActors[i].scope, false
+                )
             );
             actorHashes[i] = keccak256(
                 abi.encode(ACTOR_TYPEHASH, initialActors[i].actorId, configHash, keccak256(initialActors[i].policyData))
@@ -1428,8 +1321,8 @@ contract Keystore {
         if (config.authenticator != expectedAuthenticator) {
             revert AuthenticatorMismatch();
         }
-        // Expiry is read from the same slot; an expired actor fails authentication. 0 = no expiry.
-        if (_isExpired(config.expiry)) {
+        // An expired (pendingRevoke) actor fails authentication; a live actor never fails here on time.
+        if (_isActorExpired(config)) {
             revert ActorExpired();
         }
         scope = config.scope;
@@ -1483,6 +1376,12 @@ contract Keystore {
     /// @dev True when `expiry` is set (non-zero) and has passed. A zero expiry means no expiry.
     function _isExpired(uint48 expiry) private view returns (bool) {
         return expiry != 0 && block.timestamp > expiry;
+    }
+
+    /// @dev Actor-aware liveness: only a pendingRevoke actor expires, once `block.timestamp > revokeDelayOrExpiry` (the
+    ///      boundary second is still live). A live actor's field is a revoke delay, not an expiry.
+    function _isActorExpired(ActorConfig memory config) private view returns (bool) {
+        return config.pendingRevoke && block.timestamp > config.revokeDelayOrExpiry;
     }
 
     /// @dev Recovers the ECDSA signer from a 65-byte r‖s‖v signature over `hash`, enforcing EIP-2 (low-s only,

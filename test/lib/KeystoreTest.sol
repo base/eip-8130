@@ -141,15 +141,54 @@ contract KeystoreTest is Test {
 
     // ── Change builders ──
 
+    /// @dev STRAWMAN (pre-PPS) back-compat shim. The legacy `expiry` arg is mapped onto the new revoke-delay/expiry
+    ///      union so the bulk of the suite ports unchanged:
+    ///        - `expiry == 0` or `expiry == UNBOUNDED`: a live actor (pendingRevoke == false, revoke delay 0) that
+    ///          stays authorized until an explicit revoke — the old "never expires" behavior.
+    ///        - any other value: a pre-scheduled/expiring session key (pendingRevoke == true) whose absolute expiry is
+    ///          `expiry` — the old "expires at T" behavior.
     function _authorizeChange(bytes32 actorId, address auth, uint16 scope, uint48 expiry, bytes memory policyData)
         internal
         pure
         returns (Keystore.AccountChange memory)
     {
+        bool pendingRevoke = expiry != 0 && expiry != UNBOUNDED;
+        uint48 field = pendingRevoke ? expiry : 0;
+        return _authorizeChangeRaw(actorId, auth, scope, field, pendingRevoke, policyData);
+    }
+
+    /// @dev Authorize a live actor with an explicit revoke delay (pendingRevoke == false). Used by tests exercising
+    ///      the new two-step per-actor revocation.
+    function _authorizeChangeWithDelay(
+        bytes32 actorId,
+        address auth,
+        uint16 scope,
+        uint48 revokeDelay,
+        bytes memory policyData
+    ) internal pure returns (Keystore.AccountChange memory) {
+        return _authorizeChangeRaw(actorId, auth, scope, revokeDelay, false, policyData);
+    }
+
+    /// @dev Fully-explicit AuthorizeActor builder over the new {Keystore.ActorConfig} shape.
+    function _authorizeChangeRaw(
+        bytes32 actorId,
+        address auth,
+        uint16 scope,
+        uint48 revokeDelayOrExpiry,
+        bool pendingRevoke,
+        bytes memory policyData
+    ) internal pure returns (Keystore.AccountChange memory) {
         return Keystore.AccountChange({
             changeType: Keystore.ChangeType.AuthorizeActor,
             payload: abi.encode(
-                actorId, Keystore.ActorConfig({authenticator: auth, scope: scope, expiry: expiry}), policyData
+                actorId,
+                Keystore.ActorConfig({
+                    authenticator: auth,
+                    scope: scope,
+                    revokeDelayOrExpiry: revokeDelayOrExpiry,
+                    pendingRevoke: pendingRevoke
+                }),
+                policyData
             )
         });
     }
@@ -160,14 +199,6 @@ contract KeystoreTest is Test {
 
     function _bumpChange() internal pure returns (Keystore.AccountChange memory) {
         return Keystore.AccountChange({changeType: Keystore.ChangeType.IncrementLocalEpoch, payload: ""});
-    }
-
-    function _lockChange(uint16 unlockDelay) internal pure returns (Keystore.AccountChange memory) {
-        return Keystore.AccountChange({changeType: Keystore.ChangeType.Lock, payload: abi.encode(unlockDelay)});
-    }
-
-    function _unlockChange() internal pure returns (Keystore.AccountChange memory) {
-        return Keystore.AccountChange({changeType: Keystore.ChangeType.Unlock, payload: ""});
     }
 
     /// @dev Wrap a single change into a one-element array.
@@ -282,9 +313,13 @@ contract KeystoreTest is Test {
         _applyLocal(pk, account, _one(_authorizeChange(actorId, authenticator, scope, UNBOUNDED, "")));
     }
 
+    /// @dev STRAWMAN (pre-PPS): revocation is now two-step per-actor. Back-compat callers expect the actor to be gone
+    ///      afterward, so this initiates the revoke (delay 0 for helper-authorized actors → expiry == now) and warps one
+    ///      second past the expiry so the actor is durably non-live, preserving the old "revoke ⇒ gone" contract. The
+    ///      inline k1 self is revoked immediately (no delay), so the warp is harmless there too.
     function _revokeActor(address account, uint256 pk, bytes32 actorId) internal {
-        // A bare (sequenced) revoke lands on its own; durable teardown against outstanding grants is a separate bump.
         _applyLocal(pk, account, _one(_revokeChange(actorId)));
+        vm.warp(block.timestamp + 1);
     }
 
     // Implicit-EOA variants are identical here (the same k1 signer path); kept as named aliases for readability.
@@ -300,23 +335,6 @@ contract KeystoreTest is Test {
         uint16 scope
     ) internal {
         _authorizeActorWithScope(account, pk, actorId, authenticator, scope);
-    }
-
-    // ── Signed lock helpers (re-implemented as environment-op batches) ──
-
-    /// @dev Relay a signed Lock (unlockDelay) authorized by `pk` on the local channel.
-    function _signedLock(uint256 pk, address account, uint16 unlockDelay) internal {
-        _applyLocal(pk, account, _one(_lockChange(unlockDelay)));
-    }
-
-    /// @dev Relay a signed Unlock authorized by `pk` on the local channel.
-    function _signedUnlock(uint256 pk, address account) internal {
-        _applyLocal(pk, account, _one(_unlockChange()));
-    }
-
-    /// @dev Hard-lock `account` via the signed lock path, authorized by its admin owner key `pk`.
-    function _lockAccount(uint256 pk, address account) internal {
-        _signedLock(pk, account, 1 hours);
     }
 
     // ── Direct AccountState storage pokes (for saturation edge cases) ──

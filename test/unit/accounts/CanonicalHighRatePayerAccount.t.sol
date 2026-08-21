@@ -43,9 +43,12 @@ contract CanonicalHighRatePayerAccountTest is KeystoreTest {
         account = keystore.createAccount(bytes32(uint256(0xbeef)), bytecode, actors);
     }
 
-    /// @dev Hard-lock `account` via the signed lock path, authorized by its admin owner key `pk`.
-    function _lockAccount(uint256 pk, address account, uint16 unlockDelay) internal {
-        _signedLock(pk, account, unlockDelay);
+    /// @dev STRAWMAN (pre-PPS): hard-lock `account` via its own self-contained lock (no longer a Keystore op). The
+    ///      `pk` arg is unused — the account authorizes lock/unlock by caller identity ({_isAuthorizedCaller}), so a
+    ///      self-call (prank as the account) is sufficient.
+    function _lockAccount(uint256, address account, uint32 unlockDelay) internal {
+        vm.prank(account);
+        CanonicalHighRatePayerAccount(payable(account)).lock(unlockDelay);
     }
 
     function _singleCall(address t, uint256 v, bytes memory d) internal pure returns (Call[] memory calls) {
@@ -213,6 +216,96 @@ contract CanonicalHighRatePayerAccountTest is KeystoreTest {
             .execute(address(target), 0, abi.encodeCall(HighRatePayerMockTarget.setValue, (99)));
 
         assertEq(target.value(), 99);
+    }
+
+    // ── self-contained payer lock (STRAWMAN, pre-PPS) ──
+
+    function test_lock_success_setsLockedAndStatus() public {
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
+
+        _lockAccount(ACTOR_PK, account, 1 hours);
+
+        assertTrue(CanonicalHighRatePayerAccount(payable(account)).isLocked());
+        (bool locked, bool initiated, uint48 unlocksAt, uint32 delay) =
+            CanonicalHighRatePayerAccount(payable(account)).getPayerLockStatus();
+        assertTrue(locked);
+        assertFalse(initiated);
+        assertEq(unlocksAt, type(uint48).max);
+        assertEq(delay, 1 hours);
+    }
+
+    function test_lock_revert_zeroDelay() public {
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
+
+        vm.prank(account);
+        vm.expectRevert(CanonicalHighRatePayerAccount.ZeroUnlockDelay.selector);
+        CanonicalHighRatePayerAccount(payable(account)).lock(0);
+    }
+
+    function test_lock_revert_whenAlreadyLocked() public {
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
+        _lockAccount(ACTOR_PK, account, 1 hours);
+
+        vm.prank(account);
+        vm.expectRevert(CanonicalHighRatePayerAccount.AccountAlreadyLocked.selector);
+        CanonicalHighRatePayerAccount(payable(account)).lock(1 hours);
+    }
+
+    function test_lock_revert_unauthorizedCaller() public {
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
+
+        vm.prank(address(0xdead));
+        vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
+        CanonicalHighRatePayerAccount(payable(account)).lock(1 hours);
+    }
+
+    function test_initiateUnlock_success_thenElapsesToUnlocked() public {
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
+        vm.deal(account, 1 ether);
+        _lockAccount(ACTOR_PK, account, 100);
+
+        vm.prank(account);
+        CanonicalHighRatePayerAccount(payable(account)).initiateUnlock();
+
+        // Still locked (ETH blocked) until the delay elapses.
+        (bool locked, bool initiated, uint48 unlocksAt,) =
+            CanonicalHighRatePayerAccount(payable(account)).getPayerLockStatus();
+        assertTrue(locked);
+        assertTrue(initiated);
+        assertEq(unlocksAt, uint48(block.timestamp + 100));
+        assertTrue(CanonicalHighRatePayerAccount(payable(account)).isLocked());
+
+        vm.warp(block.timestamp + 101);
+
+        // Elapsed: reports clean unlocked and ETH moves again.
+        assertFalse(CanonicalHighRatePayerAccount(payable(account)).isLocked());
+        (bool locked2,,,) = CanonicalHighRatePayerAccount(payable(account)).getPayerLockStatus();
+        assertFalse(locked2);
+
+        vm.prank(account);
+        CanonicalHighRatePayerAccount(payable(account))
+            .execute(address(target), 0.5 ether, abi.encodeCall(HighRatePayerMockTarget.setValue, (7)));
+        assertEq(address(target).balance, 0.5 ether);
+    }
+
+    function test_initiateUnlock_revert_whenNeverLocked() public {
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
+
+        vm.prank(account);
+        vm.expectRevert(CanonicalHighRatePayerAccount.NotLocked.selector);
+        CanonicalHighRatePayerAccount(payable(account)).initiateUnlock();
+    }
+
+    function test_initiateUnlock_revert_whenAlreadyInitiated() public {
+        (address account,) = _createHighRatePayerK1Account(ACTOR_PK);
+        _lockAccount(ACTOR_PK, account, 100);
+
+        vm.prank(account);
+        CanonicalHighRatePayerAccount(payable(account)).initiateUnlock();
+
+        vm.prank(account);
+        vm.expectRevert(CanonicalHighRatePayerAccount.NotLocked.selector);
+        CanonicalHighRatePayerAccount(payable(account)).initiateUnlock();
     }
 
     // ── isValidSignature ──

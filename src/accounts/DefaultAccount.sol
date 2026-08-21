@@ -136,17 +136,20 @@ contract DefaultAccount is Receiver {
     // ══════════════════════════════════════════════
 
     /// @dev Authorized if `caller` is the account itself, or holds the TRUSTED_EXECUTOR authenticator with an
-    ///      unexpired config AND operational authority. Expiry: 0 means none; a non-zero expiry is enforced so a
-    ///      user-set expiry is honored on the execution path. Scope: driving execution requires operational
-    ///      authority ({Scopes.isOperator}) — the unrestricted admin (scope == 0x00) or a SENDER actor not gated
-    ///      by a policy. A POLICY-gated actor must route every call through its manager, so granting it direct
+    ///      operational scope and a still-live config. Liveness is already resolved by {Keystore.getActorConfig}
+    ///      (which returns the all-zero config for an expired actor), so the explicit expiry check below is
+    ///      defense-in-depth against a stale config. STRAWMAN (pre-PPS): the check is actor-aware — a config only
+    ///      "expires" once it is pending-revoke (`pendingRevoke == true`) and its scheduled timestamp has passed; a
+    ///      live actor's `revokeDelayOrExpiry` is a revoke delay, never an expiry. Scope: driving execution requires
+    ///      operational authority ({Scopes.isOperator}) — the unrestricted admin (scope == 0x00) or a SENDER actor not
+    ///      gated by a policy. A POLICY-gated actor must route every call through its manager, so granting it direct
     ///      executeBatch would bypass that gate; fail closed. Sharing {Scopes.isOperator} keeps the execution and
     ///      signing (ERC-1271) authorization surfaces aligned.
     function _isAuthorizedCaller(address caller) internal view virtual returns (bool) {
         if (caller == address(this)) return true;
         Keystore.ActorConfig memory config = KEYSTORE.getActorConfig(address(this), ActorId.fromAddress(caller));
         if (config.authenticator != TRUSTED_EXECUTOR) return false;
-        if (config.expiry != 0 && block.timestamp > config.expiry) return false;
+        if (config.pendingRevoke && block.timestamp > config.revokeDelayOrExpiry) return false;
         return Scopes.isOperator(config.scope);
     }
 }
