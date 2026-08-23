@@ -265,6 +265,68 @@ contract AccountEnvironmentTest is KeystoreTest {
             pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, shorterButAboveFloor, ""))
         );
         assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, shorterButAboveFloor);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).authenticator, address(k1Authenticator));
+        assertEq(keystore.getActorConfig(account, ACTOR_A).scope, SENDER);
+    }
+
+    /// @notice Hard-locked re-lease cannot widen or swap a live actor's scope.
+    function test_lock_authorize_revert_scopeChange(uint256 pkSeed) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(2 days), "")));
+        _signedLock(pk, account, 1 hours);
+
+        Keystore.SignedAccountChanges memory s =
+            _localBatch(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), 0, _future(2 days), "")));
+        vm.expectRevert(Keystore.AccountIsLocked.selector);
+        keystore.applySignedAccountChanges(account, s);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).scope, SENDER);
+    }
+
+    /// @notice Hard-locked re-lease cannot replace a live actor's authenticator.
+    function test_lock_authorize_revert_authenticatorChange(uint256 pkSeed) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(2 days), "")));
+        _signedLock(pk, account, 1 hours);
+
+        Keystore.SignedAccountChanges memory s = _localBatch(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(p256Authenticator), SENDER, _future(2 days), ""))
+        );
+        vm.expectRevert(Keystore.AccountIsLocked.selector);
+        keystore.applySignedAccountChanges(account, s);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).authenticator, address(k1Authenticator));
+    }
+
+    /// @notice Hard-locked re-lease cannot rewrite a live actor's policy commitment.
+    function test_lock_authorize_revert_policyChange(uint256 pkSeed) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+
+        bytes memory policyData = abi.encodePacked(address(0xBEEF), bytes32(uint256(1)));
+        _applyLocal(
+            pk,
+            account,
+            _one(_authorizeChange(ACTOR_A, address(k1Authenticator), Scopes.POLICY, _future(2 days), policyData))
+        );
+        _signedLock(pk, account, 1 hours);
+
+        bytes memory otherPolicy = abi.encodePacked(address(0xBEEF), bytes32(uint256(2)));
+        Keystore.SignedAccountChanges memory s = _localBatch(
+            pk,
+            account,
+            _one(_authorizeChange(ACTOR_A, address(k1Authenticator), Scopes.POLICY, _future(2 days), otherPolicy))
+        );
+        vm.expectRevert(Keystore.AccountIsLocked.selector);
+        keystore.applySignedAccountChanges(account, s);
+        (, address manager, bytes32 commitment) = keystore.getActorWithPolicy(account, ACTOR_A);
+        assertEq(manager, address(0xBEEF));
+        assertEq(commitment, bytes32(uint256(1)));
     }
 
     /// @notice Pending unlock: AuthorizeActor with expiry == unlocksAt reverts ExpiryDoesNotOutliveUnlock.

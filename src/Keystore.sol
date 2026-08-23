@@ -44,9 +44,9 @@ contract Keystore {
     /// @notice The operation an {AccountChange} applies within an {applySignedAccountChanges} batch.
     ///
     /// @dev ABI-encodes as uint8. A locked account freezes every op except Unlock, IncrementLocalEpoch, and
-    ///      AuthorizeActor (the last only when the granted expiry outlives the unlock floor; see {_applyAuthorize}).
-    ///      Unlock additionally self-checks it is hard-locked. Lock and Unlock are Local-only and must each be the
-    ///      batch's only op.
+    ///      AuthorizeActor (the last only as an add or expiry-only re-lease that outlives the unlock floor; see
+    ///      {_applyAuthorize}). Unlock additionally self-checks it is hard-locked. Lock and Unlock are Local-only
+    ///      and must each be the batch's only op.
     enum ChangeType {
         // Authority ops (mutate who can act).
         AuthorizeActor, // payload: abi.encode(bytes32 actorId, ActorConfig cfg, bytes policyData); cfg.expiry is the granted expiry
@@ -218,8 +218,9 @@ contract Keystore {
     uint8 public constant FLAG_REVOKE_DEFAULT_EOA = 0x02;
 
     /// @notice AccountState.flags bit (spec `LOCKED`): identifies a lock record. Revoke and lock-delay changes are
-    ///         frozen unless an initiated unlock's timestamp has elapsed; AuthorizeActor may still land when the
-    ///         granted expiry outlives the unlock floor. Expired lock bits remain until a later Lock overwrites them.
+    ///         frozen unless an initiated unlock's timestamp has elapsed; AuthorizeActor may still add a new actor or
+    ///         re-lease a live one (expiry only) when the granted expiry outlives the unlock floor. Expired lock bits
+    ///         remain until a later Lock overwrites them.
     uint8 public constant FLAG_LOCKED = 0x04;
 
     /// @notice AccountState.flags bit (spec `UNLOCK_INITIATED`): selects how the packed `lockUnion` field is read.
@@ -580,9 +581,9 @@ contract Keystore {
     ///      (3) validate/advance the sequence counter BEFORE apply (reentrancy discipline); (4) compute the digest
     ///      via {_changesDigest}, authenticate, and reject a non-admin signer; (5) iterate
     ///      changes enforcing channel and lock policy (Lock/Unlock rejected on Multichain; RevokeActor and Lock
-    ///      rejected while the account is locked; AuthorizeActor while locked only when the granted expiry outlives
-    ///      the unlock floor; Lock/Unlock must be standalone). Anyone may relay — authorization comes entirely from
-    ///      the signature.
+    ///      rejected while the account is locked; AuthorizeActor while locked only as an add or expiry-only re-lease
+    ///      that outlives the unlock floor; Lock/Unlock must be standalone). Anyone may relay — authorization comes
+    ///      entirely from the signature.
     ///
     /// @param account The account whose configuration is changed.
     /// @param batch The signed batch (channel, ordered changes, sequence word, signature).
@@ -713,9 +714,12 @@ contract Keystore {
     ///      expiry, narrower scope) is a wallet responsibility — batch it with {IncrementLocalEpoch} to retire outstanding
     ///      grants.
     ///
-    ///      While the account is locked, the grant must outlive the unlock floor (`now + delay` while hard-locked,
-    ///      `unlocksAt` while pending). A shorter expiry would be dead by the time the account can unlock — the same
-    ///      end state as a revoke, which stays frozen. `expiry == 0` (no expiry) always outlives the floor.
+    ///      While the account is locked, a grant must outlive the unlock floor (`now + delay` while hard-locked,
+    ///      `unlocksAt` while pending) and, if the actor is already live, may change only expiry — authenticator,
+    ///      scope, and policy stay frozen (changing them is a revoke-shaped rewrite). A shorter expiry would be dead
+    ///      by the time the account can unlock — the same end state as a revoke, which stays frozen. `expiry == 0`
+    ///      (no expiry) always outlives the floor. A new or already-expired actorId is a fresh add and is not
+    ///      identity-frozen.
     function _applyAuthorize(address account, bytes calldata payload, bool isUnsequenced, bool locked) private {
         (bytes32 actorId, ActorConfig memory cfg, bytes memory policyData) =
             abi.decode(payload, (bytes32, ActorConfig, bytes));
@@ -729,13 +733,39 @@ contract Keystore {
             return;
         }
 
-        // Locked: reject a grant that does not outlive the soonest the account can unlock. Checked after the JIT skip
-        // so a lapsed replayable grant stays a no-op rather than reverting on the floor.
-        if (locked && cfg.expiry != 0 && cfg.expiry <= _unlockFloor(account)) {
-            revert ExpiryDoesNotOutliveUnlock();
+        // Locked: reject a grant that does not outlive the soonest the account can unlock, and reject a rewrite of a
+        // live actor's authenticator / scope / policy. Checked after the JIT skip so a lapsed replayable grant stays
+        // a no-op rather than reverting on the floor.
+        if (locked) {
+            if (cfg.expiry != 0 && cfg.expiry <= _unlockFloor(account)) {
+                revert ExpiryDoesNotOutliveUnlock();
+            }
+            _requireLockedAuthorizePreservesIdentity(account, actorId, cfg, policyData);
         }
 
         _authorizeActor(account, actorId, cfg, policyData);
+    }
+
+    /// @dev While locked, a live actor may only have its expiry rewritten. Authenticator, scope, and policy
+    ///      (manager + commitment) must match the current live config; anything else is a revoke-shaped mutation.
+    ///      Unknown or expired actorIds have no live identity and are treated as a new add.
+    function _requireLockedAuthorizePreservesIdentity(
+        address account,
+        bytes32 actorId,
+        ActorConfig memory cfg,
+        bytes memory policyData
+    ) private view {
+        ActorConfig memory current = _resolveActorConfig(account, actorId);
+        if (current.authenticator == address(0)) {
+            return;
+        }
+        if (cfg.authenticator != current.authenticator || cfg.scope != current.scope) {
+            revert AccountIsLocked();
+        }
+        (address manager, bytes32 commitment) = _slicePolicy(cfg.scope, policyData);
+        if (manager != _policyManager[actorId][account] || commitment != _policyCommitment[actorId][account]) {
+            revert AccountIsLocked();
+        }
     }
 
     /// @dev RevokeActor. `payload = abi.encode(bytes32 actorId)`. Clears the actor's config and policy slots (and
@@ -1035,8 +1065,8 @@ contract Keystore {
         });
     }
 
-    /// @notice Returns whether the account is currently locked (revoke/lock frozen; authorize only above the unlock
-    ///         floor).
+    /// @notice Returns whether the account is currently locked (revoke/lock frozen; authorize is add or expiry-only
+    ///         re-lease above the unlock floor).
     ///
     /// @param account The account to check.
     ///
