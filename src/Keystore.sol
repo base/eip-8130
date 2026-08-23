@@ -657,7 +657,7 @@ contract Keystore {
             ChangeType t = batch.changes[i].changeType;
 
             // Preconditions: freeze non-exempt ops on a locked account, and hold Lock/Unlock to a standalone local batch.
-            // AuthorizeActor is exempt here; {_applyAuthorize} still requires the granted expiry to outlive unlock.
+            // AuthorizeActor is exempt here; {_applyAuthorize} still applies the locked add / expiry-only rule.
             if (
                 locked && t != ChangeType.Unlock && t != ChangeType.IncrementLocalEpoch
                     && t != ChangeType.AuthorizeActor
@@ -714,12 +714,9 @@ contract Keystore {
     ///      expiry, narrower scope) is a wallet responsibility — batch it with {IncrementLocalEpoch} to retire outstanding
     ///      grants.
     ///
-    ///      While the account is locked, a grant must outlive the unlock floor (`now + delay` while hard-locked,
-    ///      `unlocksAt` while pending) and, if the actor is already live, may change only expiry — authenticator,
-    ///      scope, and policy stay frozen (changing them is a revoke-shaped rewrite). A shorter expiry would be dead
-    ///      by the time the account can unlock — the same end state as a revoke, which stays frozen. `expiry == 0`
-    ///      (no expiry) always outlives the floor. A new or already-expired actorId is a fresh add and is not
-    ///      identity-frozen.
+    ///      Locked rule: the grant must outlive the unlock floor (`now + delay` / `unlocksAt`; `expiry == 0` always
+    ///      does). If a live entry exists, only expiry may change — authenticator, scope, and policy stay as they are.
+    ///      No live entry (unknown or expired) is a new add. After the account unlocks, this guard is off.
     function _applyAuthorize(address account, bytes calldata payload, bool isUnsequenced, bool locked) private {
         (bytes32 actorId, ActorConfig memory cfg, bytes memory policyData) =
             abi.decode(payload, (bytes32, ActorConfig, bytes));
@@ -733,39 +730,25 @@ contract Keystore {
             return;
         }
 
-        // Locked: reject a grant that does not outlive the soonest the account can unlock, and reject a rewrite of a
-        // live actor's authenticator / scope / policy. Checked after the JIT skip so a lapsed replayable grant stays
-        // a no-op rather than reverting on the floor.
         if (locked) {
             if (cfg.expiry != 0 && cfg.expiry <= _unlockFloor(account)) {
                 revert ExpiryDoesNotOutliveUnlock();
             }
-            _requireLockedAuthorizePreservesIdentity(account, actorId, cfg, policyData);
+            // Live entry: expiry-only. Expired reads as empty ({_resolveActorConfig}), so that id is a new add.
+            ActorConfig memory current = _resolveActorConfig(account, actorId);
+            if (current.authenticator != address(0)) {
+                (address manager, bytes32 commitment) = _slicePolicy(cfg.scope, policyData);
+                if (
+                    cfg.authenticator != current.authenticator || cfg.scope != current.scope
+                        || manager != _policyManager[actorId][account]
+                        || commitment != _policyCommitment[actorId][account]
+                ) {
+                    revert AccountIsLocked();
+                }
+            }
         }
 
         _authorizeActor(account, actorId, cfg, policyData);
-    }
-
-    /// @dev While locked, a live actor may only have its expiry rewritten. Authenticator, scope, and policy
-    ///      (manager + commitment) must match the current live config; anything else is a revoke-shaped mutation.
-    ///      Unknown or expired actorIds have no live identity and are treated as a new add.
-    function _requireLockedAuthorizePreservesIdentity(
-        address account,
-        bytes32 actorId,
-        ActorConfig memory cfg,
-        bytes memory policyData
-    ) private view {
-        ActorConfig memory current = _resolveActorConfig(account, actorId);
-        if (current.authenticator == address(0)) {
-            return;
-        }
-        if (cfg.authenticator != current.authenticator || cfg.scope != current.scope) {
-            revert AccountIsLocked();
-        }
-        (address manager, bytes32 commitment) = _slicePolicy(cfg.scope, policyData);
-        if (manager != _policyManager[actorId][account] || commitment != _policyCommitment[actorId][account]) {
-            revert AccountIsLocked();
-        }
     }
 
     /// @dev RevokeActor. `payload = abi.encode(bytes32 actorId)`. Clears the actor's config and policy slots (and

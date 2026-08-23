@@ -329,6 +329,29 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertEq(commitment, bytes32(uint256(1)));
     }
 
+    /// @notice An expired actor has no live entry, so while the account stays locked that actorId is a new add:
+    ///         authenticator and scope may change, subject only to the unlock floor.
+    function test_lock_authorize_success_expiredActorIsNewAdd(uint256 pkSeed) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+
+        uint48 shortExpiry = _future(10);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, shortExpiry, "")));
+        _signedLock(pk, account, 1 hours);
+
+        vm.warp(uint256(shortExpiry) + 1);
+        assertFalse(_isActor(account, ACTOR_A));
+        assertTrue(keystore.isLocked(account));
+
+        uint48 newExpiry = uint48(block.timestamp + 1 hours + 1);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(p256Authenticator), 0, newExpiry, "")));
+        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, ACTOR_A);
+        assertEq(cfg.authenticator, address(p256Authenticator));
+        assertEq(cfg.scope, 0);
+        assertEq(cfg.expiry, newExpiry);
+    }
+
     /// @notice Pending unlock: AuthorizeActor with expiry == unlocksAt reverts ExpiryDoesNotOutliveUnlock.
     function test_lock_authorize_revert_expiryAtPendingUnlocksAt(uint256 pkSeed, uint16 delay, uint256 t0) public {
         uint256 pk = _boundK1Pk(pkSeed);
