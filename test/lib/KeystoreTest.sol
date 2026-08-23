@@ -321,12 +321,12 @@ contract KeystoreTest is Test {
 
     // ── Direct AccountState storage pokes (for saturation edge cases) ──
     //
-    // AccountState packs into one slot at base-slot 3 (declaration order: _actorConfig, _policyCommitment,
-    // _policyManager, _accountState). multichainSequence occupies bytes[0:8] and localSequence bytes[8:16] of that
+    // AccountState packs into one slot at base-slot 0 (the only remaining Solidity mapping; actor records live at
+    // {KeystoreLayout.recordBase}). multichainSequence occupies bytes[0:8] and localSequence bytes[8:16] of that
     // slot; localSequence's high 32 bits are the epoch, its low 32 bits the sequence.
 
     function _accountStateSlot(address account) internal pure returns (bytes32) {
-        return keccak256(abi.encode(account, uint256(3)));
+        return keccak256(abi.encode(account, uint256(0)));
     }
 
     /// @dev Overwrite the packed localSequence word (epoch<<32 | seq), preserving every other field in the slot.

@@ -754,7 +754,7 @@ contract PolicyAccessorsTest is KeystoreTest {
 
     /// @dev Authorize the EOA's self-actorId as a scoped k1 actor carrying a gated policy. The EOA is not
     ///      createAccount'd, so the implicit default-EOA owner signs the change; the authorization lives in the
-    ///      inline-k1 self home (`_accountState`) with (manager, commitment) in the shared actorId-keyed keyspace.
+    ///      inline-k1 self home (`_accountState`) with (manager, commitment) in the co-located actor record.
     function _authorizeInlineSelfWithPolicy(
         address eoa,
         uint256 eoaPk,
