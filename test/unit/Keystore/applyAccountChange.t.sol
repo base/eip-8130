@@ -177,9 +177,9 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertTrue(keystore.isLocked(account));
     }
 
-    /// @notice While locked, an authority op (authorize) reverts AccountIsLocked but an environment op (bump)
-    ///         succeeds — the lock freezes the actor set, not the epoch.
-    function test_lock_bumpSucceedsAuthorizeFails(uint256 pkSeed) public {
+    /// @notice While locked, an environment op (bump) and an AuthorizeActor whose expiry outlives `now + delay`
+    ///         succeed; RevokeActor stays frozen.
+    function test_lock_bumpAndAuthorizeSucceedRevokeFails(uint256 pkSeed) public {
         uint256 pk = _boundK1Pk(pkSeed);
         address account = vm.addr(pk);
         _assumeSafeAccount(account);
@@ -191,12 +191,217 @@ contract AccountEnvironmentTest is KeystoreTest {
         (uint32 epoch,) = _localEpochSeq(account);
         assertEq(epoch, 1);
 
-        // Authorize under lock: rejected.
+        // Authorize under lock with expiry > now + delay: allowed.
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
+        assertTrue(_isActor(account, ACTOR_A));
+
+        // Revoke under lock: still rejected.
+        Keystore.SignedAccountChanges memory s = _localBatch(pk, account, _one(_revokeChange(ACTOR_A)));
+        vm.expectRevert(Keystore.AccountIsLocked.selector);
+        keystore.applySignedAccountChanges(account, s);
+        assertTrue(_isActor(account, ACTOR_A));
+    }
+
+    /// @notice Hard-locked AuthorizeActor: expiry must be strictly greater than `now + delay`. Equal is a
+    ///         revoke-shaped grant (dead by the soonest unlock) and reverts ExpiryDoesNotOutliveUnlock.
+    function test_lock_authorize_revert_expiryAtHardLockFloor(uint256 pkSeed, uint16 delay) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+        delay = uint16(bound(delay, 1, type(uint16).max));
+
+        _signedLock(pk, account, delay);
+        uint48 floor = uint48(block.timestamp + delay);
+
+        Keystore.SignedAccountChanges memory s =
+            _localBatch(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, floor, "")));
+        vm.expectRevert(Keystore.ExpiryDoesNotOutliveUnlock.selector);
+        keystore.applySignedAccountChanges(account, s);
+        assertFalse(_isActor(account, ACTOR_A));
+    }
+
+    /// @notice Hard-locked AuthorizeActor: expiry == `now + delay + 1` (just above the floor) lands.
+    function test_lock_authorize_success_expiryJustAboveHardLockFloor(uint256 pkSeed, uint16 delay) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+        delay = uint16(bound(delay, 1, type(uint16).max));
+
+        _signedLock(pk, account, delay);
+        uint48 expiry = uint48(block.timestamp + delay + 1);
+
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, expiry, "")));
+        assertTrue(_isActor(account, ACTOR_A));
+        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, expiry);
+    }
+
+    /// @notice Hard-locked AuthorizeActor: `expiry == 0` (no expiry) always outlives the floor.
+    function test_lock_authorize_success_unboundedExpiry(uint256 pkSeed, uint16 delay) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+        delay = uint16(bound(delay, 1, type(uint16).max));
+
+        _signedLock(pk, account, delay);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, 0, "")));
+        assertTrue(_isActor(account, ACTOR_A));
+        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, 0);
+    }
+
+    /// @notice Hard-locked re-lease: an existing actor may be rewritten with a new expiry above the floor, including
+    ///         a shorten, as long as the new expiry still outlives `now + delay`.
+    function test_lock_authorize_success_releaseAboveFloor(uint256 pkSeed, uint16 delay) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+        delay = uint16(bound(delay, 1, type(uint16).max));
+
+        uint48 longExpiry = _future(2 days);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, longExpiry, "")));
+        _signedLock(pk, account, delay);
+
+        uint48 shorterButAboveFloor = uint48(block.timestamp + delay + 1);
+        _applyLocal(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, shorterButAboveFloor, ""))
+        );
+        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, shorterButAboveFloor);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).authenticator, address(k1Authenticator));
+        assertEq(keystore.getActorConfig(account, ACTOR_A).scope, SENDER);
+    }
+
+    /// @notice Hard-locked re-lease cannot widen or swap a live actor's scope.
+    function test_lock_authorize_revert_scopeChange(uint256 pkSeed) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(2 days), "")));
+        _signedLock(pk, account, 1 hours);
+
+        Keystore.SignedAccountChanges memory s =
+            _localBatch(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), 0, _future(2 days), "")));
+        vm.expectRevert(Keystore.AccountIsLocked.selector);
+        keystore.applySignedAccountChanges(account, s);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).scope, SENDER);
+    }
+
+    /// @notice Hard-locked re-lease cannot replace a live actor's authenticator.
+    function test_lock_authorize_revert_authenticatorChange(uint256 pkSeed) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(2 days), "")));
+        _signedLock(pk, account, 1 hours);
+
         Keystore.SignedAccountChanges memory s = _localBatch(
-            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
+            pk, account, _one(_authorizeChange(ACTOR_A, address(p256Authenticator), SENDER, _future(2 days), ""))
         );
         vm.expectRevert(Keystore.AccountIsLocked.selector);
         keystore.applySignedAccountChanges(account, s);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).authenticator, address(k1Authenticator));
+    }
+
+    /// @notice Hard-locked re-lease cannot rewrite a live actor's policy commitment.
+    function test_lock_authorize_revert_policyChange(uint256 pkSeed) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+
+        bytes memory policyData = abi.encodePacked(address(0xBEEF), bytes32(uint256(1)));
+        _applyLocal(
+            pk,
+            account,
+            _one(_authorizeChange(ACTOR_A, address(k1Authenticator), Scopes.POLICY, _future(2 days), policyData))
+        );
+        _signedLock(pk, account, 1 hours);
+
+        bytes memory otherPolicy = abi.encodePacked(address(0xBEEF), bytes32(uint256(2)));
+        Keystore.SignedAccountChanges memory s = _localBatch(
+            pk,
+            account,
+            _one(_authorizeChange(ACTOR_A, address(k1Authenticator), Scopes.POLICY, _future(2 days), otherPolicy))
+        );
+        vm.expectRevert(Keystore.AccountIsLocked.selector);
+        keystore.applySignedAccountChanges(account, s);
+        (, address manager, bytes32 commitment) = keystore.getActorWithPolicy(account, ACTOR_A);
+        assertEq(manager, address(0xBEEF));
+        assertEq(commitment, bytes32(uint256(1)));
+    }
+
+    /// @notice An expired actor has no live entry, so while the account stays locked that actorId is a new add:
+    ///         authenticator and scope may change, subject only to the unlock floor.
+    function test_lock_authorize_success_expiredActorIsNewAdd(uint256 pkSeed) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+
+        uint48 shortExpiry = _future(10);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, shortExpiry, "")));
+        _signedLock(pk, account, 1 hours);
+
+        vm.warp(uint256(shortExpiry) + 1);
+        assertFalse(_isActor(account, ACTOR_A));
+        assertTrue(keystore.isLocked(account));
+
+        uint48 newExpiry = uint48(block.timestamp + 1 hours + 1);
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(p256Authenticator), 0, newExpiry, "")));
+        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, ACTOR_A);
+        assertEq(cfg.authenticator, address(p256Authenticator));
+        assertEq(cfg.scope, 0);
+        assertEq(cfg.expiry, newExpiry);
+    }
+
+    /// @notice Pending unlock: AuthorizeActor with expiry == unlocksAt reverts ExpiryDoesNotOutliveUnlock.
+    function test_lock_authorize_revert_expiryAtPendingUnlocksAt(uint256 pkSeed, uint16 delay, uint256 t0) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+        delay = uint16(bound(delay, 1, type(uint16).max));
+        t0 = bound(t0, block.timestamp, 1e9);
+
+        _signedLock(pk, account, delay);
+        vm.warp(t0);
+        _signedUnlock(pk, account);
+        uint48 unlocksAt = uint48(t0 + delay);
+
+        Keystore.SignedAccountChanges memory s =
+            _localBatch(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, unlocksAt, "")));
+        vm.expectRevert(Keystore.ExpiryDoesNotOutliveUnlock.selector);
+        keystore.applySignedAccountChanges(account, s);
+        assertFalse(_isActor(account, ACTOR_A));
+    }
+
+    /// @notice Pending unlock: AuthorizeActor with expiry == unlocksAt + 1 lands; the grant outlives the unlock.
+    function test_lock_authorize_success_expiryJustAbovePendingUnlocksAt(uint256 pkSeed, uint16 delay, uint256 t0)
+        public
+    {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+        delay = uint16(bound(delay, 1, type(uint16).max));
+        t0 = bound(t0, block.timestamp, 1e9);
+
+        _signedLock(pk, account, delay);
+        vm.warp(t0);
+        _signedUnlock(pk, account);
+        uint48 expiry = uint48(t0 + delay + 1);
+
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, expiry, "")));
+        assertTrue(_isActor(account, ACTOR_A));
+        assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, expiry);
+    }
+
+    /// @notice A lapsed JIT grant under lock is still skipped (no-op), not rejected as ExpiryDoesNotOutliveUnlock.
+    function test_lock_authorizeUnsequenced_expiredSkips(uint256 pkSeed) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        address account = vm.addr(pk);
+        _assumeSafeAccount(account);
+
+        _signedLock(pk, account, 1 hours);
+        uint48 past = uint48(block.timestamp - 1);
+        _applyUnsequenced(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, past, "")));
+        assertFalse(_isActor(account, ACTOR_A));
     }
 
     /// @notice After a full unlock cycle elapses, an authority op is accepted again (lazy lock clear).

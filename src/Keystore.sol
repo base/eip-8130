@@ -43,9 +43,10 @@ contract Keystore {
 
     /// @notice The operation an {AccountChange} applies within an {applySignedAccountChanges} batch.
     ///
-    /// @dev ABI-encodes as uint8. A locked account freezes every op except Unlock and IncrementLocalEpoch, enforced by
-    ///      the guard in {applySignedAccountChanges} (Unlock additionally self-checks it is hard-locked). Lock and
-    ///      Unlock are Local-only and must each be the batch's only op.
+    /// @dev ABI-encodes as uint8. A locked account freezes every op except Unlock, IncrementLocalEpoch, and
+    ///      AuthorizeActor (the last only as an add or expiry-only re-lease that outlives the unlock floor; see
+    ///      {_applyAuthorize}). Unlock additionally self-checks it is hard-locked. Lock and Unlock are Local-only
+    ///      and must each be the batch's only op.
     enum ChangeType {
         // Authority ops (mutate who can act).
         AuthorizeActor, // payload: abi.encode(bytes32 actorId, ActorConfig cfg, bytes policyData); cfg.expiry is the granted expiry
@@ -216,8 +217,10 @@ contract Keystore {
     ///         clears it (re-enabling the inline self, possibly scoped).
     uint8 public constant FLAG_REVOKE_DEFAULT_EOA = 0x02;
 
-    /// @notice AccountState.flags bit (spec `LOCKED`): identifies a lock record. The account is frozen unless an
-    ///         initiated unlock's timestamp has elapsed; expired lock bits remain until a later Lock overwrites them.
+    /// @notice AccountState.flags bit (spec `LOCKED`): identifies a lock record. Revoke and lock-delay changes are
+    ///         frozen unless an initiated unlock's timestamp has elapsed; AuthorizeActor may still add a new actor or
+    ///         re-lease a live one (expiry only) when the granted expiry outlives the unlock floor. Expired lock bits
+    ///         remain until a later Lock overwrites them.
     uint8 public constant FLAG_LOCKED = 0x04;
 
     /// @notice AccountState.flags bit (spec `UNLOCK_INITIATED`): selects how the packed `lockUnion` field is read.
@@ -291,6 +294,11 @@ contract Keystore {
 
     /// @notice The operation is not permitted while the account is locked.
     error AccountIsLocked();
+
+    /// @notice An AuthorizeActor while locked carried an expiry that does not outlive the unlock floor: `now + delay`
+    ///         while hard-locked, `unlocksAt` while a pending unlock is in flight. `expiry == 0` (no expiry) always
+    ///         outlives the floor and is accepted.
+    error ExpiryDoesNotOutliveUnlock();
 
     /// @notice The signed chainId is neither 0 (multichain) nor the current chain.
     error InvalidChainId();
@@ -572,9 +580,10 @@ contract Keystore {
     ///      Pipeline (in order): (1) split the sequence word; (2) reject a stale epoch on Local batches;
     ///      (3) validate/advance the sequence counter BEFORE apply (reentrancy discipline); (4) compute the digest
     ///      via {_changesDigest}, authenticate, and reject a non-admin signer; (5) iterate
-    ///      changes enforcing channel and lock policy (Lock/Unlock rejected on Multichain; authority ops
-    ///      rejected while the account is locked; Lock/Unlock must be standalone). Anyone may relay — authorization
-    ///      comes entirely from the signature.
+    ///      changes enforcing channel and lock policy (Lock/Unlock rejected on Multichain; RevokeActor and Lock
+    ///      rejected while the account is locked; AuthorizeActor while locked only as an add or expiry-only re-lease
+    ///      that outlives the unlock floor; Lock/Unlock must be standalone). Anyone may relay — authorization comes
+    ///      entirely from the signature.
     ///
     /// @param account The account whose configuration is changed.
     /// @param batch The signed batch (channel, ordered changes, sequence word, signature).
@@ -648,7 +657,11 @@ contract Keystore {
             ChangeType t = batch.changes[i].changeType;
 
             // Preconditions: freeze non-exempt ops on a locked account, and hold Lock/Unlock to a standalone local batch.
-            if (locked && t != ChangeType.Unlock && t != ChangeType.IncrementLocalEpoch) {
+            // AuthorizeActor is exempt here; {_applyAuthorize} still applies the locked add / expiry-only rule.
+            if (
+                locked && t != ChangeType.Unlock && t != ChangeType.IncrementLocalEpoch
+                    && t != ChangeType.AuthorizeActor
+            ) {
                 revert AccountIsLocked();
             }
             if (t == ChangeType.Lock || t == ChangeType.Unlock) {
@@ -662,7 +675,7 @@ contract Keystore {
 
             // Apply: dispatch the op to its handler.
             if (t == ChangeType.AuthorizeActor) {
-                _applyAuthorize(account, batch.changes[i].payload, isUnsequenced);
+                _applyAuthorize(account, batch.changes[i].payload, isUnsequenced, locked);
             } else if (t == ChangeType.RevokeActor) {
                 _applyRevoke(account, batch.changes[i].payload);
             } else if (t == ChangeType.IncrementLocalEpoch) {
@@ -700,7 +713,11 @@ contract Keystore {
     ///      A JIT grant is last-write-wins on its slot until the epoch is incremented; durable reduction (revoke, shorter
     ///      expiry, narrower scope) is a wallet responsibility — batch it with {IncrementLocalEpoch} to retire outstanding
     ///      grants.
-    function _applyAuthorize(address account, bytes calldata payload, bool isUnsequenced) private {
+    ///
+    ///      Locked rule: the grant must outlive the unlock floor (`now + delay` / `unlocksAt`; `expiry == 0` always
+    ///      does). If a live entry exists, only expiry may change — authenticator, scope, and policy stay as they are.
+    ///      No live entry (unknown or expired) is a new add. After the account unlocks, this guard is off.
+    function _applyAuthorize(address account, bytes calldata payload, bool isUnsequenced, bool locked) private {
         (bytes32 actorId, ActorConfig memory cfg, bytes memory policyData) =
             abi.decode(payload, (bytes32, ActorConfig, bytes));
 
@@ -711,6 +728,24 @@ contract Keystore {
         // with `expiry == block.timestamp` is still live for that second and installs, rather than being dropped here.
         if (isUnsequenced && _isExpired(cfg.expiry)) {
             return;
+        }
+
+        if (locked) {
+            if (cfg.expiry != 0 && cfg.expiry <= _unlockFloor(account)) {
+                revert ExpiryDoesNotOutliveUnlock();
+            }
+            // Live entry: expiry-only. Expired reads as empty ({_resolveActorConfig}), so that id is a new add.
+            ActorConfig memory current = _resolveActorConfig(account, actorId);
+            if (current.authenticator != address(0)) {
+                (address manager, bytes32 commitment) = _slicePolicy(cfg.scope, policyData);
+                if (
+                    cfg.authenticator != current.authenticator || cfg.scope != current.scope
+                        || manager != _policyManager[actorId][account]
+                        || commitment != _policyCommitment[actorId][account]
+                ) {
+                    revert AccountIsLocked();
+                }
+            }
         }
 
         _authorizeActor(account, actorId, cfg, policyData);
@@ -1013,7 +1048,8 @@ contract Keystore {
         });
     }
 
-    /// @notice Returns whether the account is currently locked (configuration frozen).
+    /// @notice Returns whether the account is currently locked (revoke/lock frozen; authorize is add or expiry-only
+    ///         re-lease above the unlock floor).
     ///
     /// @param account The account to check.
     ///
@@ -1081,6 +1117,16 @@ contract Keystore {
             return true;
         }
         return block.timestamp < st.lockUnion; // pending unlock: frozen until the timestamp elapses
+    }
+
+    /// @dev Soonest timestamp the account can be unlocked. Caller must only use this when {_isLocked} is true.
+    ///      Hard-locked: `now +` stored delay. Pending unlock: the stored `unlocksAt`.
+    function _unlockFloor(address account) private view returns (uint48) {
+        AccountState storage st = _accountState[account];
+        if (st.flags & FLAG_UNLOCK_INITIATED != 0) {
+            return st.lockUnion;
+        }
+        return uint48(block.timestamp + uint16(st.lockUnion));
     }
 
     /// @dev True after bootstrap or any successful signed change. The epoch and multichain counter keep initialization
