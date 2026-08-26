@@ -115,7 +115,7 @@ contract Keystore {
         uint64 multichainSequence; // 8 bytes
         uint32 localSequence; // 4 bytes – low half of the signed local word
         uint32 localEpoch; // 4 bytes – high half of the signed local word
-        uint8 flags; // 1 byte – bitfield: bit 0 CONTRACT_ESTABLISHED, bit 1 REVOKE_DEFAULT_EOA, bit 2 LOCKED, bit 3 UNLOCK_INITIATED
+        uint8 flags; // 1 byte – bitfield: bit 0 REVOKE_DEFAULT_EOA, bit 1 LOCKED, bit 2 UNLOCK_INITIATED
         uint48 lockUnion; // 6 bytes – union: unlockDelay while UNLOCK_INITIATED clear, else unlocksAt (timestamp)
         uint48 defaultEOAExpiry; // 6 bytes – inline self k1 expiry (Unix seconds; 0 = no expiry)
         uint16 defaultEOAScope; // 2 bytes – inline self k1 scope (0 = full owner)
@@ -198,15 +198,6 @@ contract Keystore {
     // ACCOUNT STATE FLAGS
     // ----------------------------------------------------------------------------------------------------------------
 
-    /// @notice AccountState.flags bit: set on every account the keystore establishes (createAccount and importAccount),
-    ///         marking it "keystore-established, not a proven address key."
-    ///
-    /// @dev Permanent once set; has no effect on authentication. The protocol can read it to make code-delegation or
-    ///      other decisions — e.g. an account may have empty code yet retain EIP-8130 state (an EIP-6780 same-transaction
-    ///      SELFDESTRUCT), so this flag lets consumers avoid treating empty code as proof of a known EOA key. A future
-    ///      key-backed native path may deliberately leave it clear.
-    uint8 public constant FLAG_CONTRACT_ESTABLISHED = 0x01;
-
     /// @notice AccountState.flags bit: when set, the account's secp256k1 ("self") key cannot authenticate — neither
     ///         the implicit full owner nor an inline-scoped self. The self key is a K1_AUTHENTICATOR signature whose
     ///         recovered signer equals the account; when this flag is unset, it authenticates with the inline
@@ -215,18 +206,18 @@ contract Keystore {
     ///         self-actorId, and by authorizing the self-actorId to a *non-k1* authenticator (mutual exclusion: the
     ///         k1 self and a non-k1 self are never simultaneously live). Authorizing the self-actorId as a k1 actor
     ///         clears it (re-enabling the inline self, possibly scoped).
-    uint8 public constant FLAG_REVOKE_DEFAULT_EOA = 0x02;
+    uint8 public constant FLAG_REVOKE_DEFAULT_EOA = 0x01;
 
     /// @notice AccountState.flags bit (spec `LOCKED`): identifies a lock record. Revoke and lock-delay changes are
     ///         frozen unless an initiated unlock's timestamp has elapsed; AuthorizeActor may still add a new actor or
     ///         re-lease a live one (expiry only) when the granted expiry outlives the unlock floor. Expired lock bits
     ///         remain until a later Lock overwrites them.
-    uint8 public constant FLAG_LOCKED = 0x04;
+    uint8 public constant FLAG_LOCKED = 0x02;
 
     /// @notice AccountState.flags bit (spec `UNLOCK_INITIATED`): selects how the packed `lockUnion` field is read.
     ///         While clear, `lockUnion` holds the configured unlock delay (seconds); while set, it holds unlocksAt
     ///         (the timestamp at which the pending unlock takes effect). Only meaningful when FLAG_LOCKED is set.
-    uint8 public constant FLAG_UNLOCK_INITIATED = 0x08;
+    uint8 public constant FLAG_UNLOCK_INITIATED = 0x04;
 
     /// @dev secp256k1 half-order (n/2). Per EIP-2, only the lower-half `s` value is accepted to reject signature
     ///      malleability. Equal to (secp256k1n - 1) / 2.
@@ -486,10 +477,9 @@ contract Keystore {
         }
 
         // Created accounts disable the implicit EOA key. Set this before actor initialization so an explicit k1 self
-        // actor can re-enable it. FLAG_CONTRACT_ESTABLISHED is set for every created account. See
-        // {FLAG_CONTRACT_ESTABLISHED}.
+        // actor can re-enable it.
         _accountState[account].localSequence = 1;
-        _accountState[account].flags = FLAG_REVOKE_DEFAULT_EOA | FLAG_CONTRACT_ESTABLISHED;
+        _accountState[account].flags = FLAG_REVOKE_DEFAULT_EOA;
 
         _initializeAccount(account, initialActors);
 
@@ -552,9 +542,8 @@ contract Keystore {
         }
 
         // Disable the implicit EOA key after ERC-1271 validation so a delegated EOA can use that key to authorize its
-        // import. Including the k1 self in initialActors re-enables it explicitly. FLAG_CONTRACT_ESTABLISHED is set for
-        // every import regardless of code shape (delegates included). See {FLAG_CONTRACT_ESTABLISHED}.
-        _accountState[account].flags = FLAG_REVOKE_DEFAULT_EOA | FLAG_CONTRACT_ESTABLISHED;
+        // import. Including the k1 self in initialActors re-enables it explicitly.
+        _accountState[account].flags = FLAG_REVOKE_DEFAULT_EOA;
 
         _initializeAccount(account, initialActors);
         emit AccountImported(account);
@@ -1056,16 +1045,6 @@ contract Keystore {
     /// @return True if the account is locked at the current block timestamp.
     function isLocked(address account) external view returns (bool) {
         return _isLocked(account);
-    }
-
-    /// @notice Whether the account was keystore-established (createAccount or importAccount) rather than backed by a
-    ///         proven address key. See {FLAG_CONTRACT_ESTABLISHED}.
-    ///
-    /// @param account The account to check.
-    ///
-    /// @return True when the account was keystore-established and must not be treated as a key-backed EOA.
-    function isContractEstablished(address account) external view returns (bool) {
-        return _accountState[account].flags & FLAG_CONTRACT_ESTABLISHED != 0;
     }
 
     /// @notice Returns the account's full lock status.
