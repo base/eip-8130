@@ -11,10 +11,10 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 ///           - `getActorWithPolicy(account, actorId)`  — one-shot liveness-gated aggregate (config + manager + commitment)
 ///
 ///         All are `view`; there are no events to assert. Every test fuzzes its inputs (managers, commitments,
-///         actorIds, keys, scopes). Gating is determined by the SCOPE_POLICY bit, never by "slot non-zero": a
-///         policy-bearing actor's policyData is exactly 52 bytes (manager(20) || commitment(32)) and is written
-///         verbatim, even when a field is zero. Tests bound manager/commitment to non-zero only so the written
-///         value is distinguishable from the ungated (unwritten, zero) case.
+///         actorIds, keys, scopes). Policy attachment is by length (empty vs 52 bytes), never by a scope bit:
+///         a 52-byte policyData is manager(20) || commitment(32) and is written verbatim, even when a field is
+///         zero. Tests bound manager/commitment to non-zero only so the written value is distinguishable from
+///         the unattached (unwritten, zero) case.
 contract PolicyAccessorsTest is KeystoreTest {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // getPolicyManager / getPolicyCommitment — liveness-gated granular reads
@@ -94,8 +94,8 @@ contract PolicyAccessorsTest is KeystoreTest {
         assertEq(keystore.getPolicyCommitment(eoa, selfActorId), commitment);
     }
 
-    /// @notice An ungated actor never has manager/commitment written (per `_authorizeActor`'s SCOPE_POLICY-gated
-    ///         writes), so both granular accessors return zero.
+    /// @notice An actor authorized with empty policyData never has manager/commitment written, so both granular
+    ///         accessors return zero.
     function test_getPolicyManager_success_ungatedActor_returnsZero(uint256 rootSeed, bytes32 actorId) public {
         uint256 rootPk = _boundK1Pk(rootSeed);
         (address account,) = _createK1Account(rootPk);
@@ -126,7 +126,7 @@ contract PolicyAccessorsTest is KeystoreTest {
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
-    // Lifecycle — invariant: policy slots written iff scope & SCOPE_POLICY
+    // Lifecycle — invariant: policy slots written iff 52-byte policyData was attached
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     /// @notice Revoking an explicit gated actor clears both policy slots (`_revokeActor` deletes them).
@@ -199,7 +199,7 @@ contract PolicyAccessorsTest is KeystoreTest {
             _boundNonZeroWord(commitmentSeed)
         );
 
-        // Overwrite the same actor as ungated (scope & SCOPE_POLICY == 0).
+        // Overwrite the same actor with empty policyData (32-byte config only).
         _authorizeUngatedActor(account, rootPk, actorId, address(k1Authenticator));
 
         assertEq(keystore.getPolicyManager(account, actorId), address(0));
@@ -238,8 +238,8 @@ contract PolicyAccessorsTest is KeystoreTest {
         assertEq(keystore.getPolicyCommitment(account, actorId), newCommitment);
     }
 
-    /// @notice A gated actor may legitimately carry a zero manager and/or zero commitment: the relaxed policyData
-    ///         rule writes both slots verbatim. Gating is by the SCOPE_POLICY bit, not slot non-zero.
+    /// @notice A 52-byte policy attachment may legitimately carry a zero manager and/or zero commitment: the
+    ///         length rule writes both slots verbatim. Attachment is by length, not slot non-zero.
     function test_getPolicyAccessors_success_gatedWithZeroManagerAndCommitment(uint256 rootSeed, bytes32 actorId)
         public
     {
@@ -249,7 +249,7 @@ contract PolicyAccessorsTest is KeystoreTest {
 
         _authorizePolicyActor(account, rootPk, actorId, Scopes.POLICY, address(0), bytes32(0));
 
-        // Slots are zero, yet the actor is gated by the SCOPE_POLICY bit.
+        // Slots are zero, yet 52 policy bytes were attached (and the POLICY bit is set in this test).
         assertEq(keystore.getPolicyManager(account, actorId), address(0));
         assertEq(keystore.getPolicyCommitment(account, actorId), bytes32(0));
         Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, actorId);

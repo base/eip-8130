@@ -106,8 +106,8 @@ contract KeystoreBranchCoverageTest is KeystoreTest {
     function test_multichain_revert_sequenceSaturated() public {
         (address account,) = _createK1Account(OWNER_PK);
 
-        // Force the multichain counter (low 64 bits of the packed AccountState slot at base-slot 3) to its max.
-        bytes32 slot = keccak256(abi.encode(account, uint256(3)));
+        // Force the multichain counter (low 64 bits of the packed AccountState slot at base-slot 1) to its max.
+        bytes32 slot = keccak256(abi.encode(account, uint256(1)));
         uint256 cur = uint256(vm.load(address(keystore), slot));
         uint256 updated = (cur & ~uint256(type(uint64).max)) | uint256(type(uint64).max);
         vm.store(address(keystore), slot, bytes32(updated));
@@ -120,8 +120,8 @@ contract KeystoreBranchCoverageTest is KeystoreTest {
 
     // ── _slicePolicy length guards ──
 
-    /// @notice An ungated actor (scope without POLICY) must carry no policy data.
-    function test_authorize_revert_ungatedActorWithPolicyData() public {
+    /// @notice Attached policy bytes must be empty or exactly 52 bytes (manager(20) || commitment(32)).
+    function test_authorize_revert_malformedPolicyLength() public {
         (address account,) = _createK1Account(OWNER_PK);
         bytes32 actorId = bytes32(uint256(0xA11CE));
         Keystore.AccountChange memory change = _authorizeChange(actorId, k1Authenticator, 0, UNBOUNDED, hex"01");
@@ -130,26 +130,25 @@ contract KeystoreBranchCoverageTest is KeystoreTest {
         keystore.applySignedAccountChanges(account, s);
     }
 
-    /// @notice A policy-gated actor must carry exactly 52 bytes (manager(20) || commitment(32)) of policy data.
+    /// @notice A 5-byte policy blob is neither empty nor the required 52.
     function test_authorize_revert_policyActorWrongLengthData() public {
         (address account,) = _createK1Account(OWNER_PK);
         bytes32 actorId = bytes32(uint256(0xA11CE));
-        // Scopes.POLICY == 0x02; 5 bytes is neither empty nor the required 52.
-        Keystore.AccountChange memory change =
-            _authorizeChange(actorId, k1Authenticator, 0x02, UNBOUNDED, hex"0102030405");
+        Keystore.AccountChange memory change = _authorizeChange(actorId, k1Authenticator, 0, UNBOUNDED, hex"0102030405");
         Keystore.SignedAccountChanges memory s = _localBatch(OWNER_PK, account, _one(change));
         vm.expectRevert(Keystore.InvalidPolicyData.selector);
         keystore.applySignedAccountChanges(account, s);
     }
 
-    /// @notice A policy-gated actor with the exact 52-byte policy data authorizes successfully.
-    function test_authorize_success_policyActorValidData() public {
+    /// @notice Attachment is by length, not by any scope bit: 52-byte policy data stores manager/commitment
+    ///         even when POLICY is unset.
+    function test_authorize_success_policyAttachedWithoutPolicyBit() public {
         (address account,) = _createK1Account(OWNER_PK);
         bytes32 actorId = bytes32(uint256(0xA11CE));
         address policyManager = address(0xCAFE);
         bytes32 commitment = keccak256("commitment");
         bytes memory policyData = abi.encodePacked(policyManager, commitment); // 20 + 32 = 52 bytes
-        _applyLocal(OWNER_PK, account, _one(_authorizeChange(actorId, k1Authenticator, 0x02, UNBOUNDED, policyData)));
+        _applyLocal(OWNER_PK, account, _one(_authorizeChange(actorId, k1Authenticator, 0, UNBOUNDED, policyData)));
 
         assertEq(keystore.getActorConfig(account, actorId).authenticator, k1Authenticator);
         assertEq(keystore.getPolicyManager(account, actorId), policyManager);

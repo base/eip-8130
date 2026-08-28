@@ -89,7 +89,7 @@ contract PolicyManagerTest is KeystoreTest {
 
     uint256 internal constant ROOT_PK = 0xA11CE;
 
-    uint8 internal constant SCOPE_POLICY = 0x02;
+    uint8 internal constant SCOPE_POLICY = 0x08;
 
     function setUp() public override {
         super.setUp();

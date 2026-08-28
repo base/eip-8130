@@ -41,7 +41,7 @@ contract SessionPolicyGasTest is KeystoreTest {
     address internal bob = address(0xB0B);
 
     uint256 internal constant ROOT_PK = 0xA11CE;
-    uint8 internal constant SCOPE_POLICY = 0x02;
+    uint8 internal constant SCOPE_POLICY = 0x08;
 
     bytes4 internal constant TRANSFER = bytes4(keccak256("transfer(address,uint256)"));
     uint40 internal constant WEEK = 7 days;

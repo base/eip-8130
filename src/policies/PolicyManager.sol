@@ -22,7 +22,7 @@ address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak2
 ///         paths derive identity from `msg.sender` and work on any chain.
 ///
 /// @dev The account registers this manager as an execution-enabled actor and gates a restricted session key with
-///      `scope & Scopes.POLICY != 0` and `policy_manager = address(this)`, so the protocol routes that key's calls
+///      `scope & Scopes.POLICY != 0` (optional) and `policy_manager = address(this)`, so the protocol routes that key's calls
 ///      here. Authorization is the account's signed commitment: the keccak256 of a {PolicyBinding}, stored in
 ///      Keystore. Every entrypoint recomputes the commitment from the supplied binding and requires it to match, so
 ///      config, validity window, and owning account are authenticated in one check with no config stored here.

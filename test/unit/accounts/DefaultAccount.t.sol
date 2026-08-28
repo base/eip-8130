@@ -3,6 +3,7 @@ pragma solidity ^0.8.30;
 
 import {DefaultAccount, Call} from "../../../src/accounts/DefaultAccount.sol";
 import {Keystore} from "../../../src/Keystore.sol";
+import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @dev Minimal call target: a payable state setter plus reverters that fail with a string reason, a custom error, or
@@ -39,11 +40,11 @@ contract DefaultAccountTest is KeystoreTest {
     bytes4 constant ERC1271_MAGIC = 0x1626ba7e;
     bytes4 constant ERC1271_FAIL = 0xFFFFFFFF;
 
-    // Scope bits: ERC-1271 signing is operational (admin scope == 0x00, or SENDER without POLICY). SELF_PAYER and
-    // SPONSOR_PAYER are non-SENDER capability scopes that are not operational on their own.
-    uint16 constant SCOPE_SENDER = 0x01;
-    uint16 constant SCOPE_SELF_PAYER = 0x08;
-    uint16 constant SCOPE_SPONSOR_PAYER = 0x10;
+    // Scope bits: ERC-1271 signing is operational (admin scope == 0x00, or OPERATOR). SELF_PAYER and
+    // SPONSOR_PAYER are non-OPERATOR capability scopes that are not operational on their own.
+    uint16 constant SCOPE_SENDER = Scopes.OPERATOR;
+    uint16 constant SCOPE_SELF_PAYER = Scopes.SELF_PAYER;
+    uint16 constant SCOPE_SPONSOR_PAYER = Scopes.SPONSOR_PAYER;
 
     // TRUSTED_EXECUTOR sentinel: the authenticator value that marks an actor as a direct-execution caller.
     address constant TRUSTED_EXECUTOR = address(uint160(uint256(keccak256("trustedExecutor"))));
@@ -407,7 +408,7 @@ contract DefaultAccountTest is KeystoreTest {
     }
 
     /// @notice A valid signature from a payer-only (non-SENDER, non-admin) actor returns the failure magic value.
-    /// @dev isValidSignature gates on Scopes.isOperator; here SCOPE_SELF_PAYER (no SENDER, no admin) is not
+    /// @dev isValidSignature gates on Scopes.isOperator; here SCOPE_SELF_PAYER (no OPERATOR, no admin) is not
     ///      operational, so an otherwise-valid signature is rejected.
     function test_isValidSignature_success_returnsFailureForNonOperationalScope(
         uint256 ownerSeed,
@@ -431,7 +432,7 @@ contract DefaultAccountTest is KeystoreTest {
         assertEq(result, ERC1271_FAIL);
     }
 
-    /// @notice A valid signature from an operational SENDER-without-POLICY actor returns the ERC-1271 magic value.
+    /// @notice A valid signature from an operational OPERATOR actor returns the ERC-1271 magic value.
     /// @dev An operational actor validates: signing encodes authority a SENDER key already holds via calls, so it
     ///      does not require the admin scope.
     function test_isValidSignature_success_operationalSenderSigns(uint256 ownerSeed, uint256 actorSeed, bytes32 hash)
@@ -490,8 +491,8 @@ contract DefaultAccountTest is KeystoreTest {
         assertEq(result, ERC1271_MAGIC);
     }
 
-    /// @notice A non-operational scoped actor never validates, even for the former SIGNER bit (0x10, now
-    ///         SCOPE_SPONSOR_PAYER). Only an operational actor (admin, or SENDER-without-POLICY) returns the magic.
+    /// @notice A non-operational scoped actor never validates. Only an operational actor (admin, or OPERATOR)
+    ///         returns the magic.
     /// @dev There is no SIGNER grant anymore; a sponsor-payer actor's valid signature returns the failure magic value.
     function test_isValidSignature_success_scopedActorCannotSign(uint256 ownerSeed, uint256 actorSeed, bytes32 hash)
         public

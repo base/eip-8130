@@ -15,7 +15,7 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
     bytes32 constant ACTOR_A = bytes32(uint256(0xA1));
     bytes32 constant ACTOR_B = bytes32(uint256(0xB2));
 
-    uint16 constant SENDER = Scopes.SENDER;
+    uint16 constant SENDER = Scopes.OPERATOR;
     uint16 constant NONCE = Scopes.NONCE;
 
     function setUp() public override {

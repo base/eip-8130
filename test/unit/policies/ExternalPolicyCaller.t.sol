@@ -39,7 +39,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
 
     uint256 internal constant ROOT_PK = 0xA11CE;
     uint8 internal constant SCOPE_SENDER = 0x01;
-    uint8 internal constant SCOPE_POLICY = 0x02;
+    uint8 internal constant SCOPE_POLICY = 0x08;
 
     bytes4 internal constant TRANSFER = bytes4(keccak256("transfer(address,uint256)"));
     uint40 internal constant MONTH = 30 days;
