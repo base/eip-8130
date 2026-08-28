@@ -689,6 +689,7 @@ contract AccountEnvironmentTest is KeystoreTest {
             actorId: bytes32(uint256(uint160(account))), authenticator: address(1), scope: 0, policyData: ""
         });
         vm.expectRevert(Keystore.AlreadyInitialized.selector);
+        vm.prank(account);
         keystore.importAccount(account, 0, actors, "");
     }
 
@@ -742,6 +743,7 @@ contract AccountEnvironmentTest is KeystoreTest {
             actorId: bytes32(uint256(uint160(account))), authenticator: address(1), scope: 0, policyData: ""
         });
         vm.expectRevert(Keystore.AlreadyInitialized.selector);
+        vm.prank(account);
         keystore.importAccount(account, 0, actors, "");
     }
 

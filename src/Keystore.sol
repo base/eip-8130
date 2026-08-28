@@ -301,6 +301,11 @@ contract Keystore {
     ///         word.
     error InvalidImportSignature();
 
+    /// @notice `importAccount` was not invoked by the account being imported. A valid ERC-1271 signature is not
+    ///         sufficient: the account must itself call Keystore, so existing wallet execution gates (for example an
+    ///         `execute()` time lock) still apply. Relayers cannot import on the account's behalf.
+    error ImportCallerNotAccount();
+
     /// @notice A lock op carried a zero unlock delay.
     error ZeroUnlockDelay();
 
@@ -499,8 +504,11 @@ contract Keystore {
 
     /// @notice Imports an existing account (which must have bytecode) into Keystore management via an
     ///         ERC-1271 signature over a typed import digest. The implicit default-EOA key is disabled after import.
+    ///         The account itself must be `msg.sender`: a signature alone cannot opt a wallet into 8130, so wallets
+    ///         that gate spending in `execute()` keep that gate on the import path.
     ///
     /// @dev Uses a custom (non-EIP-712) digest to partially mitigate eth_signTypedData phishing.
+    /// @dev Reverts with ImportCallerNotAccount when `msg.sender` is not `account`.
     /// @dev Reverts with AccountIsLocked when the account is locked.
     /// @dev Reverts with InvalidChainId when `chainId` is neither 0 (multichain) nor the current chain.
     /// @dev Reverts with AlreadyInitialized when the account already has EIP-8130 state.
@@ -521,6 +529,12 @@ contract Keystore {
         InitialActor[] calldata initialActors,
         bytes calldata signature
     ) external onlyUnlocked(account) {
+        // ERC-1271 attests the actor set; this caller check attests that the wallet actually chose to import.
+        // Direct-dispatch after import never enters `execute()`, so a signature relayed by a third party would
+        // otherwise let a wallet whose only freeze lives in `execute()` opt into 8130 while that freeze is active.
+        if (msg.sender != account) {
+            revert ImportCallerNotAccount();
+        }
         if (chainId != 0 && chainId != block.chainid) {
             revert InvalidChainId();
         }
