@@ -4,6 +4,7 @@ pragma solidity 0.8.36;
 import {Keystore} from "../Keystore.sol";
 import {IAuthenticator} from "../interfaces/IAuthenticator.sol";
 import {ActorId} from "../libraries/ActorId.sol";
+import {Scopes} from "../libraries/Scopes.sol";
 
 /// @notice Delegates authentication to another account's actor configuration; a single hop only.
 ///         actorId = ActorId.fromAddress(delegate_address)
@@ -21,7 +22,7 @@ contract DelegateAuthenticator is IAuthenticator {
     /// @notice The nested authenticator points back to this contract; only one delegation hop is permitted.
     error RecursiveDelegation();
 
-    /// @notice The nested signer is not authorized to sign for the delegate account.
+    /// @notice The nested signer is not an operational actor (admin or OPERATOR) on the delegate account.
     error InvalidNestedSignature();
 
     /// @notice Deploys the authenticator bound to an Keystore instance.
@@ -35,7 +36,8 @@ contract DelegateAuthenticator is IAuthenticator {
     /// @dev Reverts with InvalidDataLength when `data` is shorter than 40 bytes.
     /// @dev Reverts with RecursiveDelegation when the nested authenticator is this contract (recursive delegation
     ///      is not permitted).
-    /// @dev Reverts with InvalidNestedSignature when the delegate account does not validate the nested signature.
+    /// @dev Reverts with InvalidNestedSignature when the nested signature does not resolve to an operational actor
+    ///      (admin `scope == 0` or an OPERATOR-scoped key) on the delegate account.
     ///
     /// @param hash The digest being authenticated.
     /// @param data delegate address (20) then the nested auth blob (nested authenticator address then its data).
@@ -52,9 +54,11 @@ contract DelegateAuthenticator is IAuthenticator {
         address nestedAuthenticator = address(bytes20(nestedAuth[:20]));
         if (nestedAuthenticator == address(this)) revert RecursiveDelegation();
 
-        // The nested actor MUST be the admin (scope == 0x00) of the delegate account.
+        // The nested actor must be operational on the delegate account: the admin (scope == 0x00) or an OPERATOR
+        // key. This is the same authority a delegate's own execution/ERC-1271 surface honors ({Scopes.isOperator}),
+        // so vouching mirrors "can act as the delegate account" rather than a stricter admin-only gate.
         try KEYSTORE.authenticateActor(delegate, hash, nestedAuth) returns (bytes32, uint16 nestedScope) {
-            if (nestedScope != 0) revert InvalidNestedSignature();
+            if (!Scopes.isOperator(nestedScope)) revert InvalidNestedSignature();
         } catch {
             revert InvalidNestedSignature();
         }
