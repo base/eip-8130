@@ -154,4 +154,17 @@ contract KeystoreBranchCoverageTest is KeystoreTest {
         assertEq(keystore.getPolicyManager(account, actorId), policyManager);
         assertEq(keystore.getPolicyCommitment(account, actorId), commitment);
     }
+
+    // ── _resolveActorConfig: unknown non-self actor ──
+
+    /// @notice Resolving an unknown, non-self actorId returns the all-zero config (empty _actors[].config slot,
+    ///         distinct from the inline-self and populated-entry paths).
+    function test_getActorConfig_unknownNonSelfActor_returnsEmpty() public {
+        (address account,) = _createK1Account(OWNER_PK);
+        bytes32 ghost = bytes32(uint256(0xDEAD)); // never authorized, not the self actorId
+        Keystore.ActorConfig memory config = keystore.getActorConfig(account, ghost);
+        assertEq(config.authenticator, address(0));
+        assertEq(config.expiry, 0);
+        assertEq(config.scope, 0);
+    }
 }

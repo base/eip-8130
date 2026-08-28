@@ -665,22 +665,31 @@ contract Keystore {
                 }
             }
 
-            // Apply: dispatch the op to its handler.
+            // Apply: dispatch the op to its handler. Independent `if ... continue` arms (not an if/else-if chain) so
+            // each op's match/no-match paths are exercised and instrumented in isolation.
             if (t == ChangeType.AuthorizeActor) {
                 _applyAuthorize(account, batch.changes[i].payload, isUnsequenced, locked);
-            } else if (t == ChangeType.RevokeActor) {
-                _applyRevoke(account, batch.changes[i].payload);
-            } else if (t == ChangeType.IncrementLocalEpoch) {
-                _applyIncrementLocalEpoch(account, batch.changes[i].payload);
-            } else if (t == ChangeType.Lock) {
-                _applyLock(account, batch.changes[i].payload);
-            } else if (t == ChangeType.Unlock) {
-                _applyUnlock(account, batch.changes[i].payload);
-            } else {
-                // Unreachable at runtime (the enum decoder rejects out-of-range values). Kept to force any future
-                // ChangeType to be dispatched here rather than silently no-op'ing.
-                revert UnknownChangeType();
+                continue;
             }
+            if (t == ChangeType.RevokeActor) {
+                _applyRevoke(account, batch.changes[i].payload);
+                continue;
+            }
+            if (t == ChangeType.IncrementLocalEpoch) {
+                _applyIncrementLocalEpoch(account, batch.changes[i].payload);
+                continue;
+            }
+            if (t == ChangeType.Lock) {
+                _applyLock(account, batch.changes[i].payload);
+                continue;
+            }
+            if (t == ChangeType.Unlock) {
+                _applyUnlock(account, batch.changes[i].payload);
+                continue;
+            }
+            // Unreachable at runtime (the enum decoder rejects out-of-range values). Kept to force any future
+            // ChangeType to be dispatched here rather than silently no-op'ing.
+            revert UnknownChangeType();
         }
     }
 
