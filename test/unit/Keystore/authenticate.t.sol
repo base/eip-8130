@@ -21,7 +21,7 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 ///         The authentication functions are `view` and emit no events, so there are no event assertions here;
 ///         events (ActorAuthorized / ActorRevoked) belong to the applyKeyChange suite that drives the config writes.
 contract AuthenticateTest is KeystoreTest {
-    uint16 constant SCOPE_SENDER = Scopes.OPERATOR;
+    uint16 constant SCOPE_OPERATOR = Scopes.OPERATOR;
     uint16 constant SCOPE_POLICY = Scopes.POLICY;
     uint16 constant SCOPE_NONCE = Scopes.NONCE;
     uint16 constant SCOPE_SELF_PAYER = Scopes.SELF_PAYER;
@@ -752,12 +752,12 @@ contract AuthenticateTest is KeystoreTest {
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(sessionPk) != account);
         bytes32 sessionActorId = bytes32(uint256(uint160(vm.addr(sessionPk))));
-        _authorizeGatedActor(account, ownerPk, sessionActorId, SCOPE_SENDER | SCOPE_POLICY, manager, commitment);
+        _authorizeGatedActor(account, ownerPk, sessionActorId, SCOPE_OPERATOR | SCOPE_POLICY, manager, commitment);
 
         bytes memory auth = _wrapLocal(_buildK1Auth(sessionPk, keystore.replaySafeHash(account, block.chainid, hash)));
         (bytes32 outActorId, uint16 outScope) = keystore.validateSignature(account, hash, auth);
         assertEq(outActorId, sessionActorId);
-        assertEq(outScope, SCOPE_SENDER | SCOPE_POLICY);
+        assertEq(outScope, SCOPE_OPERATOR | SCOPE_POLICY);
     }
 
     /// @notice A multichain envelope (SignatureType.Multichain) validates against the chainId = 0 digest.

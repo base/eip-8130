@@ -3,10 +3,10 @@ pragma solidity 0.8.36;
 
 /// @notice Canonical EIP-8130 actor scope grants.
 /// @dev Scope assignments are append-only; unknown bits are stored verbatim and grant no authority.
-///      Core grants occupy bits 0–2 so a chain can omit POLICY and NONCE without renumbering anything else.
+///      Core grants occupy bits 0–2; the optional POLICY and NONCE grants trail them.
 ///      Keystore stores `scope` verbatim and never interprets these bits; consumers enforce meaning at use time.
 ///      OPERATOR and POLICY do not combine: OPERATOR may originate to any `call.to`; POLICY-only is gated to the
-///      actor's policy manager. A chain that drops POLICY/NONCE simply never sets those bits.
+///      actor's policy manager.
 library Scopes {
     /// @notice Ungated initiation (`sender_auth`): may originate transactions to any `call.to`.
     uint16 internal constant OPERATOR = 0x0001;
@@ -18,11 +18,11 @@ library Scopes {
     uint16 internal constant SPONSOR_PAYER = 0x0004;
 
     /// @notice Gated initiation (`sender_auth`): may originate transactions only to the actor's policy manager.
-    ///         Optional: a chain that has no policy system leaves this bit unused.
+    ///         Optional grant.
     uint16 internal constant POLICY = 0x0008;
 
     /// @notice Permits a restricted actor to use sequenced `nonce_key`s for sender-context transactions.
-    ///         Optional: a chain that has no extra nonce lanes leaves this bit unused.
+    ///         Optional grant.
     uint16 internal constant NONCE = 0x0010;
 
     // 0x0020..0x8000 (bits 5–15) are spare, reserved for future pure grants.

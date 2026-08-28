@@ -42,7 +42,7 @@ contract DefaultAccountTest is KeystoreTest {
 
     // Scope bits: ERC-1271 signing is operational (admin scope == 0x00, or OPERATOR). SELF_PAYER and
     // SPONSOR_PAYER are non-OPERATOR capability scopes that are not operational on their own.
-    uint16 constant SCOPE_SENDER = Scopes.OPERATOR;
+    uint16 constant SCOPE_OPERATOR = Scopes.OPERATOR;
     uint16 constant SCOPE_SELF_PAYER = Scopes.SELF_PAYER;
     uint16 constant SCOPE_SPONSOR_PAYER = Scopes.SPONSOR_PAYER;
 
@@ -407,7 +407,7 @@ contract DefaultAccountTest is KeystoreTest {
         assertEq(result, ERC1271_FAIL);
     }
 
-    /// @notice A valid signature from a payer-only (non-SENDER, non-admin) actor returns the failure magic value.
+    /// @notice A valid signature from a payer-only (non-OPERATOR, non-admin) actor returns the failure magic value.
     /// @dev isValidSignature gates on Scopes.isOperator; here SCOPE_SELF_PAYER (no OPERATOR, no admin) is not
     ///      operational, so an otherwise-valid signature is rejected.
     function test_isValidSignature_success_returnsFailureForNonOperationalScope(
@@ -433,7 +433,7 @@ contract DefaultAccountTest is KeystoreTest {
     }
 
     /// @notice A valid signature from an operational OPERATOR actor returns the ERC-1271 magic value.
-    /// @dev An operational actor validates: signing encodes authority a SENDER key already holds via calls, so it
+    /// @dev An operational actor validates: signing encodes authority an OPERATOR key already holds via calls, so it
     ///      does not require the admin scope.
     function test_isValidSignature_success_operationalSenderSigns(uint256 ownerSeed, uint256 actorSeed, bytes32 hash)
         public
@@ -445,8 +445,8 @@ contract DefaultAccountTest is KeystoreTest {
         address actor = vm.addr(actorPk);
         vm.assume(actor != vm.addr(ownerPk) && actor != account);
 
-        // Authorize the actor with SENDER scope only (no POLICY) — it is operational and can validate signatures.
-        _authorizeActorWithScope(account, ownerPk, bytes32(uint256(uint160(actor))), k1Authenticator, SCOPE_SENDER);
+        // Authorize the actor with OPERATOR scope only (no POLICY) — it is operational and can validate signatures.
+        _authorizeActorWithScope(account, ownerPk, bytes32(uint256(uint160(actor))), k1Authenticator, SCOPE_OPERATOR);
 
         // Chain-local envelope over the account-scoped replaySafeHash digest.
         bytes memory authData = _wrapLocal(_buildK1Auth(actorPk, keystore.replaySafeHash(account, block.chainid, hash)));

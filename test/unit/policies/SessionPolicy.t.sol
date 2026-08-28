@@ -69,7 +69,7 @@ contract SessionPolicyTest is KeystoreTest {
     address internal mallory = address(0xBAD);
 
     uint256 internal constant ROOT_PK = 0xA11CE;
-    uint8 internal constant SCOPE_SENDER = 0x01;
+    uint8 internal constant SCOPE_OPERATOR = 0x01;
     uint8 internal constant SCOPE_POLICY = 0x08;
 
     bytes4 internal constant TRANSFER = bytes4(keccak256("transfer(address,uint256)"));

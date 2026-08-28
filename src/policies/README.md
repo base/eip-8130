@@ -6,10 +6,10 @@ In EIP-8130, a restricted actor (e.g. a session key) is configured with optional
 (`manager(20) || commitment(32)`) stored co-located with the 32-byte actor config, making an 84-byte packed
 record. The protocol gate typically also sets `scope & Scopes.POLICY != 0` and forces every call that actor
 makes to land on that single manager. These contracts are one realization of that manager: it enforces
-application-specific limits and then drives the account. `Scopes.POLICY` (`0x08`) is optional — a chain
-that has no policy system never sets the bit and never attaches the extra 52 bytes. `Keystore` does not
-import or interpret scope bits; attachment is a length check (empty vs 52). OPERATOR and POLICY do not
-combine: OPERATOR may originate to any `call.to`, POLICY-only is gated to the manager.
+application-specific limits and then drives the account. `Scopes.POLICY` (`0x08`) is an optional grant.
+`Keystore` does not import or interpret scope bits; policy attachment is a length check (empty vs 52).
+OPERATOR and POLICY do not combine: OPERATOR may originate to any `call.to`, POLICY-only is gated to the
+manager.
 
 ## Flow
 

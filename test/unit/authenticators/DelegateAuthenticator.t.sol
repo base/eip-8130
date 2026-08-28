@@ -22,7 +22,7 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 ///         ERC-1271 signature, but such a key must NOT be able to vouch as a delegate, so a non-admin nested
 ///         actor reverts.
 contract DelegateAuthenticatorTest is KeystoreTest {
-    uint16 constant SCOPE_SENDER = Scopes.OPERATOR;
+    uint16 constant SCOPE_OPERATOR = Scopes.OPERATOR;
     uint16 constant SCOPE_POLICY = Scopes.POLICY;
     uint16 constant SCOPE_NONCE = Scopes.NONCE;
     uint16 constant SCOPE_SELF_PAYER = Scopes.SELF_PAYER;
@@ -138,7 +138,7 @@ contract DelegateAuthenticatorTest is KeystoreTest {
 
         (address delegateAccount,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(signerPk) != delegateAccount);
-        _authorizeScopedK1Actor(delegateAccount, ownerPk, signerPk, SCOPE_SENDER);
+        _authorizeScopedK1Actor(delegateAccount, ownerPk, signerPk, SCOPE_OPERATOR);
 
         bytes memory nestedAuth = abi.encodePacked(k1Authenticator, _signDigest(signerPk, hash));
 

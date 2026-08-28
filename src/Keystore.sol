@@ -190,9 +190,9 @@ contract Keystore {
 
     // This contract is deliberately scope-agnostic. `scope == 0` is the admin predicate (the only scope value it
     // acts on for config/lock changes). Named grants (OPERATOR, SELF_PAYER, SPONSOR_PAYER, and the optional POLICY
-    // and NONCE bits) are stored verbatim and never read here; a chain may omit POLICY and NONCE entirely. Policy
-    // attachment is a length check on the authorize payload (empty vs 52 bytes), not a scope-bit test. The full
-    // uint16 grant vocabulary lives in {Scopes} for consumers. This contract does not reject scope combinations.
+    // and NONCE bits) are stored verbatim and never read here. Policy attachment is a length check on the authorize
+    // payload (empty vs 52 bytes), not a scope-bit test. The full uint16 grant vocabulary lives in {Scopes} for
+    // consumers. This contract does not reject scope combinations.
 
     /// @notice The single secp256k1 authenticator. The default EOA and every k1 actor share this one identity; the
     ///         actor config alone distinguishes a full-owner EOA from a scoped key. Signed with a K1_AUTHENTICATOR
