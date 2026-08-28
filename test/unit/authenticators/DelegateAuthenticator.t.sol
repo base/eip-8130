@@ -4,6 +4,7 @@ pragma solidity ^0.8.30;
 import {Keystore} from "../../../src/Keystore.sol";
 import {DelegateAuthenticator} from "../../../src/authenticators/DelegateAuthenticator.sol";
 import {DefaultAccount} from "../../../src/accounts/DefaultAccount.sol";
+import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice Fuzzed, branch-complete test suite for DelegateAuthenticator.authenticate.
@@ -17,15 +18,15 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 ///
 ///         The delegate vouch requires the nested auth to resolve to the ADMIN actor on `delegate` (scope ==
 ///         0x00). This admin-only requirement is enforced independently of the account's ERC-1271 check (via
-///         authenticateActor + an explicit scope == 0 check): a SENDER-without-POLICY key can produce a valid
+///         authenticateActor + an explicit scope == 0 check): an OPERATOR key can produce a valid
 ///         ERC-1271 signature, but such a key must NOT be able to vouch as a delegate, so a non-admin nested
 ///         actor reverts.
 contract DelegateAuthenticatorTest is KeystoreTest {
-    uint16 constant SCOPE_SENDER = 0x01;
-    uint16 constant SCOPE_POLICY = 0x02;
-    uint16 constant SCOPE_NONCE = 0x04;
-    uint16 constant SCOPE_SELF_PAYER = 0x08;
-    uint16 constant SCOPE_SPONSOR_PAYER = 0x10;
+    uint16 constant SCOPE_OPERATOR = Scopes.OPERATOR;
+    uint16 constant SCOPE_POLICY = Scopes.POLICY;
+    uint16 constant SCOPE_NONCE = Scopes.NONCE;
+    uint16 constant SCOPE_SELF_PAYER = Scopes.SELF_PAYER;
+    uint16 constant SCOPE_SPONSOR_PAYER = Scopes.SPONSOR_PAYER;
 
     // ── Guard 1: require(data.length >= 40) ──
 
@@ -125,7 +126,7 @@ contract DelegateAuthenticatorTest is KeystoreTest {
         delegateAuthenticator.authenticate(hash, data);
     }
 
-    /// @dev Regression guard for the operational/admin decoupling: a SENDER-without-POLICY nested actor on the
+    /// @dev Regression guard for the operational/admin decoupling: an OPERATOR nested actor on the
     ///      delegate account CAN satisfy the account's ERC-1271 (it is operational), yet it MUST NOT satisfy the
     ///      delegate vouch, which stays admin-only. Asserts ERC-1271 validates for the actor, then the vouch reverts.
     function test_authenticate_revert_operationalSenderCannotVouch(uint256 ownerSeed, uint256 signerSeed, bytes32 hash)
@@ -137,7 +138,7 @@ contract DelegateAuthenticatorTest is KeystoreTest {
 
         (address delegateAccount,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(signerPk) != delegateAccount);
-        _authorizeScopedK1Actor(delegateAccount, ownerPk, signerPk, SCOPE_SENDER);
+        _authorizeScopedK1Actor(delegateAccount, ownerPk, signerPk, SCOPE_OPERATOR);
 
         bytes memory nestedAuth = abi.encodePacked(k1Authenticator, _signDigest(signerPk, hash));
 

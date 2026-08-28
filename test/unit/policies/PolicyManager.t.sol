@@ -4,6 +4,7 @@ pragma solidity ^0.8.30;
 import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
 
 import {Keystore} from "../../../src/Keystore.sol";
+import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../../src/interfaces/ITransactionContext.sol";
 import {Call, DefaultAccount, TRUSTED_EXECUTOR} from "../../../src/accounts/DefaultAccount.sol";
 
@@ -89,7 +90,7 @@ contract PolicyManagerTest is KeystoreTest {
 
     uint256 internal constant ROOT_PK = 0xA11CE;
 
-    uint8 internal constant SCOPE_POLICY = 0x02;
+    uint16 internal constant SCOPE_POLICY = Scopes.POLICY;
 
     function setUp() public override {
         super.setUp();

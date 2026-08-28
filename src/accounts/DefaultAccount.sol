@@ -99,7 +99,7 @@ contract DefaultAccount is Receiver {
     // ══════════════════════════════════════════════
 
     /// @notice Validates an ERC-1271 signature via Keystore; requires the verified actor to be operational (the
-    ///         unrestricted admin, scope == 0x00, or a SENDER actor without POLICY). Never reverts.
+    ///         unrestricted admin, scope == 0x00, or an OPERATOR actor). Never reverts.
     ///
     /// @dev {Keystore.validateSignature} resolves the typed envelope and reverts on any authentication failure; the
     ///      revert is caught and reported as the ERC-1271 failure value. Operational gating lives here (not in the
@@ -138,10 +138,10 @@ contract DefaultAccount is Receiver {
     /// @dev Authorized if `caller` is the account itself, or holds the TRUSTED_EXECUTOR authenticator with an
     ///      unexpired config AND operational authority. Expiry: 0 means none; a non-zero expiry is enforced so a
     ///      user-set expiry is honored on the execution path. Scope: driving execution requires operational
-    ///      authority ({Scopes.isOperator}) — the unrestricted admin (scope == 0x00) or a SENDER actor not gated
-    ///      by a policy. A POLICY-gated actor must route every call through its manager, so granting it direct
-    ///      executeBatch would bypass that gate; fail closed. Sharing {Scopes.isOperator} keeps the execution and
-    ///      signing (ERC-1271) authorization surfaces aligned.
+    ///      authority ({Scopes.isOperator}) — the unrestricted admin (scope == 0x00) or an OPERATOR actor.
+    ///      OPERATOR is more permissive than POLICY and the two do not combine: a POLICY-only actor must route
+    ///      every call through its manager, so granting it direct executeBatch would bypass that gate; fail closed.
+    ///      Sharing {Scopes.isOperator} keeps the execution and signing (ERC-1271) authorization surfaces aligned.
     function _isAuthorizedCaller(address caller) internal view virtual returns (bool) {
         if (caller == address(this)) return true;
         Keystore.ActorConfig memory config = KEYSTORE.getActorConfig(address(this), ActorId.fromAddress(caller));

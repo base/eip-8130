@@ -12,7 +12,7 @@ contract AccountEnvironmentTest is KeystoreTest {
     bytes32 constant ACTOR_A = bytes32(uint256(0xA1));
     bytes32 constant ACTOR_B = bytes32(uint256(0xB2));
 
-    uint16 constant SENDER = Scopes.SENDER;
+    uint16 constant OPERATOR = Scopes.OPERATOR;
 
     function setUp() public override {
         super.setUp();
@@ -192,7 +192,9 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertEq(epoch, 1);
 
         // Authorize under lock with expiry > now + delay: allowed.
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
+        _applyLocal(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, _future(1 days), ""))
+        );
         assertTrue(_isActor(account, ACTOR_A));
 
         // Revoke under lock: still rejected.
@@ -214,7 +216,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         uint48 floor = uint48(block.timestamp + delay);
 
         Keystore.SignedAccountChanges memory s =
-            _localBatch(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, floor, "")));
+            _localBatch(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, floor, "")));
         vm.expectRevert(Keystore.ExpiryDoesNotOutliveUnlock.selector);
         keystore.applySignedAccountChanges(account, s);
         assertFalse(_isActor(account, ACTOR_A));
@@ -230,7 +232,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         _signedLock(pk, account, delay);
         uint48 expiry = uint48(block.timestamp + delay + 1);
 
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, expiry, "")));
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, expiry, "")));
         assertTrue(_isActor(account, ACTOR_A));
         assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, expiry);
     }
@@ -243,7 +245,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         delay = uint16(bound(delay, 1, type(uint16).max));
 
         _signedLock(pk, account, delay);
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, 0, "")));
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, 0, "")));
         assertTrue(_isActor(account, ACTOR_A));
         assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, 0);
     }
@@ -257,16 +259,16 @@ contract AccountEnvironmentTest is KeystoreTest {
         delay = uint16(bound(delay, 1, type(uint16).max));
 
         uint48 longExpiry = _future(2 days);
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, longExpiry, "")));
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, longExpiry, "")));
         _signedLock(pk, account, delay);
 
         uint48 shorterButAboveFloor = uint48(block.timestamp + delay + 1);
         _applyLocal(
-            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, shorterButAboveFloor, ""))
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, shorterButAboveFloor, ""))
         );
         assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, shorterButAboveFloor);
         assertEq(keystore.getActorConfig(account, ACTOR_A).authenticator, address(k1Authenticator));
-        assertEq(keystore.getActorConfig(account, ACTOR_A).scope, SENDER);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).scope, OPERATOR);
     }
 
     /// @notice Hard-locked re-lease cannot widen or swap a live actor's scope.
@@ -275,14 +277,16 @@ contract AccountEnvironmentTest is KeystoreTest {
         address account = vm.addr(pk);
         _assumeSafeAccount(account);
 
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(2 days), "")));
+        _applyLocal(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, _future(2 days), ""))
+        );
         _signedLock(pk, account, 1 hours);
 
         Keystore.SignedAccountChanges memory s =
             _localBatch(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), 0, _future(2 days), "")));
         vm.expectRevert(Keystore.AccountIsLocked.selector);
         keystore.applySignedAccountChanges(account, s);
-        assertEq(keystore.getActorConfig(account, ACTOR_A).scope, SENDER);
+        assertEq(keystore.getActorConfig(account, ACTOR_A).scope, OPERATOR);
     }
 
     /// @notice Hard-locked re-lease cannot replace a live actor's authenticator.
@@ -291,11 +295,13 @@ contract AccountEnvironmentTest is KeystoreTest {
         address account = vm.addr(pk);
         _assumeSafeAccount(account);
 
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(2 days), "")));
+        _applyLocal(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, _future(2 days), ""))
+        );
         _signedLock(pk, account, 1 hours);
 
         Keystore.SignedAccountChanges memory s = _localBatch(
-            pk, account, _one(_authorizeChange(ACTOR_A, address(p256Authenticator), SENDER, _future(2 days), ""))
+            pk, account, _one(_authorizeChange(ACTOR_A, address(p256Authenticator), OPERATOR, _future(2 days), ""))
         );
         vm.expectRevert(Keystore.AccountIsLocked.selector);
         keystore.applySignedAccountChanges(account, s);
@@ -337,7 +343,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         _assumeSafeAccount(account);
 
         uint48 shortExpiry = _future(10);
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, shortExpiry, "")));
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, shortExpiry, "")));
         _signedLock(pk, account, 1 hours);
 
         vm.warp(uint256(shortExpiry) + 1);
@@ -365,8 +371,9 @@ contract AccountEnvironmentTest is KeystoreTest {
         _signedUnlock(pk, account);
         uint48 unlocksAt = uint48(t0 + delay);
 
-        Keystore.SignedAccountChanges memory s =
-            _localBatch(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, unlocksAt, "")));
+        Keystore.SignedAccountChanges memory s = _localBatch(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, unlocksAt, ""))
+        );
         vm.expectRevert(Keystore.ExpiryDoesNotOutliveUnlock.selector);
         keystore.applySignedAccountChanges(account, s);
         assertFalse(_isActor(account, ACTOR_A));
@@ -387,7 +394,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         _signedUnlock(pk, account);
         uint48 expiry = uint48(t0 + delay + 1);
 
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, expiry, "")));
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, expiry, "")));
         assertTrue(_isActor(account, ACTOR_A));
         assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, expiry);
     }
@@ -400,7 +407,7 @@ contract AccountEnvironmentTest is KeystoreTest {
 
         _signedLock(pk, account, 1 hours);
         uint48 past = uint48(block.timestamp - 1);
-        _applyUnsequenced(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, past, "")));
+        _applyUnsequenced(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, past, "")));
         assertFalse(_isActor(account, ACTOR_A));
     }
 
@@ -417,7 +424,9 @@ contract AccountEnvironmentTest is KeystoreTest {
         vm.warp(t0 + delay); // unlocked
         assertFalse(keystore.isLocked(account));
 
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), "")));
+        _applyLocal(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, _future(1 days), ""))
+        );
         assertTrue(_isActor(account, ACTOR_A));
     }
 
@@ -468,7 +477,9 @@ contract AccountEnvironmentTest is KeystoreTest {
         (address account,) = _createK1Account(ownerPk);
         bytes32 scopedId = bytes32(uint256(uint160(vm.addr(scopedPk))));
 
-        _applyLocal(ownerPk, account, _one(_authorizeChange(scopedId, address(k1Authenticator), SENDER, UNBOUNDED, "")));
+        _applyLocal(
+            ownerPk, account, _one(_authorizeChange(scopedId, address(k1Authenticator), OPERATOR, UNBOUNDED, ""))
+        );
         _signedLock(ownerPk, account, 1 hours);
         assertTrue(keystore.isLocked(account));
 
@@ -489,7 +500,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         uint64 mcBefore = _multichainSeq(account);
 
         _applyMultichain(
-            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, _future(1 days), ""))
         );
 
         assertTrue(_isActor(account, ACTOR_A));
@@ -512,7 +523,9 @@ contract AccountEnvironmentTest is KeystoreTest {
         // Strictly-past expiry: an unsequenced (JIT) batch would skip this, but a sequenced batch (Local or
         // Multichain) installs it inert.
         uint48 pastExpiry = uint48(block.timestamp - 1);
-        _applyMultichain(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, pastExpiry, "")));
+        _applyMultichain(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, pastExpiry, ""))
+        );
 
         // Sequence consumed (no revert), yet the actor is not live (getActorConfig is expiry-aware).
         assertEq(_multichainSeq(account), mcBefore + 1);
@@ -537,14 +550,18 @@ contract AccountEnvironmentTest is KeystoreTest {
         uint48 liveNow = _future(365 days);
 
         // seq 0 and seq 1: historical (expired) operator grants — inert, but each consumes its slot.
-        _applyMultichain(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, expiredOld, "")));
+        _applyMultichain(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, expiredOld, ""))
+        );
         assertFalse(_isActor(account, ACTOR_A));
-        _applyMultichain(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, expiredMid, "")));
+        _applyMultichain(
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, expiredMid, ""))
+        );
         assertFalse(_isActor(account, ACTOR_A));
 
         // seq 2: the current renewal is still live -> the operator is now authorized, converged with chains that
         // applied the same history earlier.
-        _applyMultichain(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, liveNow, "")));
+        _applyMultichain(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, liveNow, "")));
 
         assertTrue(_isActor(account, ACTOR_A));
         assertEq(keystore.getActorConfig(account, ACTOR_A).expiry, liveNow);
@@ -564,7 +581,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         // Signed by the (still-live at auth time) k1 self; installs an already-expired non-k1 self.
         uint48 pastExpiry = uint48(block.timestamp - 1);
         _applyMultichain(
-            pk, account, _one(_authorizeChange(selfActorId, address(p256Authenticator), SENDER, pastExpiry, ""))
+            pk, account, _one(_authorizeChange(selfActorId, address(p256Authenticator), OPERATOR, pastExpiry, ""))
         );
 
         // No revert; slot consumed. The non-k1 self is present but not live (expired).
@@ -582,7 +599,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         uint64 seqBefore = _localSeqWord(account);
 
         uint48 pastExpiry = uint48(block.timestamp - 1);
-        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, pastExpiry, "")));
+        _applyLocal(pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, pastExpiry, "")));
 
         // Sequence consumed (no revert); the actor is present but not live.
         assertEq(_localSeqWord(account), seqBefore + 1);
@@ -728,7 +745,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertEq(seq0, 0);
 
         _applyUnsequenced(
-            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, _future(1 days), ""))
         );
 
         // Sequence 0 burned -> reads initialized; the actor landed.
@@ -757,12 +774,12 @@ contract AccountEnvironmentTest is KeystoreTest {
 
         // A sequenced local batch at seq 0, captured while the account is still fresh (epoch 0, seq 0).
         Keystore.SignedAccountChanges memory seqZero = _localBatch(
-            pk, account, _one(_authorizeChange(ACTOR_B, address(k1Authenticator), SENDER, _future(1 days), ""))
+            pk, account, _one(_authorizeChange(ACTOR_B, address(k1Authenticator), OPERATOR, _future(1 days), ""))
         );
 
         // First act is an unsequenced batch: burns local sequence 0 -> 1 (marks initialized).
         _applyUnsequenced(
-            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, _future(1 days), ""))
         );
         (, uint32 seq1) = _localEpochSeq(account);
         assertEq(seq1, 1);
@@ -784,7 +801,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         // Bootstrap via multichain: multichain counter 0 -> 1, local word stays 0/0 (initialized via the multichain
         // term of _isInitialized).
         _applyMultichain(
-            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), SENDER, _future(1 days), ""))
+            pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, _future(1 days), ""))
         );
         (uint32 epoch0, uint32 seq0) = _localEpochSeq(account);
         assertEq(epoch0, 0);
@@ -793,14 +810,14 @@ contract AccountEnvironmentTest is KeystoreTest {
         // A local unsequenced batch: the unsequenced-init write is skipped (already initialized), so localSequence
         // stays 0.
         _applyUnsequenced(
-            pk, account, _one(_authorizeChange(ACTOR_B, address(k1Authenticator), SENDER, _future(1 days), ""))
+            pk, account, _one(_authorizeChange(ACTOR_B, address(k1Authenticator), OPERATOR, _future(1 days), ""))
         );
         (, uint32 seq1) = _localEpochSeq(account);
         assertEq(seq1, 0);
 
         // A local sequenced batch at seq 0 therefore still lands (seq 0 == localSequence 0), consuming 0 -> 1.
         bytes32 idC = bytes32(uint256(0xC3));
-        _applyLocal(pk, account, _one(_authorizeChange(idC, address(k1Authenticator), SENDER, _future(1 days), "")));
+        _applyLocal(pk, account, _one(_authorizeChange(idC, address(k1Authenticator), OPERATOR, _future(1 days), "")));
         assertTrue(_isActor(account, idC));
         (, uint32 seq2) = _localEpochSeq(account);
         assertEq(seq2, 1);

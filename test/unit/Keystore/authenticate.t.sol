@@ -2,6 +2,7 @@
 pragma solidity ^0.8.30;
 
 import {Keystore} from "../../../src/Keystore.sol";
+import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice Fuzzed, branch-complete suite for the authentication paths of Keystore:
@@ -20,11 +21,11 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 ///         The authentication functions are `view` and emit no events, so there are no event assertions here;
 ///         events (ActorAuthorized / ActorRevoked) belong to the applyKeyChange suite that drives the config writes.
 contract AuthenticateTest is KeystoreTest {
-    uint16 constant SCOPE_SENDER = 0x01;
-    uint16 constant SCOPE_POLICY = 0x02;
-    uint16 constant SCOPE_NONCE = 0x04;
-    uint16 constant SCOPE_SELF_PAYER = 0x08;
-    uint16 constant SCOPE_SPONSOR_PAYER = 0x10;
+    uint16 constant SCOPE_OPERATOR = Scopes.OPERATOR;
+    uint16 constant SCOPE_POLICY = Scopes.POLICY;
+    uint16 constant SCOPE_NONCE = Scopes.NONCE;
+    uint16 constant SCOPE_SELF_PAYER = Scopes.SELF_PAYER;
+    uint16 constant SCOPE_SPONSOR_PAYER = Scopes.SPONSOR_PAYER;
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // REVERTS (source order)
@@ -381,7 +382,7 @@ contract AuthenticateTest is KeystoreTest {
 
     /// @notice A registered P-256 actor authenticates via the non-K1 authenticator path.
     /// @dev _authenticate (non-K1) success: IAuthenticator resolves actorId, config.authenticator == p256. The
-    ///      SCOPE_POLICY bit is cleared so no policyData is required at authorize time.
+    ///      Empty policyData is accepted regardless of scope bits.
     function test_authenticateActor_success_p256Actor(uint256 ownerSeed, uint256 pkSeed, uint8 scopeSeed, bytes32 hash)
         public
     {
@@ -751,12 +752,12 @@ contract AuthenticateTest is KeystoreTest {
         (address account,) = _createK1Account(ownerPk);
         vm.assume(vm.addr(sessionPk) != account);
         bytes32 sessionActorId = bytes32(uint256(uint160(vm.addr(sessionPk))));
-        _authorizeGatedActor(account, ownerPk, sessionActorId, SCOPE_SENDER | SCOPE_POLICY, manager, commitment);
+        _authorizeGatedActor(account, ownerPk, sessionActorId, SCOPE_OPERATOR | SCOPE_POLICY, manager, commitment);
 
         bytes memory auth = _wrapLocal(_buildK1Auth(sessionPk, keystore.replaySafeHash(account, block.chainid, hash)));
         (bytes32 outActorId, uint16 outScope) = keystore.validateSignature(account, hash, auth);
         assertEq(outActorId, sessionActorId);
-        assertEq(outScope, SCOPE_SENDER | SCOPE_POLICY);
+        assertEq(outScope, SCOPE_OPERATOR | SCOPE_POLICY);
     }
 
     /// @notice A multichain envelope (SignatureType.Multichain) validates against the chainId = 0 digest.

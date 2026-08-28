@@ -462,8 +462,8 @@ contract CreateAccountTest is KeystoreTest {
     }
 
     /// @notice Verifies computeAddress rejects malformed policyData, matching createAccount (M-02 parity)
-    /// @dev Scope carries Scopes.POLICY (0x02) but policyData is not the required 52 bytes, so _validateInitialActors
-    ///      reverts InvalidPolicyData before an address is predicted.
+    /// @dev policyData is neither empty nor 52 bytes, so _validateInitialActors reverts InvalidPolicyData
+    ///      before an address is predicted. Scope bits are not consulted.
     function test_computeAddress_revert_invalidPolicyData(bytes32 actorId, bytes32 salt) public {
         vm.assume(actorId != 0);
 
@@ -478,8 +478,8 @@ contract CreateAccountTest is KeystoreTest {
     }
 
     /// @notice Verifies createAccount rejects malformed policyData up front via the shared validator
-    /// @dev Complements the existing sorted/duplicate/authenticator revert tests: scope has Scopes.POLICY set but
-    ///      policyData is not 52 bytes, so _prepareDeployment -> _validateInitialActors reverts InvalidPolicyData.
+    /// @dev Complements the existing sorted/duplicate/authenticator revert tests: policyData is neither empty nor
+    ///      52 bytes, so _prepareDeployment -> _validateInitialActors reverts InvalidPolicyData.
     function test_createAccount_revert_invalidPolicyData(bytes32 actorId, bytes32 salt) public {
         vm.assume(actorId != 0);
 

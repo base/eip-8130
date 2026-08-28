@@ -2,13 +2,13 @@
 
 A policy manager for EIP-8130 restricted actors.
 
-In EIP-8130, a restricted actor (e.g. a session key) is configured with `scope & Scopes.POLICY != 0`, which stores a
-`policy_manager` address and an opaque `policy_commitment` in the Keystore contract. The protocol
-gate forces every call that actor makes to land on that single manager. These contracts are one realization of
-that manager: it enforces application-specific limits and then drives the account. `Scopes.POLICY`
-(`0x02`) may be combined with other scope bits (e.g. `Scopes.POLICY | Scopes.SELF_PAYER`) — `Keystore` does
-not reject scope combinations; use-time exclusivity between policy gating and an actor's other capabilities is
-protocol-side, not enforced by this contract.
+In EIP-8130, a restricted actor (e.g. a session key) is configured with optional 52-byte policy data
+(`manager(20) || commitment(32)`) stored co-located with the 32-byte actor config, making an 84-byte packed
+record. Length decides what gets stored; POLICY decides whether the sender is gated; OPERATOR overrides POLICY.
+The protocol node gates on `scope & Scopes.POLICY != 0` and forces every call that actor makes to land on that
+single manager. These contracts are one realization of that manager: it enforces application-specific limits
+and then drives the account. `Scopes.POLICY` (`0x08`) is an optional grant. `Keystore` does not import or
+interpret scope bits; policy attachment is a length check (empty vs 52).
 
 ## Flow
 
@@ -146,14 +146,14 @@ then `executeFor` — so the account never needs to send a transaction. The acco
 // actorId = ActorId.fromAddress(provider). The provider never signs an 8130 tx; it acts by being msg.sender.
 Keystore.ActorConfig({
     authenticator: EXTERNAL_POLICY_AUTHENTICATOR, // recognized actor; NO direct executeBatch; not 8130-usable
-    scope:         0x02,                          // Scopes.POLICY — gated initiation only (MAY also OR Scopes.SELF_PAYER
-                                                  //   for self-pay; SHOULD NOT combine with SENDER — POLICY gates
-                                                  //   regardless, so SENDER adds no authority the protocol will honor)
+    scope:         0x08,                          // Scopes.POLICY — gated initiation only (MAY also OR Scopes.SELF_PAYER
+                                                  //   for self-pay). OPERATOR and POLICY do not combine: OPERATOR may
+                                                  //   originate to any call.to; POLICY-only is gated to the manager.
     expiry:        0
 });
 ```
 
-`Scopes.NONCE` (`0x04`) is a separate, orthogonal scope bit: it permits a restricted actor to use sequenced
+`Scopes.NONCE` (`0x10`) is a separate, orthogonal scope bit: it permits a restricted actor to use sequenced
 `nonce_key`s. This contract stores the bit verbatim and never interprets it — nonce semantics are entirely
 protocol-side — so it isn't part of the policy flow above and is only mentioned here for completeness.
 
