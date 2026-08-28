@@ -4,9 +4,10 @@ pragma solidity 0.8.36;
 /// @notice Canonical EIP-8130 actor scope grants.
 /// @dev Scope assignments are append-only; unknown bits are stored verbatim and grant no authority.
 ///      Core grants occupy bits 0–2; the optional POLICY and NONCE grants trail them.
-///      Keystore stores `scope` verbatim and never interprets these bits; consumers enforce meaning at use time.
-///      OPERATOR and POLICY do not combine: OPERATOR may originate to any `call.to`; POLICY-only is gated to the
-///      actor's policy manager.
+///      Length decides what gets stored; POLICY decides whether the sender is gated; OPERATOR overrides POLICY.
+///      Keystore attaches policy by payload length (empty vs 52 bytes) and stores `scope` verbatim. The protocol
+///      node gates `sender_auth` on the POLICY bit; OPERATOR is the more permissive initiation grant and is not
+///      suppressed by POLICY.
 library Scopes {
     /// @notice Ungated initiation (`sender_auth`): may originate transactions to any `call.to`.
     uint16 internal constant OPERATOR = 0x0001;

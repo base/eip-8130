@@ -190,9 +190,10 @@ contract Keystore {
 
     // This contract is deliberately scope-agnostic. `scope == 0` is the admin predicate (the only scope value it
     // acts on for config/lock changes). Named grants (OPERATOR, SELF_PAYER, SPONSOR_PAYER, and the optional POLICY
-    // and NONCE bits) are stored verbatim and never read here. Policy attachment is a length check on the authorize
-    // payload (empty vs 52 bytes), not a scope-bit test. The full uint16 grant vocabulary lives in {Scopes} for
-    // consumers. This contract does not reject scope combinations.
+    // and NONCE bits) are stored verbatim and never read here. Length decides what gets stored; POLICY decides
+    // whether the sender is gated; OPERATOR overrides POLICY. Policy attachment is a length check on the authorize
+    // payload (empty vs 52 bytes), not a scope-bit test — the protocol node, not this contract, gates `sender_auth`
+    // on POLICY. The full uint16 grant vocabulary lives in {Scopes}. This contract does not reject scope combinations.
 
     /// @notice The single secp256k1 authenticator. The default EOA and every k1 actor share this one identity; the
     ///         actor config alone distinguishes a full-owner EOA from a scoped key. Signed with a K1_AUTHENTICATOR
@@ -911,9 +912,10 @@ contract Keystore {
     ///      precompile. It lets an off-8130 consumer read `getPolicyManager` / `getPolicyCommitment(account, actorId)`
     ///      (execution-time reads) for a policy-gated actor, reaching parity with the native hot path.
     /// @dev `scope` is the actor's capability set, stored verbatim and never interpreted by this contract.
-    ///      Protocol-side semantics for bits like OPERATOR / POLICY / NONCE live outside this contract. Consumers
-    ///      that implement a policy gate look at whether policy bytes were attached (via {getPolicyManager})
-    ///      independently of the stored scope bits.
+    ///      Protocol-side semantics for bits like OPERATOR / POLICY / NONCE live outside this contract. Length
+    ///      decides what gets stored; POLICY decides whether the sender is gated; OPERATOR overrides POLICY. An
+    ///      off-8130 consumer that implements a policy gate should follow that same split — gate on the POLICY
+    ///      bit, not on whether policy bytes were attached.
     /// @dev Reverts with InvalidAuthLength when `auth` is shorter than 20 bytes.
     /// @dev Reverts with AuthenticationFailed, AuthenticatorMismatch, ActorExpired, DefaultEoaRevoked, or
     ///      InvalidSignature when the actor cannot be authenticated.
@@ -1257,7 +1259,8 @@ contract Keystore {
     ///      Empty → (0, 0). Exactly 52 bytes manager[20] || commitment[32] → (manager, commitment), written
     ///      verbatim. Neither field need be non-zero: a zero commitment is a valid "no params" and a zero
     ///      manager gates the actor to address(0). Only a length that is neither 0 nor 52 reverts. Scope bits
-    ///      are not consulted. The protocol does not interpret the commitment value.
+    ///      are not consulted here: length decides what gets stored; the protocol node gates the sender on POLICY.
+    ///      The protocol does not interpret the commitment value.
     function _slicePolicy(bytes memory policyData) private pure returns (address manager, bytes32 commitment) {
         if (policyData.length == 0) {
             return (address(0), bytes32(0));
