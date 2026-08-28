@@ -106,8 +106,8 @@ contract KeystoreBranchCoverageTest is KeystoreTest {
     function test_multichain_revert_sequenceSaturated() public {
         (address account,) = _createK1Account(OWNER_PK);
 
-        // Force the multichain counter (low 64 bits of the packed AccountState slot at base-slot 3) to its max.
-        bytes32 slot = keccak256(abi.encode(account, uint256(3)));
+        // Force the multichain counter (low 64 bits of the packed AccountState slot at base-slot 0) to its max.
+        bytes32 slot = keccak256(abi.encode(account, uint256(0)));
         uint256 cur = uint256(vm.load(address(keystore), slot));
         uint256 updated = (cur & ~uint256(type(uint64).max)) | uint256(type(uint64).max);
         vm.store(address(keystore), slot, bytes32(updated));

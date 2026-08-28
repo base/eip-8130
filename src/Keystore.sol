@@ -3,6 +3,7 @@ pragma solidity 0.8.36;
 
 import {ActorId} from "./libraries/ActorId.sol";
 import {IAuthenticator} from "./interfaces/IAuthenticator.sol";
+import {KeystoreLayout} from "./libraries/KeystoreLayout.sol";
 import {Scopes} from "./libraries/Scopes.sol";
 
 /// @notice Keystore system contract for EIP-8130.
@@ -25,6 +26,8 @@ contract Keystore {
 
     /// @notice An actor's authorization: authenticator, expiry, and scope. Field order matches the normative
     ///         `actor_config` slot layout: authenticator(20) ‖ expiry(6) ‖ scope(2) ‖ reserved(4).
+    ///         Storage word0 additionally sets {KeystoreLayout.CLEANABLE} in the reserved region; that bit is
+    ///         storage-only and is not part of this ABI struct or the ActorAuthorized payload.
     struct ActorConfig {
         address authenticator;
         uint48 expiry; // Unix seconds; 0 = no expiry. Actor invalid once block.timestamp > expiry
@@ -107,10 +110,11 @@ contract Keystore {
     ///      The defaultEOA* fields are the inline home for the account's own secp256k1 ("self") key, whose actorId is
     ///      `ActorId.fromAddress(account)`. When FLAG_REVOKE_DEFAULT_EOA is unset, a k1 signature recovering to the
     ///      account authenticates with this inline config (all-zero = full owner; non-zero scope/expiry = a
-    ///      scoped self key), resolved in a single SLOAD. Policy gating (when scope & Scopes.POLICY != 0) is still keyed
-    ///      by actorId in the shared _policyManager/_policyCommitment keyspace. The separate _actorConfig[self][account]
-    ///      slot is reserved for a *non-k1* self authenticator (e.g. a post-quantum verifier returning the
-    ///      self-actorId); the two homes are mutually exclusive (see _authorizeActor).
+    ///      scoped self key), resolved in a single SLOAD. Policy gating (when scope & Scopes.POLICY != 0) is still
+    ///      keyed by actorId in the co-located actor record (word1/word2). A *non-k1* self authenticator (e.g. a
+    ///      post-quantum verifier returning the self-actorId) lives in that record's word0; the two homes are
+    ///      mutually exclusive (see _authorizeActor). The reserved byte of this slot MUST stay zero so a reaper
+    ///      can distinguish it from a CLEANABLE actor record.
     struct AccountState {
         uint64 multichainSequence; // 8 bytes
         uint32 localSequence; // 4 bytes – low half of the signed local word
@@ -401,18 +405,9 @@ contract Keystore {
     // STORAGE
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice Per-actor configuration
-    /// @dev Account must be inner-most mapping key to pass ERC-7562 storage access rules for ERC-4337 compatibility.
-    mapping(bytes32 actorId => mapping(address account => ActorConfig)) internal _actorConfig;
-
-    /// @notice Per-actor signed policy commitment. Set when the actor's scope carries Scopes.POLICY.
-    /// @dev Read only during execution (via getPolicyCommitment / getActorWithPolicy), never during signature validity checks.
-    mapping(bytes32 actorId => mapping(address account => bytes32)) internal _policyCommitment;
-
-    /// @notice Per-actor policy manager address. Set when the actor's scope carries Scopes.POLICY.
-    mapping(bytes32 actorId => mapping(address account => address)) internal _policyManager;
-
-    /// @notice Per-account state: sequences, lock status (single slot per account)
+    /// @notice Per-account state: sequences, lock status, inline k1 self (single slot per account).
+    /// @dev The only Solidity mapping. Actor config, policy manager, and policy commitment are co-located at
+    ///      {KeystoreLayout.recordBase} as a 3-word record so a later stem walk can reap expired leaves.
     mapping(address account => AccountState) internal _accountState;
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -749,9 +744,7 @@ contract Keystore {
         if (!_isAuthorized(account, actorId)) {
             revert UnknownActor();
         }
-        delete _actorConfig[actorId][account];
-        delete _policyCommitment[actorId][account];
-        delete _policyManager[actorId][account];
+        _clearActorRecord(account, actorId);
         if (actorId == _selfActorId(account)) {
             _disableInlineSelf(_accountState[account]);
         }
@@ -965,13 +958,12 @@ contract Keystore {
         config = _resolveActorConfig(account, actorId);
         // Gating is by the scope bit, matching {_emitActorAuthorized}; a non-live or ungated actor has a zero gate.
         if (config.authenticator != address(0) && config.scope & Scopes.POLICY != 0) {
-            policyManager = _policyManager[actorId][account];
-            policyCommitment = _policyCommitment[actorId][account];
+            (policyManager, policyCommitment) = _loadPolicySlots(account, actorId);
         }
     }
 
     /// @dev The single liveness resolver behind every read surface ({getActorConfig}, {getActorWithPolicy},
-    ///      {getPolicyCommitment}, {getPolicyManager}). A populated _actorConfig entry returns verbatim unless expired;
+    ///      {getPolicyCommitment}, {getPolicyManager}). A populated actor-record word0 returns verbatim unless expired;
     ///      the k1 self (inline in AccountState) resolves to a native ecrecover owner unless disabled or expired;
     ///      anything unknown/revoked/disabled/expired resolves to the all-zero (empty) config. Centralizing this is
     ///      what makes "expired" read identically to "revoked" on every surface — the invariant that lets a node
@@ -979,7 +971,7 @@ contract Keystore {
     function _resolveActorConfig(address account, bytes32 actorId) private view returns (ActorConfig memory) {
         // Common path first: the inline k1 self. A clear FLAG_REVOKE_DEFAULT_EOA means the inline self is live, so
         // resolve it from AccountState alone (all-zero = full owner). When the flag is set the inline self is off —
-        // either a non-k1 self lives in _actorConfig, or the self was revoked — so fall through to the shared home.
+        // either a non-k1 self lives in the actor record, or the self was revoked — so fall through to the shared home.
         if (actorId == _selfActorId(account)) {
             AccountState storage st = _accountState[account];
             if (st.flags & FLAG_REVOKE_DEFAULT_EOA == 0) {
@@ -993,9 +985,9 @@ contract Keystore {
             }
         }
 
-        // Explicit actor (or a non-k1 self): the single _actorConfig home. A stored authenticator is K1_AUTHENTICATOR
+        // Explicit actor (or a non-k1 self): the co-located actor record. A stored authenticator is K1_AUTHENTICATOR
         // (0x1) or a contract, so `>= K1_AUTHENTICATOR` is the "slot populated" test. An expired entry reports empty.
-        ActorConfig memory config = _actorConfig[actorId][account];
+        ActorConfig memory config = _loadActorConfig(account, actorId);
         if (config.authenticator >= K1_AUTHENTICATOR) {
             return _isExpired(config.expiry) ? _emptyActorConfig() : config;
         }
@@ -1013,7 +1005,8 @@ contract Keystore {
         if (_resolveActorConfig(account, actorId).authenticator == address(0)) {
             return bytes32(0);
         }
-        return _policyCommitment[actorId][account];
+        (, bytes32 commitment) = _loadPolicySlots(account, actorId);
+        return commitment;
     }
 
     /// @notice The actor's policy manager, or 0 when the actor is not live. See {_resolveActorConfig}.
@@ -1021,7 +1014,8 @@ contract Keystore {
         if (_resolveActorConfig(account, actorId).authenticator == address(0)) {
             return address(0);
         }
-        return _policyManager[actorId][account];
+        (address manager,) = _loadPolicySlots(account, actorId);
+        return manager;
     }
 
     /// @notice Returns the account's replay counters: the multichain counter and the local channel's epoch and
@@ -1152,8 +1146,8 @@ contract Keystore {
 
     /// @dev Authorizes (upserts) `actorId` with `config` and optional `policyData`, emitting ActorAuthorized. Rejects
     ///      a sub-K1 authenticator. The self-actorId is routed by authenticator type (a k1 self inline in
-    ///      AccountState, a non-k1 self in _actorConfig) and the two are kept mutually exclusive; every other actor
-    ///      lives in _actorConfig. Reverts with InvalidActorId, InvalidAuthenticator, or InvalidPolicyData.
+    ///      AccountState, a non-k1 self in the actor record) and the two are kept mutually exclusive; every other actor
+    ///      lives in the actor record. Reverts with InvalidActorId, InvalidAuthenticator, or InvalidPolicyData.
     function _authorizeActor(address account, bytes32 actorId, ActorConfig memory config, bytes memory policyData)
         private
         nonZeroAccount(account)
@@ -1176,42 +1170,104 @@ contract Keystore {
         // Scopes.POLICY and the account's other capabilities is protocol-side, not enforced here.
         (address manager, bytes32 commitment) = _slicePolicy(config.scope, policyData);
 
+        uint256 w0;
         if (actorId == _selfActorId(account)) {
             // Self-actorId is routed by authenticator type and the two homes are mutually exclusive: the k1 self
-            // lives inline in AccountState; a non-k1 self lives in _actorConfig. Authorizing one clears the
+            // lives inline in AccountState; a non-k1 self lives in the actor record. Authorizing one clears the
             // other so a k1 and a non-k1 self are never simultaneously live.
             AccountState storage st = _accountState[account];
             if (config.authenticator == K1_AUTHENTICATOR) {
                 // Upsert: overwrite a live self in place (no re-auth guard); the end state equals revoke-then-
                 // authorize. Re-enabling a previously revoked self is just the flag clear below.
-                delete _actorConfig[actorId][account]; // mutual exclusion: drop any non-k1 self
+                // word0 stays 0 (not CLEANABLE): config is inline, so a reaper must not treat this as an actor record.
                 st.defaultEOAScope = config.scope;
                 st.defaultEOAExpiry = config.expiry;
                 st.flags &= ~FLAG_REVOKE_DEFAULT_EOA; // enable the inline self
             } else {
                 // Upsert: overwrite any existing non-k1 self in place.
-                _actorConfig[actorId][account] = config;
+                w0 = KeystoreLayout.packWord0(config.authenticator, config.expiry, config.scope);
                 // Mutual exclusion: disable and clear the inline k1 self.
                 _disableInlineSelf(st);
             }
-            // Policy slots are keyed by actorId (shared keyspace across both self homes).
-            _writePolicySlots(actorId, account, manager, commitment);
-
-            _emitActorAuthorized(account, actorId, config, manager, commitment);
-            return;
+        } else {
+            // Non-self actor: single co-located record. Upsert: overwrite in place.
+            w0 = KeystoreLayout.packWord0(config.authenticator, config.expiry, config.scope);
         }
-
-        // Non-self actor: single _actorConfig home. Upsert: overwrite in place.
-        _actorConfig[actorId][account] = config;
-        _writePolicySlots(actorId, account, manager, commitment);
+        // Policy occupies word1/word2 of the same record (shared keyspace across both self homes).
+        _storeActorRecord(account, actorId, w0, manager, commitment);
 
         _emitActorAuthorized(account, actorId, config, manager, commitment);
     }
 
-    /// @dev Writes the current policy values and clears stale values when an actor becomes ungated.
-    function _writePolicySlots(bytes32 actorId, address account, address manager, bytes32 commitment) private {
-        _policyCommitment[actorId][account] = commitment;
-        _policyManager[actorId][account] = manager;
+    /// @dev Writes the 3-word actor record at {KeystoreLayout.recordBase}. `w0 == 0` clears the CLEANABLE
+    ///      marker (k1 self: config lives in AccountState); non-zero `w0` is a packWord0'd reap-eligible actor.
+    function _storeActorRecord(address account, bytes32 actorId, uint256 w0, address manager, bytes32 commitment)
+        private
+    {
+        bytes32 base = KeystoreLayout.recordBase(account, actorId);
+        uint256 w1 = uint256(uint160(manager));
+        uint256 w2 = uint256(commitment);
+        assembly ("memory-safe") {
+            sstore(base, w0)
+            sstore(add(base, 1), w1)
+            sstore(add(base, 2), w2)
+        }
+    }
+
+    /// @dev Clears the whole actor record (config + policy). Unchanged revoke semantics; emits nothing here.
+    function _clearActorRecord(address account, bytes32 actorId) private {
+        _storeActorRecord(account, actorId, 0, address(0), bytes32(0));
+    }
+
+    /// @dev word0 of the co-located record, unpacked as ActorConfig. CLEANABLE occupies reserved bits and is
+    ///      dropped by these shifts, so callers see the ABI struct unchanged.
+    function _loadActorConfig(address account, bytes32 actorId) private view returns (ActorConfig memory config) {
+        bytes32 base = KeystoreLayout.recordBase(account, actorId);
+        uint256 w0;
+        assembly ("memory-safe") {
+            w0 := sload(base)
+        }
+        config.authenticator = address(uint160(w0));
+        config.expiry = uint48(w0 >> 160);
+        config.scope = uint16(w0 >> 208);
+    }
+
+    /// @dev word1/word2 of the co-located record. Read only at execution (policy enforcement), never on the
+    ///      signature-validity hot path — matching the previous split mappings.
+    function _loadPolicySlots(address account, bytes32 actorId)
+        private
+        view
+        returns (address manager, bytes32 commitment)
+    {
+        bytes32 base = KeystoreLayout.recordBase(account, actorId);
+        uint256 w1;
+        uint256 w2;
+        assembly ("memory-safe") {
+            w1 := sload(add(base, 1))
+            w2 := sload(add(base, 2))
+        }
+        manager = address(uint160(w1));
+        commitment = bytes32(w2);
+    }
+
+    /// @dev Protocol-driven reaper. Operates on a record base discovered by a seeded stem walk; needs no
+    ///      (account, actorId) preimage and emits nothing (pruning stays invisible). On MPT this is unused;
+    ///      a later slot-grouping tree can random-scan expired leaves.
+    function _reapRecord(bytes32 base, uint256 nowTs) internal returns (bool cleared) {
+        uint256 w0;
+        assembly ("memory-safe") {
+            w0 := sload(base)
+        }
+        // Not a cleanable actor record (account-state has CLEANABLE == 0) -> skip.
+        if (w0 & KeystoreLayout.CLEANABLE == 0) return false;
+        uint48 expiry = uint48(w0 >> 160);
+        if (expiry == 0 || nowTs <= expiry) return false; // no expiry, or still live
+        assembly ("memory-safe") {
+            sstore(base, 0)
+            sstore(add(base, 1), 0)
+            sstore(add(base, 2), 0)
+        }
+        return true;
     }
 
     /// @dev Disables the inline k1 ("self") key: sets FLAG_REVOKE_DEFAULT_EOA so the inline full-owner path stays off
@@ -1268,10 +1324,10 @@ contract Keystore {
     /// @dev Checks authorization presence without expiry so expired actors can still be explicitly revoked.
     function _isAuthorized(address account, bytes32 actorId) private view returns (bool) {
         // A populated entry represents any non-self actor or a non-k1 self authenticator.
-        if (_actorConfig[actorId][account].authenticator >= K1_AUTHENTICATOR) {
+        if (_loadActorConfig(account, actorId).authenticator >= K1_AUTHENTICATOR) {
             return true;
         }
-        // No _actorConfig entry: the self-actorId's k1 key lives inline in AccountState, live unless the flag is set.
+        // No actor-record word0: the self-actorId's k1 key lives inline in AccountState, live unless the flag is set.
         if (actorId == _selfActorId(account)) {
             return !_isDefaultEoaRevoked(account);
         }
@@ -1422,7 +1478,7 @@ contract Keystore {
 
     /// @dev Resolves and authenticates the actor behind `authenticator`/`data`, returning its
     ///      (actorId, scope). Routes the K1 sentinel to _authenticateK1; otherwise calls the
-    ///      IAuthenticator and requires the resolved actorId to carry a matching, unexpired _actorConfig entry.
+    ///      IAuthenticator and requires the resolved actorId to carry a matching, unexpired actor-record entry.
     ///      Reverts with AuthenticationFailed, AuthenticatorMismatch, or ActorExpired.
     function _authenticate(address account, bytes32 hash, address authenticator, bytes calldata data)
         private
@@ -1441,7 +1497,7 @@ contract Keystore {
         return (actorId, _resolveExplicitActor(account, actorId, authenticator));
     }
 
-    /// @dev Resolves an explicit _actorConfig-homed actor: requires a matching authenticator and an unexpired entry,
+    /// @dev Resolves an explicit actor-record-homed actor: requires a matching authenticator and an unexpired entry,
     ///      returning its scope. Shared by the non-k1 (_authenticate) and k1 other-actor (_authenticateK1) paths.
     ///      Reverts with AuthenticatorMismatch or ActorExpired.
     function _resolveExplicitActor(address account, bytes32 actorId, address expectedAuthenticator)
@@ -1449,7 +1505,7 @@ contract Keystore {
         view
         returns (uint16 scope)
     {
-        ActorConfig memory config = _actorConfig[actorId][account];
+        ActorConfig memory config = _loadActorConfig(account, actorId);
         if (config.authenticator != expectedAuthenticator) {
             revert AuthenticatorMismatch();
         }
@@ -1465,7 +1521,7 @@ contract Keystore {
     ///          key (set => revert), and when live the scope/expiry come from the inline fields (all-zero = full
     ///          owner; non-zero = a scoped self). A non-k1 self is unreachable here by construction (it requires
     ///          its own authenticator), and mutual exclusion keeps the flag set whenever one is live.
-    ///        - otherwise the signer's actorId must carry an explicit K1 config in _actorConfig (any other k1 actor).
+    ///        - otherwise the signer's actorId must carry an explicit K1 config in the actor record (any other k1 actor).
     ///      Both the common self and other-actor paths cost a single SLOAD.
     function _authenticateK1(address account, bytes32 hash, bytes calldata data)
         private
