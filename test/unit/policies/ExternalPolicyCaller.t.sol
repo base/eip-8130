@@ -2,6 +2,7 @@
 pragma solidity ^0.8.30;
 
 import {Keystore} from "../../../src/Keystore.sol";
+import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {TRUSTED_EXECUTOR} from "../../../src/accounts/DefaultAccount.sol";
 
 import {PolicyManager, EXTERNAL_POLICY_AUTHENTICATOR} from "../../../src/policies/PolicyManager.sol";
@@ -38,8 +39,8 @@ contract ExternalPolicyCallerTest is KeystoreTest {
     address internal recipient = address(0x5EE);
 
     uint256 internal constant ROOT_PK = 0xA11CE;
-    uint8 internal constant SCOPE_OPERATOR = 0x01;
-    uint8 internal constant SCOPE_POLICY = 0x08;
+    uint16 internal constant SCOPE_OPERATOR = Scopes.OPERATOR;
+    uint16 internal constant SCOPE_POLICY = Scopes.POLICY;
 
     bytes4 internal constant TRANSFER = bytes4(keccak256("transfer(address,uint256)"));
     uint40 internal constant MONTH = 30 days;

@@ -665,8 +665,10 @@ contract Keystore {
                 }
             }
 
-            // Apply: dispatch the op to its handler. Independent `if ... continue` arms (not an if/else-if chain) so
-            // each op's match/no-match paths are exercised and instrumented in isolation.
+            // Apply: dispatch the op to its handler. Written as independent `if ... continue` arms rather than an
+            // if/else-if chain: under `forge coverage --ir-minimum` (forced by a stack-too-deep dep) the chain form
+            // leaves each arm's false edge as an unreachable coverage dash; the flat form instruments cleanly. Purely
+            // a coverage-shape choice — behavior is identical (same handlers, order, and UnknownChangeType fallback).
             if (t == ChangeType.AuthorizeActor) {
                 _applyAuthorize(account, batch.changes[i].payload, isUnsequenced, locked);
                 continue;

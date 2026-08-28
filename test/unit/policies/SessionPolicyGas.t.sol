@@ -4,6 +4,7 @@ pragma solidity ^0.8.30;
 import {console} from "forge-std/Test.sol";
 
 import {Keystore} from "../../../src/Keystore.sol";
+import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../../src/interfaces/ITransactionContext.sol";
 import {TRUSTED_EXECUTOR} from "../../../src/accounts/DefaultAccount.sol";
 
@@ -41,7 +42,7 @@ contract SessionPolicyGasTest is KeystoreTest {
     address internal bob = address(0xB0B);
 
     uint256 internal constant ROOT_PK = 0xA11CE;
-    uint8 internal constant SCOPE_POLICY = 0x08;
+    uint16 internal constant SCOPE_POLICY = Scopes.POLICY;
 
     bytes4 internal constant TRANSFER = bytes4(keccak256("transfer(address,uint256)"));
     uint40 internal constant WEEK = 7 days;
