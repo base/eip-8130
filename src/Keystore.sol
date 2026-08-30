@@ -265,9 +265,7 @@ contract Keystore {
     /// @notice Emitted when an existing account is imported into management.
     ///
     /// @param account The imported account address.
-    /// @param chainId Replay domain of the import (0 = multichain, otherwise `block.chainid`).
-    /// @param digest The {computeImportDigest} hash of the installed actor set, so indexers can reconcile it.
-    event AccountImported(address indexed account, uint256 chainId, bytes32 digest);
+    event AccountImported(address indexed account);
 
     /// @notice Protocol-injected receipt log for successful EIP-8130 delegation updates (not emitted in EVM).
     ///
@@ -569,7 +567,7 @@ contract Keystore {
         _accountState[account].flags = FLAG_REVOKE_DEFAULT_EOA;
 
         _initializeAccount(account, actors);
-        emit AccountImported(account, chainId, digest);
+        emit AccountImported(account);
     }
 
     /// @notice Typed digest an importing account must confirm via ERC-1271. Wallets should compute this over the

@@ -789,18 +789,15 @@ contract ImportAccountTest is KeystoreTest {
         assertTrue(_isActor(address(wallet), bytes32(uint256(uint160(owner)))));
     }
 
-    /// @notice importAccount emits AccountImported(account, chainId, digest) exactly once on the happy path.
+    /// @notice importAccount emits AccountImported(account) exactly once on the happy path.
     function test_importAccount_success_emitsAccountImported(uint256 ownerSeed, bool multichain) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         address owner = vm.addr(ownerPk);
-        Keystore.InitialActor[] memory actors = _singleUnrestrictedActor(owner);
-        ImportableWallet wallet = _importable(actors);
-        uint256 chainId = _acceptedChainId(multichain);
-        bytes32 digest = keystore.computeImportDigest(address(wallet), chainId, actors);
+        ImportableWallet wallet = _importable(_singleUnrestrictedActor(owner));
 
-        vm.expectEmit(true, true, true, true, address(keystore));
-        emit Keystore.AccountImported(address(wallet), chainId, digest);
-        wallet.importToKeystore(chainId);
+        vm.expectEmit(true, false, false, true, address(keystore));
+        emit Keystore.AccountImported(address(wallet));
+        wallet.importToKeystore(_acceptedChainId(multichain));
     }
 
     /// @notice FLAG_REVOKE_DEFAULT_EOA is set after import (the implicit default-EOA self key is disabled).
