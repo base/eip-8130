@@ -699,15 +699,11 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertEq(epoch, 1);
         assertEq(seq, 0);
 
-        // importAccount must still reject the account as already initialized. The check fires before the ERC-1271
-        // staticcall, so the empty signature is never reached.
-        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
-        actors[0] = Keystore.InitialActor({
-            actorId: bytes32(uint256(uint160(account))), authenticator: address(1), scope: 0, policyData: ""
-        });
+        // importAccount must still reject the account as already initialized. The check fires before getImportActors
+        // or ERC-1271, so the empty signature is never reached.
         vm.expectRevert(Keystore.AlreadyInitialized.selector);
         vm.prank(account);
-        keystore.importAccount(account, 0, actors, "");
+        keystore.importAccount(0, "");
     }
 
     /// @notice An empty sequenced batch is rejected (EmptyChangeSet) so it cannot consume a sequence doing nothing.
@@ -755,13 +751,9 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertTrue(_isActor(account, ACTOR_A));
 
         // importAccount must now reject the account as already initialized.
-        Keystore.InitialActor[] memory actors = new Keystore.InitialActor[](1);
-        actors[0] = Keystore.InitialActor({
-            actorId: bytes32(uint256(uint160(account))), authenticator: address(1), scope: 0, policyData: ""
-        });
         vm.expectRevert(Keystore.AlreadyInitialized.selector);
         vm.prank(account);
-        keystore.importAccount(account, 0, actors, "");
+        keystore.importAccount(0, "");
     }
 
     /// @notice Init asymmetry (fresh-account branch): a never-bootstrapped EOA's first LOCAL unsequenced batch burns
