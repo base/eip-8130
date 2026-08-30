@@ -266,11 +266,9 @@ contract ConstructorImporter {
     }
 }
 
-/// @dev CoinbaseSmartWalletV2-shaped import (see `_import` at CoinbaseSmartWalletV2.sol:457).
-///      V1 owners live in storage; {getImportActors} reconstructs them and appends code-baked canonical
-///      EntryPoints as TRUSTED_EXECUTOR. Caller-supplied actor sets are gone — that was the sub-root gap.
-///      The old `_migrationInProgress` (magic for any hash) is replaced by a hash-bound transient digest.
-contract CoinbaseSmartWalletStyle {
+/// @dev Existing wallet whose {getImportActors} reconstructs owners from storage and appends a code-baked
+///      canonical executor. ERC-1271 confirms a hash-bound transient digest (not a magic-for-any-hash flag).
+contract StorageReconstructedWallet {
     Keystore public immutable KEYSTORE;
     address public immutable PASSKEY_AUTHENTICATOR;
     address public immutable ENTRY_POINT;
@@ -281,7 +279,7 @@ contract CoinbaseSmartWalletStyle {
     error NotOwner();
 
     address public owner;
-    Keystore.InitialActor[] internal _v1Owners;
+    Keystore.InitialActor[] internal _storedOwners;
     bytes32 transient _importDigest;
 
     constructor(
@@ -289,38 +287,36 @@ contract CoinbaseSmartWalletStyle {
         address owner_,
         address passkeyAuthenticator_,
         address entryPoint_,
-        Keystore.InitialActor[] memory v1Owners
+        Keystore.InitialActor[] memory storedOwners
     ) {
         KEYSTORE = keystore_;
         owner = owner_;
         PASSKEY_AUTHENTICATOR = passkeyAuthenticator_;
         ENTRY_POINT = entryPoint_;
-        for (uint256 i; i < v1Owners.length; i++) {
-            _v1Owners.push(v1Owners[i]);
+        for (uint256 i; i < storedOwners.length; i++) {
+            _storedOwners.push(storedOwners[i]);
         }
     }
 
     function getImportActors() public view returns (Keystore.InitialActor[] memory actors) {
-        actors = new Keystore.InitialActor[](_v1Owners.length + 1);
-        for (uint256 i; i < _v1Owners.length; i++) {
-            actors[i] = _v1Owners[i];
+        actors = new Keystore.InitialActor[](_storedOwners.length + 1);
+        for (uint256 i; i < _storedOwners.length; i++) {
+            actors[i] = _storedOwners[i];
         }
-        actors[_v1Owners.length] = Keystore.InitialActor({
+        actors[_storedOwners.length] = Keystore.InitialActor({
             actorId: bytes32(uint256(uint160(ENTRY_POINT))), authenticator: TRUSTED_EXECUTOR, scope: 0, policyData: ""
         });
         _sortByActorId(actors);
     }
 
-    /// @notice Nominal V1→V2 path: onlySelf, reached as the owner-signed upgrade's `initData` self-call.
-    ///         No actor array — Keystore reads {getImportActors}.
-    function completeV1Migration() external {
+    /// @notice onlySelf import, as in an upgrade `initData` self-call. Keystore reads {getImportActors}.
+    function importSelf() external {
         if (msg.sender != address(this)) revert OnlySelf();
         _import();
     }
 
-    /// @notice Permissionless recovery: reconstructs owners from this account's storage. A third party can
-    ///         only import the real V1 owners plus the code-baked EntryPoint.
-    function recoverV1Owners() external {
+    /// @notice Permissionless import: a third party can only install the stored owners plus the code-baked executor.
+    function importPermissionless() external {
         _import();
     }
 
@@ -884,35 +880,37 @@ contract ImportAccountTest is KeystoreTest {
         assertEq(scope, 0);
     }
 
-    // ── CoinbaseSmartWalletV2-shaped import ──
+    // ── Storage-reconstructed existing wallet ──
 
-    function _cswWallet(uint256 ownerPk, uint256 passkeySeed)
+    function _reconstructedWallet(uint256 ownerPk, uint256 passkeySeed)
         internal
-        returns (CoinbaseSmartWalletStyle wallet, address owner, bytes32 passkeyId, address entryPoint)
+        returns (StorageReconstructedWallet wallet, address owner, bytes32 passkeyId, address entryPoint)
     {
         owner = vm.addr(ownerPk);
-        passkeyId = keccak256(abi.encodePacked("csw-passkey", passkeySeed));
+        passkeyId = keccak256(abi.encodePacked("passkey", passkeySeed));
         entryPoint = ENTRY_POINT;
         vm.assume(passkeyId != bytes32(uint256(uint160(owner))));
         vm.assume(passkeyId != bytes32(uint256(uint160(entryPoint))));
         address passkeyAuth = address(uint160(uint256(keccak256("passkeyAuthenticator"))));
 
-        Keystore.InitialActor[] memory v1 = new Keystore.InitialActor[](2);
-        v1[0] = Keystore.InitialActor({
+        Keystore.InitialActor[] memory owners = new Keystore.InitialActor[](2);
+        owners[0] = Keystore.InitialActor({
             actorId: bytes32(uint256(uint160(owner))), authenticator: address(k1Authenticator), scope: 0, policyData: ""
         });
-        v1[1] = Keystore.InitialActor({actorId: passkeyId, authenticator: passkeyAuth, scope: 0, policyData: ""});
-        wallet = new CoinbaseSmartWalletStyle(keystore, owner, passkeyAuth, entryPoint, v1);
+        owners[1] = Keystore.InitialActor({actorId: passkeyId, authenticator: passkeyAuth, scope: 0, policyData: ""});
+        wallet = new StorageReconstructedWallet(keystore, owner, passkeyAuth, entryPoint, owners);
     }
 
-    /// @notice CSW `recoverV1Owners`: permissionless, but the actor set is reconstructed from storage + code-baked
-    ///         EntryPoint. A third party cannot choose a different admin.
-    function test_importAccount_success_cswStyle_recoverV1Owners(uint256 ownerSeed, uint256 passkeySeed) public {
+    /// @notice Permissionless import still installs the storage-reconstructed set plus the code-baked executor.
+    ///         A third party cannot choose a different admin.
+    function test_importAccount_success_permissionlessReconstructsOwners(uint256 ownerSeed, uint256 passkeySeed)
+        public
+    {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
-        (CoinbaseSmartWalletStyle wallet, address owner, bytes32 passkeyId, address entryPoint) =
-            _cswWallet(ownerPk, passkeySeed);
+        (StorageReconstructedWallet wallet, address owner, bytes32 passkeyId, address entryPoint) =
+            _reconstructedWallet(ownerPk, passkeySeed);
 
-        wallet.recoverV1Owners();
+        wallet.importPermissionless();
 
         assertEq(keystore.getChangeSequences(address(wallet)).localSequence, 1);
         assertTrue(_isActor(address(wallet), bytes32(uint256(uint160(owner)))));
@@ -924,30 +922,28 @@ contract ImportAccountTest is KeystoreTest {
         );
     }
 
-    /// @notice CSW `completeV1Migration`: onlySelf, reached as the upgrade `initData` self-call through `execute`.
-    ///         No actor array is passed — matching the new Keystore signature.
-    function test_importAccount_success_cswStyle_completeV1Migration(uint256 ownerSeed, uint256 passkeySeed) public {
+    /// @notice onlySelf import, reached as an `initData` self-call through `execute`.
+    function test_importAccount_success_onlySelfImportViaExecute(uint256 ownerSeed, uint256 passkeySeed) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
-        (CoinbaseSmartWalletStyle wallet, address owner, bytes32 passkeyId,) = _cswWallet(ownerPk, passkeySeed);
+        (StorageReconstructedWallet wallet, address owner, bytes32 passkeyId,) =
+            _reconstructedWallet(ownerPk, passkeySeed);
 
         vm.prank(owner);
-        wallet.execute(address(wallet), 0, abi.encodeCall(CoinbaseSmartWalletStyle.completeV1Migration, ()));
+        wallet.execute(address(wallet), 0, abi.encodeCall(StorageReconstructedWallet.importSelf, ()));
 
         assertEq(keystore.getChangeSequences(address(wallet)).localSequence, 1);
         assertTrue(_isActor(address(wallet), bytes32(uint256(uint160(owner)))));
         assertTrue(_isActor(address(wallet), passkeyId));
     }
 
-    /// @notice A third party cannot call completeV1Migration (OnlySelf). They also cannot import a chosen actor set:
+    /// @notice A third party cannot call importSelf (OnlySelf). They also cannot import a chosen actor set:
     ///         there is no actors parameter on importAccount.
-    function test_importAccount_revert_cswStyle_completeV1Migration_notSelf(uint256 ownerSeed, uint256 passkeySeed)
-        public
-    {
+    function test_importAccount_revert_onlySelfImport_notSelf(uint256 ownerSeed, uint256 passkeySeed) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
-        (CoinbaseSmartWalletStyle wallet,,,) = _cswWallet(ownerPk, passkeySeed);
+        (StorageReconstructedWallet wallet,,,) = _reconstructedWallet(ownerPk, passkeySeed);
 
-        vm.expectRevert(CoinbaseSmartWalletStyle.OnlySelf.selector);
-        wallet.completeV1Migration();
+        vm.expectRevert(StorageReconstructedWallet.OnlySelf.selector);
+        wallet.importSelf();
         _assertUnimported(address(wallet));
     }
 }

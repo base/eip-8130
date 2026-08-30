@@ -65,8 +65,6 @@ function isValidSignature(bytes32 hash, bytes calldata sig) public view override
 }
 ```
 
-Existing wallets such as Coinbase Smart Wallet V2 must drop the caller-supplied `InitialActor[]` on `_import` / `completeV1Migration`. Reconstruct owners in `getImportActors()` (V1 storage plus any code-baked canonical actors such as EntryPoints as `TRUSTED_EXECUTOR`); replace `_migrationInProgress` (magic for any hash) with a hash-bound transient digest. Classify contract owners after import via `applySignedAccountChanges`.
-
 ### Build
 
 ```shell
