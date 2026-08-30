@@ -700,10 +700,10 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertEq(seq, 0);
 
         // importAccount must still reject the account as already initialized. The check fires before getImportActors
-        // or ERC-1271, so the empty signature is never reached.
+        // or confirmation.
         vm.expectRevert(Keystore.AlreadyInitialized.selector);
         vm.prank(account);
-        keystore.importAccount(0, "");
+        keystore.importAccount();
     }
 
     /// @notice An empty sequenced batch is rejected (EmptyChangeSet) so it cannot consume a sequence doing nothing.
@@ -753,7 +753,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         // importAccount must now reject the account as already initialized.
         vm.expectRevert(Keystore.AlreadyInitialized.selector);
         vm.prank(account);
-        keystore.importAccount(0, "");
+        keystore.importAccount();
     }
 
     /// @notice Init asymmetry (fresh-account branch): a never-bootstrapped EOA's first LOCAL unsequenced batch burns
