@@ -140,12 +140,14 @@ contract Keystore {
     ///      (0x1626ba7e); used both to build the import staticcall and to validate its result.
     bytes4 internal constant ERC1271_SELECTOR = bytes4(keccak256("isValidSignature(bytes32,bytes)"));
 
-    /// @notice Typehash binding an importAccount signature to its accountId, chainId, and initial actor set.
+    /// @notice Typehash binding an importAccount ERC-1271 confirmation to its accountId, chainId, and the actor set
+    ///         returned by {IKeystoreImport.getImportActors}. Distinct from {SIGNED_ACCOUNT_CHANGES_TYPEHASH} and
+    ///         {SIGNED_MESSAGE_TYPEHASH}; do not reuse this string for those digests.
     ///
     /// @dev NOT compliant with EIP-712, to mitigate eth_signTypedData phishing. `accountId` is the importing account's
     ///      actorId (`ActorId.fromAddress(account)`), binding the digest to that account so it cannot be replayed
-    ///      against another. `chainId` is either the current chain or 0 for a multichain import. Initial actors are
-    ///      hashed structurally below.
+    ///      against another. `chainId` is either the current chain or 0 for a multichain import. Binding of the actor
+    ///      set comes from the account's code ({IKeystoreImport.getImportActors}); ERC-1271 only confirms this digest.
     bytes32 public constant ACTOR_INITIALIZATION_TYPEHASH = keccak256(
         "ActorInitialization(bytes32 accountId,uint256 chainId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"
     );
@@ -307,14 +309,13 @@ contract Keystore {
     /// @notice The batch signer is not the account admin (scope 0). Every signed account change is admin-only.
     error UnauthorizedAccountChange();
 
-    /// @notice The import target has no bytecode or its ERC-1271 signature check did not return the canonical magic
-    ///         word.
+    /// @notice The account's ERC-1271 check did not return the canonical 32-byte ABI encoding of the magic value.
+    ///         `sig` is forwarded as-is (including empty) to {isValidSignature}; an empty signature is valid when the
+    ///         account's code confirms the import digest (for example via a transient-storage handshake).
     error InvalidImportSignature();
 
-    /// @notice `importAccount` was not invoked by the account being imported. A valid ERC-1271 signature is not
-    ///         sufficient: the account must itself call Keystore, so existing wallet execution gates (for example an
-    ///         `execute()` time lock) still apply. Relayers cannot import on the account's behalf.
-    error ImportCallerNotAccount();
+    /// @notice {IKeystoreImport.getImportActors} returned an empty actor set.
+    error NoImportActors();
 
     /// @notice A lock op carried a zero unlock delay.
     error ZeroUnlockDelay();
@@ -364,7 +365,7 @@ contract Keystore {
     /// @notice The auth blob is shorter than the 20-byte authenticator selector prefix.
     error InvalidAuthLength();
 
-    /// @notice createAccount/importAccount was called with an empty initialActors set.
+    /// @notice createAccount was called with an empty initialActors set.
     error NoInitialActors();
 
     /// @notice initialActors are not strictly ascending by actorId (unsorted or duplicated).
@@ -506,39 +507,38 @@ contract Keystore {
         emit AccountCreated(account, userSalt, keccak256(bytecode));
     }
 
-    /// @notice Imports an existing account (which must have bytecode) into Keystore management via an
-    ///         ERC-1271 signature over a typed import digest. The implicit default-EOA key is disabled after import.
-    ///         The account itself must be `msg.sender`: a signature alone cannot opt a wallet into 8130, so wallets
-    ///         that gate spending in `execute()` keep that gate on the import path.
+    /// @notice Imports `msg.sender` into Keystore management. Authority is the conjunction of: (a) the account
+    ///         itself calling, (b) the account's code choosing the actor set via {IKeystoreImport.getImportActors},
+    ///         and (c) the account confirming {computeImportDigest} via ERC-1271. Third parties cannot import, and a
+    ///         role that can `execute` plus 1271 cannot choose a different actor set than the code returns. Wallets
+    ///         must upgrade to implement {IKeystoreImport}; a plain 1271 wallet is not importable.
     ///
-    /// @dev Uses a custom (non-EIP-712) digest to partially mitigate eth_signTypedData phishing.
-    /// @dev Reverts with ImportCallerNotAccount when `msg.sender` is not `account`.
+    ///         After import, the actor set in this contract is the source of truth. Subsequent owner changes on the
+    ///         wallet do not propagate here; wallets should route their own signature validation through
+    ///         {authenticateActor} after import.
+    ///
+    ///         `chainId == 0` remains a valid multichain import. Combined with the `msg.sender` gate and the
+    ///         hash-bound 1271 confirmation, a multichain digest cannot be used by a third party.
+    ///
+    /// @dev Uses a custom (non-EIP-712) digest to partially mitigate eth_signTypedData phishing. Binding of the actor
+    ///      set comes from {IKeystoreImport.getImportActors}; ERC-1271 only confirms that digest.
     /// @dev Reverts with AccountIsLocked when the account is locked.
     /// @dev Reverts with InvalidChainId when `chainId` is neither 0 (multichain) nor the current chain.
     /// @dev Reverts with AlreadyInitialized when the account already has EIP-8130 state.
-    /// @dev Reverts with InvalidImportSignature when the account has no bytecode or its ERC-1271 check does not return
-    ///      the canonical 32-byte ABI encoding of the magic value.
-    /// @dev Reverts with NoInitialActors when `initialActors` is empty.
-    /// @dev Reverts with ActorsNotSortedOrDuplicate when `initialActors` is not strictly ascending by actorId.
-    /// @dev Reverts with InvalidAuthenticator when an initial actor names a zero authenticator.
+    /// @dev Reverts with NoImportActors when {getImportActors} returns an empty array.
+    /// @dev Reverts with ActorsNotSortedOrDuplicate when the returned actors are not strictly ascending by actorId.
+    /// @dev Reverts with InvalidAuthenticator when an actor names a zero authenticator.
+    /// @dev Reverts with InvalidPolicyData when an actor's policyData is neither empty nor 52 bytes.
+    /// @dev Reverts with InvalidImportSignature when ERC-1271 does not return the canonical 32-byte magic value.
+    ///      A wallet that does not implement {getImportActors} (including a constructor or plain EOA, whose
+    ///      `extcodesize` is 0) reverts on ABI-decode of the empty return (before ERC-1271). `signature` may be empty
+    ///      and is forwarded as-is.
     ///
-    /// @param account The account being imported.
-    /// @param chainId Replay domain of the import signature: 0 = multichain (valid on every chain), otherwise it
-    ///        must equal the current chain.
-    /// @param initialActors Bootstrap actors, strictly ascending by actorId; each carries its declared scope/policyData.
-    /// @param signature ERC-1271 signature the account validates over the import digest.
-    function importAccount(
-        address account,
-        uint256 chainId,
-        InitialActor[] calldata initialActors,
-        bytes calldata signature
-    ) external onlyUnlocked(account) {
-        // ERC-1271 attests the actor set; this caller check attests that the wallet actually chose to import.
-        // Direct-dispatch after import never enters `execute()`, so a signature relayed by a third party would
-        // otherwise let a wallet whose only freeze lives in `execute()` opt into 8130 while that freeze is active.
-        if (msg.sender != account) {
-            revert ImportCallerNotAccount();
-        }
+    /// @param chainId Replay domain of the import: 0 = multichain (valid on every chain), otherwise it must equal
+    ///        the current chain.
+    /// @param signature ERC-1271 signature the account validates over the import digest. May be empty.
+    function importAccount(uint256 chainId, bytes calldata signature) external onlyUnlocked(msg.sender) {
+        address account = msg.sender;
         if (chainId != 0 && chainId != block.chainid) {
             revert InvalidChainId();
         }
@@ -547,24 +547,64 @@ contract Keystore {
         if (_isInitialized(account)) {
             revert AlreadyInitialized();
         }
-        if (account.code.length == 0) {
-            revert InvalidImportSignature();
-        }
         _accountState[account].localSequence = 1;
 
-        bytes32 digest = _computeImportDigest(account, chainId, initialActors);
+        InitialActor[] memory actors = IKeystoreImport(account).getImportActors();
+        if (actors.length == 0) {
+            revert NoImportActors();
+        }
+        _validateInitialActors(actors);
+
+        bytes32 digest = computeImportDigest(account, chainId, actors);
         (bool success, bytes memory result) =
             account.staticcall(abi.encodeWithSelector(ERC1271_SELECTOR, digest, signature));
         if (!success || result.length != 32 || abi.decode(result, (bytes32)) != bytes32(ERC1271_SELECTOR)) {
             revert InvalidImportSignature();
         }
 
-        // Disable the implicit EOA key after ERC-1271 validation so a delegated EOA can use that key to authorize its
-        // import. Including the k1 self in initialActors re-enables it explicitly.
+        // Disable the implicit EOA key after ERC-1271 confirmation. Including the k1 self in getImportActors
+        // re-enables it explicitly via {_initializeAccount}.
         _accountState[account].flags = FLAG_REVOKE_DEFAULT_EOA;
 
-        _initializeAccount(account, initialActors);
+        _initializeAccount(account, actors);
         emit AccountImported(account);
+    }
+
+    /// @notice Typed digest an importing account must confirm via ERC-1271. Wallets should compute this over the
+    ///         same array {getImportActors} will return, then confirm it (for example via a transient-storage
+    ///         handshake with an empty `sig`).
+    ///
+    /// @dev Distinct from {_changesDigest} / {SIGNED_ACCOUNT_CHANGES_TYPEHASH} and {SIGNED_MESSAGE_TYPEHASH}: the
+    ///      type string is `ActorInitialization(...)`. Expiry is forced to 0; policyData is hashed into each Actor
+    ///      leaf. `chainId` is 0 (multichain) or `block.chainid`.
+    ///
+    /// @param account The account being imported (`msg.sender` of {importAccount}).
+    /// @param chainId Replay domain: 0 or the current chain.
+    /// @param initialActors Actor set the account's code will install; must match {getImportActors}.
+    ///
+    /// @return The digest {isValidSignature} must confirm.
+    function computeImportDigest(address account, uint256 chainId, InitialActor[] memory initialActors)
+        public
+        view
+        returns (bytes32)
+    {
+        bytes32[] memory actorHashes = new bytes32[](initialActors.length);
+        for (uint256 i; i < initialActors.length; i++) {
+            // Expiry is forced to 0 at import — an actor-provided expiry is never accepted here. policyData is
+            // hashed via keccak256 into the Actor struct hash.
+            bytes32 configHash = keccak256(
+                abi.encode(ACTOR_CONFIG_TYPEHASH, initialActors[i].authenticator, uint48(0), initialActors[i].scope)
+            );
+            actorHashes[i] = keccak256(
+                abi.encode(ACTOR_TYPEHASH, initialActors[i].actorId, configHash, keccak256(initialActors[i].policyData))
+            );
+        }
+
+        return keccak256(
+            abi.encode(
+                ACTOR_INITIALIZATION_TYPEHASH, _selfActorId(account), chainId, keccak256(abi.encodePacked(actorHashes))
+            )
+        );
     }
 
     /// @notice The sole signed-change entry point: applies an ordered, atomic batch of account changes (authorize,
@@ -1153,10 +1193,7 @@ contract Keystore {
     ///      with its declared scope and optional policyData (empty or 52 bytes). Expiry is always 0 for
     ///      initial actors; scoped-with-expiry keys are added later via applySignedAccountChanges. Reverts with
     ///      NoInitialActors or ActorsNotSortedOrDuplicate.
-    function _initializeAccount(address account, InitialActor[] calldata initialActors)
-        private
-        nonZeroAccount(account)
-    {
+    function _initializeAccount(address account, InitialActor[] memory initialActors) private nonZeroAccount(account) {
         // Must have at least one initial actor
         if (initialActors.length == 0) {
             revert NoInitialActors();
@@ -1311,14 +1348,14 @@ contract Keystore {
     ///      createAccount would reject (which would otherwise let a client prefund and strand funds at an
     ///      undeployable address). Reverts with NoInitialActors, ActorsNotSortedOrDuplicate, InvalidAuthenticator, or
     ///      InvalidPolicyData.
-    function _validateInitialActors(InitialActor[] calldata initialActors) private pure {
+    function _validateInitialActors(InitialActor[] memory initialActors) private pure {
         if (initialActors.length == 0) {
             revert NoInitialActors();
         }
 
         bytes32 previousActorId;
         for (uint256 i; i < initialActors.length; i++) {
-            InitialActor calldata actor = initialActors[i];
+            InitialActor memory actor = initialActors[i];
 
             // Strictly ascending: rejects unsorted, duplicate, and the zero actorId (previousActorId starts at 0).
             if (actor.actorId <= previousActorId) {
@@ -1366,7 +1403,7 @@ contract Keystore {
     }
 
     /// @dev Commitment over the initial actor set, using the same hash-the-leaves-then-hash-the-list scheme as the
-    ///      signed digests ({_computeImportDigest}, {_changesDigest}). Each actor hashes to a fixed-width leaf over
+    ///      signed digests ({computeImportDigest}, {_changesDigest}). Each actor hashes to a fixed-width leaf over
     ///      actorId (32) || authenticator (20) || scope (2) || policyData, where policyData is empty or exactly 52
     ///      bytes (manager ‖ commitment); expiry does not participate (always 0 for initial actors). The
     ///      commitment is keccak256 over the tightly packed 32-byte leaves, so it is unambiguous by construction and
@@ -1385,35 +1422,6 @@ contract Keystore {
             );
         }
         return keccak256(abi.encodePacked(leaves));
-    }
-
-    /// @dev Typed digest for the importAccount ERC-1271 signature (a signed message), so signers can reproduce it
-    ///      with standard EIP-712-style struct hashing. `accountId` is the account's actorId
-    ///      (`ActorId.fromAddress(account)`) and the digest is bound to `chainId` (0 = multichain) so its replay
-    ///      domain matches applySignedAccountChanges.
-    function _computeImportDigest(address account, uint256 chainId, InitialActor[] calldata initialActors)
-        private
-        pure
-        returns (bytes32)
-    {
-        bytes32[] memory actorHashes = new bytes32[](initialActors.length);
-        for (uint256 i; i < initialActors.length; i++) {
-            // Expiry is forced to 0 at import — an actor-provided expiry is never accepted here. policyData is
-            // hashed via keccak256 into the Actor struct hash. The typehash structure matches the importAccount
-            // signature payload in EIP-8130.
-            bytes32 configHash = keccak256(
-                abi.encode(ACTOR_CONFIG_TYPEHASH, initialActors[i].authenticator, uint48(0), initialActors[i].scope)
-            );
-            actorHashes[i] = keccak256(
-                abi.encode(ACTOR_TYPEHASH, initialActors[i].actorId, configHash, keccak256(initialActors[i].policyData))
-            );
-        }
-
-        return keccak256(
-            abi.encode(
-                ACTOR_INITIALIZATION_TYPEHASH, _selfActorId(account), chainId, keccak256(abi.encodePacked(actorHashes))
-            )
-        );
     }
 
     /// @dev Computes the digest signed over an applySignedAccountChanges batch: each AccountChange is hashed
@@ -1576,4 +1584,14 @@ contract Keystore {
             bytes1(0x61), bytes2(uint16(n)), hex"600e600039", bytes1(0x61), bytes2(uint16(n)), hex"6000f3", bytecode
         );
     }
+}
+
+/// @notice Opt-in for {Keystore.importAccount}. Not part of the EIP-8130 account ABI: created 8130 accounts
+///         never call this. Existing wallets implement it to choose the bootstrap actor set; ERC-1271 then
+///         confirms {Keystore.computeImportDigest} of that set. A wallet that does not implement this function
+///         cannot be imported.
+interface IKeystoreImport {
+    /// @notice Returns the actor set Keystore should install on import. Must be non-empty and strictly ascending
+    ///         by actorId.
+    function getImportActors() external view returns (Keystore.InitialActor[] memory);
 }

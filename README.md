@@ -39,6 +39,32 @@ The canonical EIP-8130 authenticator set. secp256k1 (ECDSA) is built into `Keyst
 
 ## Usage
 
+### Importing an existing wallet
+
+`importAccount` is not signature-relayable. The account itself must call Keystore, the account's code must choose the actor set via `getImportActors()`, and ERC-1271 only confirms the digest of that set. A role that can `execute` plus 1271 cannot install itself as scope-0 admin. Wallets that do not implement `IKeystoreImport` cannot be imported — including guarded Safes, delayed-upgrade and immutable wallets, 7579/6900 validators, 6551 TBAs, and Aragon plugins, until they upgrade.
+
+After import, the actor set in Keystore is the source of truth. Subsequent owner changes on the wallet do not propagate; wallets should route their own signature validation through `authenticateActor` after import. `chainId == 0` remains a valid multichain import; with the `msg.sender` gate and hash-bound confirmation it cannot be used by a third party.
+
+Reference integration (upgrade and import atomically with `upgradeToAndCall(newImpl, abi.encodeCall(importToKeystore, chainId))`):
+
+```solidity
+function importToKeystore(uint256 chainId) external onlyEntryPointOrOwner {
+    InitialActor[] memory actors = getImportActors();
+    bytes32 digest = KEYSTORE.computeImportDigest(address(this), chainId, actors);
+    assembly { tstore(IMPORT_DIGEST_TSLOT, digest) }
+    KEYSTORE.importAccount(chainId, "");
+    assembly { tstore(IMPORT_DIGEST_TSLOT, 0) }
+}
+
+function isValidSignature(bytes32 hash, bytes calldata sig) public view override returns (bytes4) {
+    if (sig.length == 0 && msg.sender == address(KEYSTORE)) {
+        bytes32 expected; assembly { expected := tload(IMPORT_DIGEST_TSLOT) }
+        return (expected != 0 && hash == expected) ? this.isValidSignature.selector : bytes4(0);
+    }
+    return super.isValidSignature(hash, sig);
+}
+```
+
 ### Build
 
 ```shell
