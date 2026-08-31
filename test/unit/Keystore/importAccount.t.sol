@@ -16,7 +16,7 @@ contract ActorStore {
         }
     }
 
-    function getImportActors() public view returns (Keystore.InitialActor[] memory) {
+    function initialActors() public view returns (Keystore.InitialActor[] memory) {
         return _actors;
     }
 }
@@ -49,17 +49,16 @@ contract ImportableWallet is ActorStore {
         return result;
     }
 
-    function confirmImportDigest(bytes32 d) external view returns (bytes32) {
-        bytes32 expected;
+    function confirmKeystoreImport() external view returns (bytes32 digest, Keystore.InitialActor[] memory actors) {
+        actors = initialActors();
         assembly {
-            expected := tload(IMPORT_DIGEST_TSLOT)
+            digest := tload(IMPORT_DIGEST_TSLOT)
         }
-        if (msg.sender != address(KEYSTORE) || expected == 0 || d != expected) return bytes32(0);
-        return keccak256(abi.encode(KEYSTORE.IMPORT_CONFIRMATION_MAGIC(), d));
+        if (msg.sender != address(KEYSTORE) || digest == 0) return (bytes32(0), actors);
     }
 
     function _import() internal {
-        Keystore.InitialActor[] memory actors = getImportActors();
+        Keystore.InitialActor[] memory actors = initialActors();
         bytes32 digest = KEYSTORE.computeImportDigest(address(this), actors);
         assembly {
             tstore(IMPORT_DIGEST_TSLOT, digest)
@@ -71,7 +70,28 @@ contract ImportableWallet is ActorStore {
     }
 }
 
-/// @dev Init-time import: {confirmImportDigest} recomputes from {getImportActors}; no transient handshake.
+/// @dev 7702 delegate: no storage. Actors are derived from `address(this)` so they resolve on the EOA.
+contract DelegatedImportWallet {
+    Keystore public immutable KEYSTORE;
+
+    constructor(Keystore keystore_) {
+        KEYSTORE = keystore_;
+    }
+
+    function confirmKeystoreImport() external view returns (bytes32 digest, Keystore.InitialActor[] memory actors) {
+        actors = new Keystore.InitialActor[](1);
+        actors[0] = Keystore.InitialActor({
+            actorId: bytes32(uint256(uint160(address(this)))),
+            authenticator: KEYSTORE.K1_AUTHENTICATOR(),
+            scope: 0,
+            policyData: ""
+        });
+        if (msg.sender != address(KEYSTORE)) return (bytes32(0), actors);
+        digest = KEYSTORE.computeImportDigest(address(this), actors);
+    }
+}
+
+/// @dev Init-time import: {confirmKeystoreImport} recomputes from {initialActors}; no transient handshake.
 contract StatelessImportWallet is ActorStore {
     Keystore public immutable KEYSTORE;
 
@@ -83,13 +103,10 @@ contract StatelessImportWallet is ActorStore {
         KEYSTORE.importAccount();
     }
 
-    function confirmImportDigest(bytes32 d) external view returns (bytes32) {
-        if (msg.sender != address(KEYSTORE)) return bytes32(0);
-        Keystore.InitialActor[] memory actors = getImportActors();
-        if (d != KEYSTORE.computeImportDigest(address(this), actors)) {
-            return bytes32(0);
-        }
-        return keccak256(abi.encode(KEYSTORE.IMPORT_CONFIRMATION_MAGIC(), d));
+    function confirmKeystoreImport() external view returns (bytes32 digest, Keystore.InitialActor[] memory actors) {
+        actors = initialActors();
+        if (msg.sender != address(KEYSTORE)) return (bytes32(0), actors);
+        digest = KEYSTORE.computeImportDigest(address(this), actors);
     }
 }
 
@@ -124,7 +141,7 @@ contract LockedExecuteWallet is ActorStore {
 
     function importToKeystore() external {
         if (msg.sender != address(this)) revert NotOwner();
-        Keystore.InitialActor[] memory actors = getImportActors();
+        Keystore.InitialActor[] memory actors = initialActors();
         bytes32 digest = KEYSTORE.computeImportDigest(address(this), actors);
         assembly {
             tstore(IMPORT_DIGEST_TSLOT, digest)
@@ -135,19 +152,18 @@ contract LockedExecuteWallet is ActorStore {
         }
     }
 
-    function confirmImportDigest(bytes32 d) external view returns (bytes32) {
-        bytes32 expected;
+    function confirmKeystoreImport() external view returns (bytes32 digest, Keystore.InitialActor[] memory actors) {
+        actors = initialActors();
         assembly {
-            expected := tload(IMPORT_DIGEST_TSLOT)
+            digest := tload(IMPORT_DIGEST_TSLOT)
         }
-        if (msg.sender != address(KEYSTORE) || expected == 0 || d != expected) return bytes32(0);
-        return keccak256(abi.encode(KEYSTORE.IMPORT_CONFIRMATION_MAGIC(), d));
+        if (msg.sender != address(KEYSTORE) || digest == 0) return (bytes32(0), actors);
     }
 }
 
 contract EmptyImportActorsWallet {
-    function getImportActors() external pure returns (Keystore.InitialActor[] memory) {
-        return new Keystore.InitialActor[](0);
+    function confirmKeystoreImport() external pure returns (bytes32, Keystore.InitialActor[] memory actors) {
+        return (bytes32(0), actors);
     }
 }
 
@@ -178,7 +194,7 @@ contract AddressEchoWallet {
 contract EchoConfirmWallet is ActorStore {
     constructor(Keystore.InitialActor[] memory actors) ActorStore(actors) {}
 
-    function confirmImportDigest(bytes32) external pure returns (bytes32) {
+    function confirmKeystoreImport() external pure returns (bytes32, Keystore.InitialActor[] memory) {
         assembly {
             calldatacopy(0, 0, calldatasize())
             return(0, calldatasize())
@@ -189,7 +205,7 @@ contract EchoConfirmWallet is ActorStore {
 contract AddressEchoConfirmWallet is ActorStore {
     constructor(Keystore.InitialActor[] memory actors) ActorStore(actors) {}
 
-    function confirmImportDigest(bytes32) external view returns (bytes32) {
+    function confirmKeystoreImport() external view returns (bytes32, Keystore.InitialActor[] memory) {
         assembly {
             mstore(0, address())
             return(0, 32)
@@ -197,30 +213,10 @@ contract AddressEchoConfirmWallet is ActorStore {
     }
 }
 
-contract ConstantMagicConfirmWallet is ActorStore {
-    Keystore public immutable KEYSTORE;
-
-    constructor(Keystore keystore_, Keystore.InitialActor[] memory actors) ActorStore(actors) {
-        KEYSTORE = keystore_;
-    }
-
-    function confirmImportDigest(bytes32) external view returns (bytes32) {
-        return KEYSTORE.IMPORT_CONFIRMATION_MAGIC();
-    }
-}
-
-contract RawDigestConfirmWallet is ActorStore {
-    constructor(Keystore.InitialActor[] memory actors) ActorStore(actors) {}
-
-    function confirmImportDigest(bytes32 d) external pure returns (bytes32) {
-        return d;
-    }
-}
-
 contract ShortReturnConfirmWallet is ActorStore {
     constructor(Keystore.InitialActor[] memory actors) ActorStore(actors) {}
 
-    function confirmImportDigest(bytes32) external pure returns (bytes32) {
+    function confirmKeystoreImport() external pure returns (bytes32, Keystore.InitialActor[] memory) {
         assembly ("memory-safe") {
             mstore(0x00, 1)
             return(0x00, 4)
@@ -231,15 +227,15 @@ contract ShortReturnConfirmWallet is ActorStore {
 contract DirtyReturnConfirmWallet is ActorStore {
     constructor(Keystore.InitialActor[] memory actors) ActorStore(actors) {}
 
-    function confirmImportDigest(bytes32) external pure returns (bytes32) {
-        return bytes32(uint256(1));
+    function confirmKeystoreImport() external view returns (bytes32, Keystore.InitialActor[] memory actors) {
+        return (bytes32(uint256(1)), initialActors());
     }
 }
 
 contract RevertingConfirmWallet is ActorStore {
     constructor(Keystore.InitialActor[] memory actors) ActorStore(actors) {}
 
-    function confirmImportDigest(bytes32) external pure returns (bytes32) {
+    function confirmKeystoreImport() external pure returns (bytes32, Keystore.InitialActor[] memory) {
         revert("no");
     }
 }
@@ -247,8 +243,8 @@ contract RevertingConfirmWallet is ActorStore {
 contract MismatchDigestWallet is ActorStore {
     constructor(Keystore.InitialActor[] memory actors) ActorStore(actors) {}
 
-    function confirmImportDigest(bytes32) external pure returns (bytes32) {
-        return keccak256("other");
+    function confirmKeystoreImport() external view returns (bytes32, Keystore.InitialActor[] memory actors) {
+        return (keccak256("other"), initialActors());
     }
 }
 
@@ -258,7 +254,7 @@ contract ConstructorImporter {
     }
 }
 
-/// @dev Existing wallet whose {getImportActors} reconstructs owners from storage and appends a code-baked
+/// @dev Existing wallet whose {initialActors} reconstructs owners from storage and appends a code-baked
 ///      canonical executor. Confirmation recomputes that set (stateless / init-time style).
 contract StorageReconstructedWallet {
     Keystore public immutable KEYSTORE;
@@ -289,7 +285,7 @@ contract StorageReconstructedWallet {
         }
     }
 
-    function getImportActors() public view returns (Keystore.InitialActor[] memory actors) {
+    function initialActors() public view returns (Keystore.InitialActor[] memory actors) {
         actors = new Keystore.InitialActor[](_storedOwners.length + 1);
         for (uint256 i; i < _storedOwners.length; i++) {
             actors[i] = _storedOwners[i];
@@ -320,13 +316,10 @@ contract StorageReconstructedWallet {
         return result;
     }
 
-    function confirmImportDigest(bytes32 d) external view returns (bytes32) {
-        if (msg.sender != address(KEYSTORE)) return bytes32(0);
-        Keystore.InitialActor[] memory actors = getImportActors();
-        if (d != KEYSTORE.computeImportDigest(address(this), actors)) {
-            return bytes32(0);
-        }
-        return keccak256(abi.encode(KEYSTORE.IMPORT_CONFIRMATION_MAGIC(), d));
+    function confirmKeystoreImport() external view returns (bytes32 digest, Keystore.InitialActor[] memory actors) {
+        actors = initialActors();
+        if (msg.sender != address(KEYSTORE)) return (bytes32(0), actors);
+        digest = KEYSTORE.computeImportDigest(address(this), actors);
     }
 
     function _sortByActorId(Keystore.InitialActor[] memory actors) internal pure {
@@ -343,8 +336,8 @@ contract StorageReconstructedWallet {
 }
 
 /// @dev Fully fuzzed, branch-complete suite for Keystore.importAccount. Reverts are ordered to mirror
-///      importAccount's source control flow (onlyUnlocked → AlreadyInitialized → DelegatedAccountCannotImport →
-///      getImportActors / _validateInitialActors → ImportNotConfirmed); happy/branch paths follow.
+///      importAccount's source control flow (onlyUnlocked → AlreadyInitialized → confirmKeystoreImport
+///      decode → _validateInitialActors → digest match); happy/branch paths follow.
 contract ImportAccountTest is KeystoreTest {
     bytes32 constant ACTOR_INITIALIZATION_TYPEHASH = keccak256(
         "ActorInitialization(bytes32 accountId,Actor[] initialActors)Actor(bytes32 actorId,ActorConfig config,bytes policyData)ActorConfig(address authenticator,uint48 expiry,uint16 scope)"
@@ -435,7 +428,7 @@ contract ImportAccountTest is KeystoreTest {
     }
 
     /// @notice A third party cannot import a wallet: there is no account parameter, so the call attempts to import
-    ///         the caller. The test contract has code but no getImportActors, so ABI-decode reverts and the wallet
+    ///         the caller. The test contract has no confirmKeystoreImport, so confirmation fails and the wallet
     ///         is untouched.
     function test_importAccount_revert_callerNotAccount(uint256 ownerSeed) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
@@ -524,23 +517,21 @@ contract ImportAccountTest is KeystoreTest {
         _importAs(eoa);
     }
 
-    /// @notice A 7702-delegated EOA cannot import; it already has applySignedAccountChanges as default admin, and
-    ///         imported state would survive redelegation.
-    function test_importAccount_revert_7702_delegatedAccountCannotImport(uint256 eoaSeed) public {
+    /// @notice A 7702-delegated EOA imports like any other account if the delegate implements confirmKeystoreImport.
+    function test_importAccount_success_7702_delegatedEoa(uint256 eoaSeed) public {
         uint256 eoaPk = _boundK1Pk(eoaSeed);
         address eoa = vm.addr(eoaPk);
 
-        StatelessImportWallet impl = new StatelessImportWallet(keystore, _singleUnrestrictedActor(eoa));
+        DelegatedImportWallet impl = new DelegatedImportWallet(keystore);
         vm.etch(eoa, abi.encodePacked(hex"ef0100", address(impl)));
 
-        vm.expectRevert(Keystore.DelegatedAccountCannotImport.selector);
         _importAs(eoa);
-        _assertUnimported(eoa);
+        assertEq(keystore.getChangeSequences(eoa).localSequence, 1);
+        assertTrue(_isActor(eoa, bytes32(uint256(uint160(eoa)))));
     }
 
-    /// @notice Ordering: AlreadyInitialized is checked before the 7702 ban. A delegated EOA already initialized via
-    ///         signed changes reverts AlreadyInitialized, not DelegatedAccountCannotImport.
-    function test_importAccount_revert_7702_alreadyInitializedBeforeBan(uint256 eoaSeed, uint256 deviceSeed) public {
+    /// @notice A delegated EOA already initialized via signed changes still reverts AlreadyInitialized.
+    function test_importAccount_revert_7702_alreadyInitialized(uint256 eoaSeed, uint256 deviceSeed) public {
         uint256 eoaPk = _boundK1Pk(eoaSeed);
         uint256 devicePk = _boundK1Pk(deviceSeed);
         address eoa = vm.addr(eoaPk);
@@ -560,54 +551,7 @@ contract ImportAccountTest is KeystoreTest {
         _importAs(eoa);
     }
 
-    /// @notice The ban is exact-magic: a contract with fewer than 3 code bytes is never caught by it. extcodecopy
-    ///         zero-pads the prefix (so it can't equal 0xef0100), and the call falls through to getImportActors and
-    ///         reverts on the empty return — never DelegatedAccountCannotImport.
-    function test_importAccount_7702_shortCodeNotBanned(uint256 seed) public {
-        address account = vm.addr(_boundK1Pk(seed));
-        vm.etch(account, hex"00"); // single STOP byte: getImportActors returns empty → decode revert
-
-        vm.prank(account);
-        try keystore.importAccount() {
-        // unreachable: 1-byte code has no getImportActors
-        }
-        catch (bytes memory err) {
-            assertTrue(
-                keccak256(err) != keccak256(abi.encodeWithSelector(Keystore.DelegatedAccountCannotImport.selector)),
-                "short code must not hit the 7702 ban"
-            );
-        }
-        _assertUnimported(account);
-    }
-
-    /// @notice Forward-compat: the ban keys on the exact 0xef0100 magic (key-authorized 7702 delegation, whose magic
-    ///         is 0xef01). A designator with a different magic (e.g. a hypothetical 0xef02.. keyless/code-governed
-    ///         format) is not treated as banned delegation — it would import as an ordinary contract. In today's EVM
-    ///         such a prefix is not an executable designator, so the call reverts downstream, but never with
-    ///         DelegatedAccountCannotImport. (0xef01 with a non-zero version is not usable here at all — revm rejects
-    ///         it as an unsupported 7702 version — so a different magic, not a different version, is the real case.)
-    function test_importAccount_7702_differentMagicNotBanned(uint256 eoaSeed) public {
-        uint256 eoaPk = _boundK1Pk(eoaSeed);
-        address eoa = vm.addr(eoaPk);
-
-        StatelessImportWallet impl = new StatelessImportWallet(keystore, _singleUnrestrictedActor(eoa));
-        vm.etch(eoa, abi.encodePacked(hex"ef0200", address(impl)));
-
-        vm.prank(eoa);
-        try keystore.importAccount() {
-        // acceptable in a future EVM: imported as an ordinary contract, not via the ban
-        }
-        catch (bytes memory err) {
-            assertTrue(
-                keccak256(err) != keccak256(abi.encodeWithSelector(Keystore.DelegatedAccountCannotImport.selector)),
-                "a different designator magic must not hit the 7702 ban"
-            );
-            _assertUnimported(eoa);
-        }
-    }
-
-    /// @notice A code-less account (plain EOA) fails at getImportActors: empty returndata cannot ABI-decode as
-    ///         InitialActor[].
+    /// @notice A code-less account (plain EOA) fails confirmation: empty returndata is not the actor-set digest.
     function test_importAccount_revert_noCode(uint256 accountSeed) public {
         uint256 accountPk = _boundK1Pk(accountSeed);
         address account = vm.addr(accountPk);
@@ -623,7 +567,7 @@ contract ImportAccountTest is KeystoreTest {
         new ConstructorImporter(keystore);
     }
 
-    /// @notice A wallet that returns an empty actor array reverts NoInitialActors, before confirmation.
+    /// @notice An empty actor array from confirmKeystoreImport reverts NoInitialActors.
     function test_importAccount_revert_noInitialActors() public {
         EmptyImportActorsWallet wallet = new EmptyImportActorsWallet();
 
@@ -632,8 +576,8 @@ contract ImportAccountTest is KeystoreTest {
         _assertUnimported(address(wallet));
     }
 
-    /// @notice A plain wallet that does not implement getImportActors reverts on ABI-decode of the empty return.
-    function test_importAccount_revert_missingGetImportActors() public {
+    /// @notice A plain wallet that does not implement confirmKeystoreImport reverts on ABI-decode of the empty return.
+    function test_importAccount_revert_missingConfirm() public {
         PlainWallet wallet = new PlainWallet();
 
         vm.expectRevert();
@@ -641,7 +585,7 @@ contract ImportAccountTest is KeystoreTest {
         _assertUnimported(address(wallet));
     }
 
-    /// @notice An echo-fallback that returns calldata reverts on decode of getImportActors.
+    /// @notice An echo-fallback that returns calldata reverts on decode of confirmKeystoreImport.
     function test_importAccount_revert_echoFallbackCalldata() public {
         EchoFallbackWallet wallet = new EchoFallbackWallet();
 
@@ -650,7 +594,7 @@ contract ImportAccountTest is KeystoreTest {
         _assertUnimported(address(wallet));
     }
 
-    /// @notice An echo-fallback that returns address(this) right-aligned reverts on decode of getImportActors.
+    /// @notice An echo-fallback that returns address(this) reverts on decode of confirmKeystoreImport.
     function test_importAccount_revert_echoFallbackAddress() public {
         AddressEchoWallet wallet = new AddressEchoWallet();
 
@@ -659,7 +603,7 @@ contract ImportAccountTest is KeystoreTest {
         _assertUnimported(address(wallet));
     }
 
-    /// @notice Unsorted getImportActors output reverts ActorsNotSortedOrDuplicate before confirmation.
+    /// @notice Unsorted initialActors reverts ActorsNotSortedOrDuplicate before confirmation.
     function test_importAccount_revert_actorsNotSorted(bytes32 idA, bytes32 idB) public {
         vm.assume(idA != 0 && idB != 0 && idA != idB);
         bytes32 smaller = idA < idB ? idA : idB;
@@ -678,7 +622,7 @@ contract ImportAccountTest is KeystoreTest {
         _assertUnimported(address(wallet));
     }
 
-    /// @notice Duplicate actorIds in getImportActors reverts ActorsNotSortedOrDuplicate before confirmation.
+    /// @notice Duplicate actorIds reverts ActorsNotSortedOrDuplicate before confirmation.
     function test_importAccount_revert_actorsDuplicate(bytes32 id) public {
         vm.assume(id != 0);
 
@@ -694,7 +638,7 @@ contract ImportAccountTest is KeystoreTest {
         _assertUnimported(address(wallet));
     }
 
-    /// @notice A sub-K1 authenticator in getImportActors reverts InvalidAuthenticator before confirmation.
+    /// @notice A sub-K1 authenticator reverts InvalidAuthenticator before confirmation.
     function test_importAccount_revert_invalidAuthenticator(bytes32 actorId) public {
         vm.assume(actorId != 0);
 
@@ -707,7 +651,7 @@ contract ImportAccountTest is KeystoreTest {
         _assertUnimported(address(wallet));
     }
 
-    /// @notice Malformed policyData in getImportActors reverts InvalidPolicyData before confirmation.
+    /// @notice Malformed policyData reverts InvalidPolicyData before confirmation.
     function test_importAccount_revert_invalidPolicyData(bytes32 actorId) public {
         vm.assume(actorId != 0);
 
@@ -728,55 +672,47 @@ contract ImportAccountTest is KeystoreTest {
         _assertUnimported(wallet);
     }
 
-    /// @notice confirmImportDigest echoing calldata is ImportNotConfirmed (wrong length).
-    function test_importAccount_revert_confirm_echoCalldata(uint256 ownerSeed) public {
-        EchoConfirmWallet wallet = new EchoConfirmWallet(_singleUnrestrictedActor(vm.addr(_boundK1Pk(ownerSeed))));
-        _assertConfirmRejected(address(wallet));
+    function _assertConfirmDecodeRejected(address wallet) internal {
+        vm.expectRevert();
+        _importAs(wallet);
+        _assertUnimported(wallet);
     }
 
-    /// @notice confirmImportDigest echoing address(this) is ImportNotConfirmed.
+    /// @notice confirmKeystoreImport echoing calldata fails ABI-decode.
+    function test_importAccount_revert_confirm_echoCalldata(uint256 ownerSeed) public {
+        EchoConfirmWallet wallet = new EchoConfirmWallet(_singleUnrestrictedActor(vm.addr(_boundK1Pk(ownerSeed))));
+        _assertConfirmDecodeRejected(address(wallet));
+    }
+
+    /// @notice confirmKeystoreImport echoing address(this) fails ABI-decode.
     function test_importAccount_revert_confirm_echoAddress(uint256 ownerSeed) public {
         AddressEchoConfirmWallet wallet =
             new AddressEchoConfirmWallet(_singleUnrestrictedActor(vm.addr(_boundK1Pk(ownerSeed))));
-        _assertConfirmRejected(address(wallet));
+        _assertConfirmDecodeRejected(address(wallet));
     }
 
-    /// @notice Returning IMPORT_CONFIRMATION_MAGIC itself (not bound to the digest) is ImportNotConfirmed.
-    function test_importAccount_revert_confirm_constantMagic(uint256 ownerSeed) public {
-        ConstantMagicConfirmWallet wallet =
-            new ConstantMagicConfirmWallet(keystore, _singleUnrestrictedActor(vm.addr(_boundK1Pk(ownerSeed))));
-        _assertConfirmRejected(address(wallet));
-    }
-
-    /// @notice Returning the raw digest (not keccak(MAGIC, digest)) is ImportNotConfirmed.
-    function test_importAccount_revert_confirm_rawDigest(uint256 ownerSeed) public {
-        RawDigestConfirmWallet wallet =
-            new RawDigestConfirmWallet(_singleUnrestrictedActor(vm.addr(_boundK1Pk(ownerSeed))));
-        _assertConfirmRejected(address(wallet));
-    }
-
-    /// @notice Non-32-byte confirm returndata is ImportNotConfirmed.
+    /// @notice Non-tuple confirm returndata fails ABI-decode.
     function test_importAccount_revert_confirm_wrongLength(uint256 ownerSeed) public {
         ShortReturnConfirmWallet wallet =
             new ShortReturnConfirmWallet(_singleUnrestrictedActor(vm.addr(_boundK1Pk(ownerSeed))));
-        _assertConfirmRejected(address(wallet));
+        _assertConfirmDecodeRejected(address(wallet));
     }
 
-    /// @notice A 32-byte non-bound word is ImportNotConfirmed; account state is rolled back.
+    /// @notice A 32-byte non-digest word with a valid actor set is ImportNotConfirmed; account state is rolled back.
     function test_importAccount_revert_confirm_dirtyReturn(uint256 ownerSeed) public {
         DirtyReturnConfirmWallet wallet =
             new DirtyReturnConfirmWallet(_singleUnrestrictedActor(vm.addr(_boundK1Pk(ownerSeed))));
         _assertConfirmRejected(address(wallet));
     }
 
-    /// @notice confirmImportDigest reverting is ImportNotConfirmed; account state is rolled back.
+    /// @notice confirmKeystoreImport reverting is ImportNotConfirmed; account state is rolled back.
     function test_importAccount_revert_confirm_reverting(uint256 ownerSeed) public {
         RevertingConfirmWallet wallet =
             new RevertingConfirmWallet(_singleUnrestrictedActor(vm.addr(_boundK1Pk(ownerSeed))));
         _assertConfirmRejected(address(wallet));
     }
 
-    /// @notice Confirming a different 32-byte word than keccak(MAGIC, digest) is ImportNotConfirmed.
+    /// @notice Returning a different digest than computeImportDigest of the returned actors is ImportNotConfirmed.
     function test_importAccount_revert_digestMismatch(uint256 ownerSeed) public {
         MismatchDigestWallet wallet = new MismatchDigestWallet(_singleUnrestrictedActor(vm.addr(_boundK1Pk(ownerSeed))));
         _assertConfirmRejected(address(wallet));
@@ -790,7 +726,7 @@ contract ImportAccountTest is KeystoreTest {
         _assertConfirmRejected(address(wallet));
     }
 
-    /// @notice Owner `execute(keystore, importAccount)` bypasses the tstore handshake → ImportNotConfirmed.
+    /// @notice Owner `execute(keystore, importAccount())` bypasses the tstore handshake → ImportNotConfirmed.
     function test_importAccount_revert_executeKeystoreImport(uint256 ownerSeed) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         address owner = vm.addr(ownerPk);
@@ -830,7 +766,7 @@ contract ImportAccountTest is KeystoreTest {
         assertTrue(keystore.ACTOR_INITIALIZATION_TYPEHASH() != keystore.SIGNED_MESSAGE_TYPEHASH());
     }
 
-    /// @notice Happy path: getImportActors + transient confirmation.
+    /// @notice Happy path: owner-gated entry + transient confirmation.
     function test_importAccount_success_transient(uint256 ownerSeed) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         address owner = vm.addr(ownerPk);
@@ -844,7 +780,7 @@ contract ImportAccountTest is KeystoreTest {
         assertTrue(_isActor(address(wallet), bytes32(uint256(uint160(owner)))));
     }
 
-    /// @notice Stateless confirmation (recompute from getImportActors) works without a transient handshake.
+    /// @notice Stateless confirmation (recompute from initialActors) works without a transient handshake.
     function test_importAccount_success_stateless(uint256 ownerSeed) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         address owner = vm.addr(ownerPk);
@@ -906,7 +842,7 @@ contract ImportAccountTest is KeystoreTest {
         }
     }
 
-    /// @notice After a successful transient import, confirmImportDigest no longer returns the bound value.
+    /// @notice After a successful transient import, confirmKeystoreImport no longer returns the bound value.
     function test_importAccount_success_transientClearedAfterImport(uint256 ownerSeed) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         address owner = vm.addr(ownerPk);
@@ -915,9 +851,9 @@ contract ImportAccountTest is KeystoreTest {
         vm.prank(owner);
         wallet.importToKeystore();
 
-        bytes32 digest = keystore.computeImportDigest(address(wallet), _singleUnrestrictedActor(owner));
         vm.prank(address(keystore));
-        assertEq(wallet.confirmImportDigest(digest), bytes32(0));
+        (bytes32 digest,) = wallet.confirmKeystoreImport();
+        assertEq(digest, bytes32(0));
     }
 
     // ── Storage-reconstructed existing wallet ──
@@ -975,8 +911,8 @@ contract ImportAccountTest is KeystoreTest {
         assertTrue(_isActor(address(wallet), passkeyId));
     }
 
-    /// @notice A third party cannot call importSelf (OnlySelf). They also cannot import a chosen actor set:
-    ///         there is no actors parameter on importAccount.
+    /// @notice A third party cannot call importSelf (OnlySelf). A chosen actor set that is not the wallet's
+    ///         reconstructed digest is ImportNotConfirmed.
     function test_importAccount_revert_onlySelfImport_notSelf(uint256 ownerSeed, uint256 passkeySeed) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         (StorageReconstructedWallet wallet,,,) = _reconstructedWallet(ownerPk, passkeySeed);

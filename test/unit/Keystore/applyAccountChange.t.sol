@@ -699,8 +699,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertEq(epoch, 1);
         assertEq(seq, 0);
 
-        // importAccount must still reject the account as already initialized. The check fires before getImportActors
-        // or confirmation.
+        // importAccount must still reject the account as already initialized. The check fires before confirmation.
         vm.expectRevert(Keystore.AlreadyInitialized.selector);
         vm.prank(account);
         keystore.importAccount();

@@ -41,40 +41,49 @@ The canonical EIP-8130 authenticator set. secp256k1 (ECDSA) is built into `Keyst
 
 ### Importing an existing wallet
 
-`importAccount()` is not signature-relayable and takes no parameters and no actor array. The account itself must call Keystore, the account's code returns the actor set via `getImportActors()`, and `confirmImportDigest` confirms the exact digest of that set. Keystore installs only a set the code returned and the code path confirmed. A role that can `execute` cannot install a different admin. Wallets that do not implement `IEIP8130Import` cannot be imported — including guarded Safes, delayed-upgrade and immutable wallets, 7579/6900 validators, 6551 TBAs, and Aragon plugins, until they upgrade.
+`importAccount()` is not signature-relayable and takes no parameters. The account itself must call Keystore (`msg.sender`), and the account's code must return the actor set plus `computeImportDigest` of that set from a single callback, `confirmKeystoreImport()`. Keystore installs only that set, and only when the digest matches. Wallets that do not implement `IEIP8130Import` cannot be imported — including guarded Safes, delayed-upgrade and immutable wallets, 7579/6900 validators, 6551 TBAs, and Aragon plugins, until they upgrade.
 
-Import carries no `chainId`: it is a live `msg.sender` call plus a live confirm, so the chain is already fixed by where the transaction lands and there is nothing to replay-scope. A wallet that wants to bind import to a specific chain can check `block.chainid` inside its own `confirmImportDigest`.
+Import carries no `chainId`: it is a live `msg.sender` call plus a live confirm, so the chain is already fixed by where the transaction lands. A wallet that wants to bind import to a specific chain can check `block.chainid` inside `confirmKeystoreImport`.
 
-Import entries must not take an actor array from any self-reachable path. `confirmImportDigest` must only return the bound value for a digest the wallet derived itself (a wallet that always returns it reopens `execute()` for itself). A delegated (EIP-7702) EOA cannot import: `importAccount` reverts `DelegatedAccountCannotImport` when `msg.sender.code` starts with the `0xef0100` designator, because a malicious delegate could otherwise install actors and revoke the default EOA, and that Keystore state would survive redelegation (Keystore state is keyed by address, not code). Delegated EOAs add keys via `applySignedAccountChanges` instead.
+A wallet that always returns a valid `(digest, actors)` pair reopens `execute(keystore, importAccount())` for itself. A delegated account (EIP-7702 or a factory delegator) imports the same way if its code implements `confirmKeystoreImport`. The chain of authority is the k1 key (or factory) putting that code on the account, and the code taking over via the callback — Keystore does not special-case the designator. Delegated EOAs can also add keys via `applySignedAccountChanges`.
 
 After import, the actor set in Keystore is the source of truth. Subsequent owner changes on the wallet do not propagate; wallets should route their own signature validation through `authenticateActor` after import.
 
-Import is an explicit wallet path, not an `execute()` call: `execute()` is reachable by every role that can drive it, whereas import moves where the account's authority lives, so gate it on a dedicated entry (`onlyOwner`, an owner signature verified wallet-side over the digest, an initializer, a timelock) exactly as you would `upgradeTo`. Nothing is passed to `importAccount()`; a signature-based wallet consumes its signature wallet-side and `confirmImportDigest` just attests the outcome.
+Import is an explicit wallet path, not an `execute()` call: `execute()` is reachable by every role that can drive it, whereas import moves where the account's authority lives, so gate it on a dedicated entry (`onlyOwner`, an owner signature, an initializer, a timelock) exactly as you would `upgradeTo`.
 
-The confirmation return is `keccak256(abi.encode(IMPORT_CONFIRMATION_MAGIC, digest))` so a static or calldata-echoing return cannot match. Two confirmation styles:
+Two confirmation styles:
 
 ```solidity
-// Transient (owner-gated entry). `execute(keystore, importAccount)` does not set the slot.
+// Transient (owner-gated entry). `execute(keystore, importAccount())` does not set the slot.
 function importToKeystore() external onlyOwner {
-    bytes32 digest = KEYSTORE.computeImportDigest(address(this), getImportActors());
+    InitialActor[] memory actors = initialActors();
+    bytes32 digest = KEYSTORE.computeImportDigest(address(this), actors);
     assembly { tstore(IMPORT_DIGEST_TSLOT, digest) }
     KEYSTORE.importAccount();
     assembly { tstore(IMPORT_DIGEST_TSLOT, 0) }
 }
 
-function confirmImportDigest(bytes32 d) external view returns (bytes32) {
-    bytes32 expected; assembly { expected := tload(IMPORT_DIGEST_TSLOT) }
-    if (msg.sender != address(KEYSTORE) || expected == 0 || d != expected) return bytes32(0);
-    return keccak256(abi.encode(KEYSTORE.IMPORT_CONFIRMATION_MAGIC(), d));
+function confirmKeystoreImport()
+    external
+    view
+    returns (bytes32 digest, InitialActor[] memory actors)
+{
+    actors = initialActors();
+    assembly { digest := tload(IMPORT_DIGEST_TSLOT) }
+    if (msg.sender != address(KEYSTORE) || digest == 0) return (bytes32(0), actors);
 }
 ```
 
 ```solidity
-// Stateless (init-time import). Recomputes from getImportActors; no transient handshake.
-function confirmImportDigest(bytes32 d) external view returns (bytes32) {
-    InitialActor[] memory actors = getImportActors();
-    if (d != KEYSTORE.computeImportDigest(address(this), actors)) return bytes32(0);
-    return keccak256(abi.encode(KEYSTORE.IMPORT_CONFIRMATION_MAGIC(), d));
+// Stateless (init-time import). Always returns the code-derived set and its digest.
+function confirmKeystoreImport()
+    external
+    view
+    returns (bytes32 digest, InitialActor[] memory actors)
+{
+    actors = initialActors();
+    if (msg.sender != address(KEYSTORE)) return (bytes32(0), actors);
+    digest = KEYSTORE.computeImportDigest(address(this), actors);
 }
 ```
 
