@@ -264,6 +264,19 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         keystore.applySignedAccountChanges(account, s);
     }
 
+    /// @notice AuthorizeActor with a sub-K1 authenticator reverts InvalidAuthenticator. createAccount/import reject
+    ///         this earlier in {_validateInitialActors}; the signed path is the only way to reach {_authorizeActor}'s
+    ///         floor check.
+    function test_authorize_revert_zeroAuthenticator(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+
+        Keystore.SignedAccountChanges memory s =
+            _localBatch(pk, account, _one(_authorizeChange(ACTOR_A, address(0), OPERATOR, _future(1 days), "")));
+        vm.expectRevert(Keystore.InvalidAuthenticator.selector);
+        keystore.applySignedAccountChanges(account, s);
+    }
+
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // AUTHORIZE — SEQUENCED
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡

@@ -45,7 +45,7 @@ The canonical EIP-8130 authenticator set. secp256k1 (ECDSA) is built into `Keyst
 
 Import carries no `chainId`: it is a live `msg.sender` call plus a live confirm, so the chain is already fixed by where the transaction lands. A wallet that wants to bind import to a specific chain can check `block.chainid` inside `confirmKeystoreImport`.
 
-A wallet that always returns a valid `(digest, actors)` pair reopens `execute(keystore, importAccount())` for itself. A delegated account (EIP-7702 or a factory delegator) imports the same way if its code implements `confirmKeystoreImport`. The chain of authority is the k1 key (or factory) putting that code on the account, and the code taking over via the callback — Keystore does not special-case the designator. Delegated EOAs can also add keys via `applySignedAccountChanges`.
+A wallet that always returns a valid `(digest, actors)` pair reopens `execute(keystore, importAccount())` for itself. Delegated EOAs can also add keys via `applySignedAccountChanges`.
 
 After import, the actor set in Keystore is the source of truth. Subsequent owner changes on the wallet do not propagate; wallets should route their own signature validation through `authenticateActor` after import.
 

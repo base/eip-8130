@@ -137,8 +137,7 @@ contract Keystore {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     /// @notice Typehash binding an importAccount confirmation to its accountId and the actor set returned by
-    ///         {IEIP8130Import.confirmKeystoreImport}. Distinct from {SIGNED_ACCOUNT_CHANGES_TYPEHASH} and
-    ///         {SIGNED_MESSAGE_TYPEHASH}; do not reuse this string for those digests.
+    ///         {IEIP8130Import.confirmKeystoreImport}.
     ///
     /// @dev NOT compliant with EIP-712, to mitigate eth_signTypedData phishing. `accountId` is the importing account's
     ///      actorId (`ActorId.fromAddress(account)`), binding the digest to that account so it cannot be replayed
@@ -502,10 +501,7 @@ contract Keystore {
     ///         itself calling, and (b) the account's code returning the actor set and {computeImportDigest} of that
     ///         set via {IEIP8130Import.confirmKeystoreImport}. There is no signature and no caller-supplied actor
     ///         array; Keystore installs only the set the code returned, and only when the accompanying digest
-    ///         matches. Wallets must upgrade to implement {IEIP8130Import}. A delegated account (EIP-7702 or a
-    ///         factory delegator) imports the same way: Keystore does not special-case the designator. The chain of
-    ///         authority is the k1 key (or factory) putting this code on the account, and that code taking over via
-    ///         the callback. That is intentional and future-proof — a later designator format does not need a new rule.
+    ///         matches. Wallets must upgrade to implement {IEIP8130Import}.
     ///
     ///         After import, the actor set in this contract is the source of truth. Subsequent owner changes on the
     ///         wallet do not propagate here; wallets should route their own signature validation through
@@ -517,8 +513,7 @@ contract Keystore {
     ///
     /// @dev Uses a custom (non-EIP-712) digest to partially mitigate eth_signTypedData phishing. The wallet returns
     ///      the actor set and its digest; Keystore installs that set only when the digest matches.
-    /// @dev Reverts with AccountIsLocked when the account is locked. Defense-in-depth only: locking requires a
-    ///      signed change that also initializes the account, so a locked importer would already fail AlreadyInitialized.
+    /// @dev Reverts with AccountIsLocked when the account is locked.
     /// @dev Reverts with AlreadyInitialized when the account already has EIP-8130 state.
     /// @dev Reverts with ImportNotConfirmed when {confirmKeystoreImport} reverts or returns a digest that is not
     ///      {computeImportDigest} of the returned actors. A wallet that does not implement it (including a
