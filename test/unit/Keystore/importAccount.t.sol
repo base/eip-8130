@@ -110,7 +110,7 @@ contract StatelessImportWallet is ActorStore {
     }
 }
 
-/// @dev Weiroll-style wallet: `execute()` (and therefore onlySelf import) is frozen until `lockedUntil`.
+/// @dev Wallet whose `execute()` (and therefore onlySelf import) is frozen until `lockedUntil`.
 contract LockedExecuteWallet is ActorStore {
     Keystore public immutable KEYSTORE;
     address public immutable owner;
