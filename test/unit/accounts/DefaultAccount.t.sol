@@ -46,9 +46,6 @@ contract DefaultAccountTest is KeystoreTest {
     uint16 constant SCOPE_SELF_PAYER = Scopes.SELF_PAYER;
     uint16 constant SCOPE_SPONSOR_PAYER = Scopes.SPONSOR_PAYER;
 
-    // TRUSTED_EXECUTOR sentinel: the authenticator value that marks an actor as a direct-execution caller.
-    address constant TRUSTED_EXECUTOR = address(uint160(uint256(keccak256("trustedExecutor"))));
-
     MockTarget public target;
 
     function setUp() public override {
@@ -62,8 +59,8 @@ contract DefaultAccountTest is KeystoreTest {
     }
 
     // _authorizeActor and _authorizeActorWithScope are provided by the KeystoreTest harness (re-implemented on
-    // applySignedAccountChanges, granting UNBOUNDED on a sequenced local batch). TRUSTED_EXECUTOR and scoped k1
-    // actors are registered through those helpers.
+    // applySignedAccountChanges, granting UNBOUNDED on a sequenced local batch). Operational and scoped actors are
+    // registered through those helpers.
 
     // ══════════════════════════════════════════════
     //  executeBatch — reverts (source order)
@@ -73,7 +70,8 @@ contract DefaultAccountTest is KeystoreTest {
     /// @dev Exercises the false leg of `require(_isAuthorizedCaller(msg.sender))`; fuzzes caller/value/data.
     function test_executeBatch_revert_unauthorizedCaller(address caller, uint256 value, bytes calldata data) public {
         (address account,) = _createK1Account(ACTOR_PK);
-        vm.assume(caller != account);
+        // The owner is now an operational (admin-scope) actor and therefore an authorized caller, so exclude it.
+        vm.assume(caller != account && caller != vm.addr(ACTOR_PK));
         value = bound(value, 0, type(uint128).max);
 
         vm.prank(caller);
@@ -81,31 +79,17 @@ contract DefaultAccountTest is KeystoreTest {
         DefaultAccount(payable(account)).executeBatch(_singleCall(address(target), value, data));
     }
 
-    /// @notice The account owner's own EOA key holder cannot drive executeBatch directly.
-    /// @dev The owner is a k1 actor (authenticator == K1), not TRUSTED_EXECUTOR, so _isAuthorizedCaller is false.
-    function test_executeBatch_revert_ownerEoaCallerUnauthorized(uint256 pkSeed) public {
-        uint256 pk = _boundK1Pk(pkSeed);
-        (address account,) = _createK1Account(pk);
-        address owner = vm.addr(pk);
-        vm.assume(owner != account);
-
-        vm.prank(owner);
-        vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
-        DefaultAccount(payable(account))
-            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1))));
-    }
-
-    /// @notice A registered actor whose authenticator is K1 (not the TRUSTED_EXECUTOR sentinel) cannot call.
-    /// @dev Only the TRUSTED_EXECUTOR sentinel authorizes calls; an ordinary k1 actor does not.
-    function test_executeBatch_revert_nonExecutorActorCaller(uint256 actorSeed) public {
+    /// @notice A registered actor with a non-operational (capability-only) scope cannot drive executeBatch.
+    /// @dev A live actor is authorized only when operational; a SELF_PAYER-only k1 actor fails the isOperator leg.
+    function test_executeBatch_revert_nonOperationalActorCaller(uint256 actorSeed) public {
         (address account,) = _createK1Account(ACTOR_PK);
 
         uint256 actorPk = _boundK1Pk(actorSeed);
         address actor = vm.addr(actorPk);
         vm.assume(actor != account && actor != vm.addr(ACTOR_PK));
 
-        // Register `actor` as an ordinary k1 actor (authenticator == K1_AUTHENTICATOR), NOT a trusted executor.
-        _authorizeActor(account, ACTOR_PK, bytes32(uint256(uint160(actor))), k1Authenticator);
+        // Registered, but with a non-operational (capability-only) scope.
+        _authorizeActorWithScope(account, ACTOR_PK, bytes32(uint256(uint160(actor))), k1Authenticator, SCOPE_SELF_PAYER);
 
         vm.prank(actor);
         vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
@@ -220,16 +204,18 @@ contract DefaultAccountTest is KeystoreTest {
         assertEq(address(target2).balance, b);
     }
 
-    /// @notice A registered TRUSTED_EXECUTOR actor may drive execution directly by matching msg.sender.
-    /// @dev Covers the config-driven authorization branch: getActorConfig(...).authenticator == TRUSTED_EXECUTOR.
-    function test_executeBatch_success_trustedExecutor(uint256 execSeed, uint256 v) public {
+    /// @notice A registered operational actor may drive execution directly by matching msg.sender.
+    /// @dev Covers the config-driven authorization branch: a live actor (here an admin-scope k1 actor) with
+    ///      operational authority. Authorization is authenticator-agnostic; a contract executor is registered the
+    ///      same way (an operational actor whose address is msg.sender).
+    function test_executeBatch_success_operationalActor(uint256 execSeed, uint256 v) public {
         (address account,) = _createK1Account(ACTOR_PK);
 
         address executor = address(uint160(bound(execSeed, 10, type(uint160).max)));
         vm.assume(executor != account && executor != vm.addr(ACTOR_PK));
 
-        // The owner signs an actor change registering `executor` with the TRUSTED_EXECUTOR authenticator.
-        _authorizeActor(account, ACTOR_PK, bytes32(uint256(uint160(executor))), TRUSTED_EXECUTOR);
+        // The owner signs an actor change registering `executor` as an operational (admin-scope) actor.
+        _authorizeActor(account, ACTOR_PK, bytes32(uint256(uint160(executor))), k1Authenticator);
 
         vm.prank(executor);
         DefaultAccount(payable(account))
@@ -238,29 +224,26 @@ contract DefaultAccountTest is KeystoreTest {
         assertEq(target.value(), v);
     }
 
-    /// @notice A TRUSTED_EXECUTOR actor whose scope is not operational (a capability-only scope, e.g. SELF_PAYER)
-    ///         cannot drive execution: _isAuthorizedCaller returns false via the isOperator(scope) == false leg.
-    function test_executeBatch_revert_trustedExecutorNonOperationalScope(uint256 execSeed) public {
-        (address account,) = _createK1Account(ACTOR_PK);
+    /// @notice The account owner's own EOA key holder (an operational admin actor) may drive executeBatch directly.
+    /// @dev The owner registered by _createK1Account has admin scope 0, which is operational, so it authorizes as a
+    ///      direct caller by matching msg.sender.
+    function test_executeBatch_success_ownerEoaCaller(uint256 pkSeed, uint256 v) public {
+        uint256 pk = _boundK1Pk(pkSeed);
+        (address account,) = _createK1Account(pk);
+        address owner = vm.addr(pk);
+        vm.assume(owner != account);
 
-        address executor = address(uint160(bound(execSeed, 10, type(uint160).max)));
-        vm.assume(executor != account && executor != vm.addr(ACTOR_PK));
-
-        // Registered as a trusted executor, but with a non-operational (capability-only) scope.
-        _authorizeActorWithScope(
-            account, ACTOR_PK, bytes32(uint256(uint160(executor))), TRUSTED_EXECUTOR, SCOPE_SELF_PAYER
-        );
-
-        vm.prank(executor);
-        vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
+        vm.prank(owner);
         DefaultAccount(payable(account))
-            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1))));
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (v))));
+
+        assertEq(target.value(), v);
     }
 
-    /// @notice A TRUSTED_EXECUTOR actor with an unbounded (expiry == 0) grant may drive execution.
+    /// @notice An operational actor with an unbounded (expiry == 0) grant may drive execution.
     /// @dev Covers the `config.expiry != 0` false leg of the expiry guard (the && short-circuits before the
-    ///      timestamp comparison), which the UNBOUNDED-expiry executor helper never exercises.
-    function test_executeBatch_success_trustedExecutorZeroExpiry(uint256 execSeed, uint256 v) public {
+    ///      timestamp comparison), which the UNBOUNDED-expiry helper never exercises.
+    function test_executeBatch_success_operationalActorZeroExpiry(uint256 execSeed, uint256 v) public {
         (address account,) = _createK1Account(ACTOR_PK);
 
         address executor = address(uint160(bound(execSeed, 10, type(uint160).max)));
@@ -268,7 +251,7 @@ contract DefaultAccountTest is KeystoreTest {
 
         // Operational admin scope, expiry == 0 (unlimited).
         _applyLocal(
-            ACTOR_PK, account, _one(_authorizeChange(bytes32(uint256(uint160(executor))), TRUSTED_EXECUTOR, 0, 0, ""))
+            ACTOR_PK, account, _one(_authorizeChange(bytes32(uint256(uint160(executor))), k1Authenticator, 0, 0, ""))
         );
 
         vm.prank(executor);
@@ -278,10 +261,10 @@ contract DefaultAccountTest is KeystoreTest {
         assertEq(target.value(), v);
     }
 
-    /// @notice A TRUSTED_EXECUTOR config whose non-zero expiry has elapsed is rejected.
+    /// @notice An actor config whose non-zero expiry has elapsed is rejected.
     /// @dev getActorConfig already zeroes expired configs, so the elapsed-expiry leg of _isAuthorizedCaller is
-    ///      defense-in-depth; mock the keystore to return a stale (expired) executor config and prove it fails closed.
-    function test_executeBatch_revert_trustedExecutorExpired(uint256 execSeed) public {
+    ///      defense-in-depth; mock the keystore to return a stale (expired) config and prove it fails closed.
+    function test_executeBatch_revert_expiredActor(uint256 execSeed) public {
         (address account,) = _createK1Account(ACTOR_PK);
 
         address executor = address(uint160(bound(execSeed, 10, type(uint160).max)));
@@ -289,7 +272,7 @@ contract DefaultAccountTest is KeystoreTest {
 
         vm.warp(1000);
         Keystore.ActorConfig memory stale =
-            Keystore.ActorConfig({authenticator: TRUSTED_EXECUTOR, expiry: 500, scope: 0}); // expiry < now
+            Keystore.ActorConfig({authenticator: k1Authenticator, expiry: 500, scope: 0}); // expiry < now
         vm.mockCall(
             address(keystore),
             abi.encodeWithSelector(Keystore.getActorConfig.selector, account, bytes32(uint256(uint160(executor)))),
@@ -323,7 +306,8 @@ contract DefaultAccountTest is KeystoreTest {
     /// @dev Exercises the false leg of `_isAuthorizedCaller(msg.sender)`; fuzzes the caller.
     function test_execute_revert_unauthorizedCaller(address caller) public {
         (address account,) = _createK1Account(ACTOR_PK);
-        vm.assume(caller != account);
+        // The owner is now an operational (admin-scope) actor and therefore an authorized caller, so exclude it.
+        vm.assume(caller != account && caller != vm.addr(ACTOR_PK));
 
         vm.prank(caller);
         vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
@@ -528,29 +512,29 @@ contract DefaultAccountTest is KeystoreTest {
         assertTrue(DefaultAccount(payable(account)).isAuthorizedCaller(account));
     }
 
-    /// @notice A registered TRUSTED_EXECUTOR actor is reported as authorized.
-    /// @dev Covers the config-driven true branch: getActorConfig(...).authenticator == TRUSTED_EXECUTOR.
-    function test_isAuthorizedCaller_success_trustedExecutor(uint256 execSeed) public {
+    /// @notice A registered operational actor is reported as authorized.
+    /// @dev Covers the config-driven true branch: a live actor with operational scope, regardless of authenticator.
+    function test_isAuthorizedCaller_success_operationalActor(uint256 execSeed) public {
         (address account,) = _createK1Account(ACTOR_PK);
 
         address executor = address(uint160(bound(execSeed, 10, type(uint160).max)));
         vm.assume(executor != account && executor != vm.addr(ACTOR_PK));
 
-        _authorizeActor(account, ACTOR_PK, bytes32(uint256(uint160(executor))), TRUSTED_EXECUTOR);
+        _authorizeActor(account, ACTOR_PK, bytes32(uint256(uint160(executor))), k1Authenticator);
 
         assertTrue(DefaultAccount(payable(account)).isAuthorizedCaller(executor));
     }
 
-    /// @notice A registered k1 actor (authenticator != TRUSTED_EXECUTOR) is not an authorized caller.
-    /// @dev Covers the config-driven false branch: a configured actor whose authenticator is the K1 sentinel.
-    function test_isAuthorizedCaller_success_k1ActorNotAuthorized(uint256 actorSeed) public {
+    /// @notice A registered but non-operational actor is not an authorized caller.
+    /// @dev Covers the config-driven false branch: a live actor whose scope (SELF_PAYER only) is not operational.
+    function test_isAuthorizedCaller_success_nonOperationalActorNotAuthorized(uint256 actorSeed) public {
         (address account,) = _createK1Account(ACTOR_PK);
 
         uint256 actorPk = _boundK1Pk(actorSeed);
         address actor = vm.addr(actorPk);
         vm.assume(actor != account && actor != vm.addr(ACTOR_PK));
 
-        _authorizeActor(account, ACTOR_PK, bytes32(uint256(uint160(actor))), k1Authenticator);
+        _authorizeActorWithScope(account, ACTOR_PK, bytes32(uint256(uint160(actor))), k1Authenticator, SCOPE_SELF_PAYER);
 
         assertFalse(DefaultAccount(payable(account)).isAuthorizedCaller(actor));
     }
@@ -559,7 +543,8 @@ contract DefaultAccountTest is KeystoreTest {
     /// @dev Covers the config-driven false branch for an empty config (authenticator == address(0)). Fuzzes caller.
     function test_isAuthorizedCaller_success_randomCallerNotAuthorized(address caller) public {
         (address account,) = _createK1Account(ACTOR_PK);
-        vm.assume(caller != account);
+        // Exclude the owner, which is now an operational (admin-scope) actor and therefore authorized.
+        vm.assume(caller != account && caller != vm.addr(ACTOR_PK));
 
         assertFalse(DefaultAccount(payable(account)).isAuthorizedCaller(caller));
     }

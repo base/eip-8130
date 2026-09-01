@@ -25,7 +25,7 @@ contract KeystoreTest is Test {
     IAuthenticator public delegateAuthenticator;
     address public defaultAccountImplementation;
 
-    /// @dev Test EntryPoint address; tests register it as a TRUSTED_EXECUTOR actor in the initial actor set.
+    /// @dev Test EntryPoint address; tests register it as an operational actor in the initial actor set.
     address public constant ENTRY_POINT = address(0xEEEE);
 
     // SECP256K1_ORDER (curve order n) is inherited from forge-std; _boundK1Pk bounds fuzzed keys to [1, n-1].

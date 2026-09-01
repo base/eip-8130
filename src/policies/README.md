@@ -157,11 +157,12 @@ Keystore.ActorConfig({
 `nonce_key`s. This contract stores the bit verbatim and never interprets it — nonce semantics are entirely
 protocol-side — so it isn't part of the policy flow above and is only mentioned here for completeness.
 
-Critically, the provider must **not** be registered with `TRUSTED_EXECUTOR` — that sentinel grants
-*direct, unrestricted* `executeBatch` and would let the provider bypass the policy entirely. `EXTERNAL_POLICY_AUTHENTICATOR`
-is a no-code sentinel: the actor is recognized (non-zero authenticator) but can neither drive the account directly
-nor authenticate an 8130 transaction. Give the provider its **own salt** so its commitment — and therefore its
-spend budget — is isolated from any session keys on the account. End-to-end tests:
+Critically, the provider must **not** be registered as an *operational* actor (admin scope `0x00` or `OPERATOR`) —
+operational scope grants *direct, unrestricted* `executeBatch` and would let the provider bypass the policy
+entirely. `EXTERNAL_POLICY_AUTHENTICATOR` is a no-code sentinel: the actor is recognized (non-zero authenticator)
+but can neither drive the account directly nor authenticate an 8130 transaction. Give the provider its **own salt**
+so its commitment — and therefore its spend budget — is isolated from any session keys on the account. End-to-end
+tests:
 [`ExternalPolicyCaller.t.sol`](../../../test/unit/policies/ExternalPolicyCaller.t.sol).
 
 > Out of scope for this reference: signature-based replacement and uninstall. See

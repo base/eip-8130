@@ -3,7 +3,6 @@ pragma solidity ^0.8.30;
 
 import {Keystore} from "../../../src/Keystore.sol";
 import {Scopes} from "../../../src/libraries/Scopes.sol";
-import {TRUSTED_EXECUTOR} from "../../../src/accounts/DefaultAccount.sol";
 
 import {PolicyManager, EXTERNAL_POLICY_AUTHENTICATOR} from "../../../src/policies/PolicyManager.sol";
 import {SessionPolicy} from "../../../src/policies/SessionPolicy.sol";
@@ -321,7 +320,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         });
         Keystore.InitialActor memory mgr = Keystore.InitialActor({
             actorId: bytes32(uint256(uint160(address(manager)))),
-            authenticator: TRUSTED_EXECUTOR,
+            authenticator: k1Authenticator,
             scope: 0,
             policyData: ""
         });

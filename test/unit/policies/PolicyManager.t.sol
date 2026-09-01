@@ -6,7 +6,7 @@ import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
 import {Keystore} from "../../../src/Keystore.sol";
 import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../../src/interfaces/ITransactionContext.sol";
-import {Call, DefaultAccount, TRUSTED_EXECUTOR} from "../../../src/accounts/DefaultAccount.sol";
+import {Call, DefaultAccount} from "../../../src/accounts/DefaultAccount.sol";
 
 import {PolicyManager} from "../../../src/policies/PolicyManager.sol";
 import {Policy} from "../../../src/policies/Policy.sol";
@@ -342,7 +342,7 @@ contract PolicyManagerTest is KeystoreTest {
         });
         Keystore.InitialActor memory mgr = Keystore.InitialActor({
             actorId: bytes32(uint256(uint160(address(manager)))),
-            authenticator: TRUSTED_EXECUTOR,
+            authenticator: k1Authenticator,
             scope: 0,
             policyData: ""
         });
@@ -386,7 +386,7 @@ contract PolicyManagerTest is KeystoreTest {
         });
         Keystore.InitialActor memory mgr = Keystore.InitialActor({
             actorId: bytes32(uint256(uint160(address(manager)))),
-            authenticator: TRUSTED_EXECUTOR,
+            authenticator: k1Authenticator,
             scope: 0,
             policyData: ""
         });
