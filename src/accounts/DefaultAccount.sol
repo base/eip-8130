@@ -130,12 +130,11 @@ contract DefaultAccount is Receiver {
     //  INTERNALS
     // ══════════════════════════════════════════════
 
-    /// @dev Authorized if `caller` is the account itself, or is a live actor with an unexpired config AND
-    ///      operational authority. The `authenticator != address(0)` liveness check must run before the scope check:
-    ///      {Keystore.getActorConfig} zeroes any unknown/revoked/expired actor, and {Scopes.isOperator} treats
-    ///      scope 0 as the unrestricted admin, so gating on scope alone would authorize every unregistered caller.
-    ///      Expiry: 0 means none; a non-zero elapsed expiry fails closed (defense in depth over getActorConfig's own
-    ///      zeroing). Scope: driving execution requires operational authority ({Scopes.isOperator}), i.e. the
+    /// @dev Authorized if `caller` is the account itself, or is a live actor with operational authority. The
+    ///      `authenticator != address(0)` liveness check must run before the scope check: {Keystore.getActorConfig}
+    ///      zeroes any unknown/revoked/expired actor (so expiry is already enforced there), and {Scopes.isOperator}
+    ///      treats scope 0 as the unrestricted admin, so gating on scope alone would authorize every unregistered
+    ///      caller. Scope: driving execution requires operational authority ({Scopes.isOperator}), i.e. the
     ///      unrestricted admin (scope == 0x00) or an OPERATOR actor; a POLICY-only actor is not operational and must
     ///      route every call through its manager. Sharing {Scopes.isOperator} keeps the execution and signing
     ///      (ERC-1271) authorization surfaces aligned.
@@ -143,7 +142,6 @@ contract DefaultAccount is Receiver {
         if (caller == address(this)) return true;
         Keystore.ActorConfig memory config = KEYSTORE.getActorConfig(address(this), ActorId.fromAddress(caller));
         if (config.authenticator == address(0)) return false;
-        if (config.expiry != 0 && block.timestamp > config.expiry) return false;
         return Scopes.isOperator(config.scope);
     }
 }

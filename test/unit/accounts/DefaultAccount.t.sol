@@ -2,7 +2,6 @@
 pragma solidity ^0.8.30;
 
 import {DefaultAccount, Call} from "../../../src/accounts/DefaultAccount.sol";
-import {Keystore} from "../../../src/Keystore.sol";
 import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
@@ -238,51 +237,6 @@ contract DefaultAccountTest is KeystoreTest {
             .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (v))));
 
         assertEq(target.value(), v);
-    }
-
-    /// @notice An operational actor with an unbounded (expiry == 0) grant may drive execution.
-    /// @dev Covers the `config.expiry != 0` false leg of the expiry guard (the && short-circuits before the
-    ///      timestamp comparison), which the UNBOUNDED-expiry helper never exercises.
-    function test_executeBatch_success_operationalActorZeroExpiry(uint256 execSeed, uint256 v) public {
-        (address account,) = _createK1Account(ACTOR_PK);
-
-        address executor = address(uint160(bound(execSeed, 10, type(uint160).max)));
-        vm.assume(executor != account && executor != vm.addr(ACTOR_PK));
-
-        // Operational admin scope, expiry == 0 (unlimited).
-        _applyLocal(
-            ACTOR_PK, account, _one(_authorizeChange(bytes32(uint256(uint160(executor))), k1Authenticator, 0, 0, ""))
-        );
-
-        vm.prank(executor);
-        DefaultAccount(payable(account))
-            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (v))));
-
-        assertEq(target.value(), v);
-    }
-
-    /// @notice An actor config whose non-zero expiry has elapsed is rejected.
-    /// @dev getActorConfig already zeroes expired configs, so the elapsed-expiry leg of _isAuthorizedCaller is
-    ///      defense-in-depth; mock the keystore to return a stale (expired) config and prove it fails closed.
-    function test_executeBatch_revert_expiredActor(uint256 execSeed) public {
-        (address account,) = _createK1Account(ACTOR_PK);
-
-        address executor = address(uint160(bound(execSeed, 10, type(uint160).max)));
-        vm.assume(executor != account && executor != vm.addr(ACTOR_PK));
-
-        vm.warp(1000);
-        Keystore.ActorConfig memory stale =
-            Keystore.ActorConfig({authenticator: k1Authenticator, expiry: 500, scope: 0}); // expiry < now
-        vm.mockCall(
-            address(keystore),
-            abi.encodeWithSelector(Keystore.getActorConfig.selector, account, bytes32(uint256(uint160(executor)))),
-            abi.encode(stale)
-        );
-
-        vm.prank(executor);
-        vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
-        DefaultAccount(payable(account))
-            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1))));
     }
 
     /// @notice A call to a target with no code succeeds (the low-level call returns success).
