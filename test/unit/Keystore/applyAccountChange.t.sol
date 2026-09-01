@@ -531,8 +531,10 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertEq(_multichainSeq(account), mcBefore + 1);
         assertFalse(_isActor(account, ACTOR_A));
 
-        // It is nonetheless present: an explicit revoke succeeds (presence is checked without expiry), proving the
-        // slot was written rather than skipped. Reverts UnknownActor if the slot were empty.
+        // It is nonetheless present: revoking a written slot emits ActorRevoked, proving the slot was written
+        // rather than skipped. Revoke is idempotent, so an empty slot would emit nothing (silent no-op).
+        vm.expectEmit(true, true, false, true, address(keystore));
+        emit Keystore.ActorRevoked(account, ACTOR_A);
         _revokeActor(account, pk, ACTOR_A);
     }
 
@@ -604,7 +606,10 @@ contract AccountEnvironmentTest is KeystoreTest {
         // Sequence consumed (no revert); the actor is present but not live.
         assertEq(_localSeqWord(account), seqBefore + 1);
         assertFalse(_isActor(account, ACTOR_A));
-        _revokeActor(account, pk, ACTOR_A); // present -> explicit revoke succeeds (reverts UnknownActor if empty)
+        // present -> revoke emits ActorRevoked (an empty slot would be a silent idempotent no-op, emitting nothing)
+        vm.expectEmit(true, true, false, true, address(keystore));
+        emit Keystore.ActorRevoked(account, ACTOR_A);
+        _revokeActor(account, pk, ACTOR_A);
     }
 
     /// @notice A Multichain IncrementLocalEpoch bumps the local epoch (resetting the local sequence) and consumes the
@@ -699,11 +704,10 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertEq(epoch, 1);
         assertEq(seq, 0);
 
-        // importAccount must still reject the account as already initialized. The check fires before getImportActors
-        // or ERC-1271, so the empty signature is never reached.
+        // importAccount must still reject the account as already initialized. The check fires before confirmation.
         vm.expectRevert(Keystore.AlreadyInitialized.selector);
         vm.prank(account);
-        keystore.importAccount(0, "");
+        keystore.importAccount();
     }
 
     /// @notice An empty sequenced batch is rejected (EmptyChangeSet) so it cannot consume a sequence doing nothing.
@@ -753,7 +757,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         // importAccount must now reject the account as already initialized.
         vm.expectRevert(Keystore.AlreadyInitialized.selector);
         vm.prank(account);
-        keystore.importAccount(0, "");
+        keystore.importAccount();
     }
 
     /// @notice Init asymmetry (fresh-account branch): a never-bootstrapped EOA's first LOCAL unsequenced batch burns

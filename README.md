@@ -41,27 +41,49 @@ The canonical EIP-8130 authenticator set. secp256k1 (ECDSA) is built into `Keyst
 
 ### Importing an existing wallet
 
-`importAccount` is not signature-relayable. The account itself must call Keystore, the account's code must choose the actor set via `getImportActors()`, and ERC-1271 only confirms the digest of that set. A role that can `execute` plus 1271 cannot install itself as scope-0 admin. Wallets that do not implement `IKeystoreImport` cannot be imported — including guarded Safes, delayed-upgrade and immutable wallets, 7579/6900 validators, 6551 TBAs, and Aragon plugins, until they upgrade.
+`importAccount()` is not signature-relayable and takes no parameters. The account itself must call Keystore (`msg.sender`), and the account's code must return the actor set plus `computeImportDigest` of that set from a single callback, `confirmKeystoreImport()`. Keystore installs only that set, and only when the digest matches. Wallets that do not implement `IKeystoreImport` cannot be imported — including guarded Safes, delayed-upgrade and immutable wallets, 7579/6900 validators, 6551 TBAs, and Aragon plugins, until they upgrade.
 
-After import, the actor set in Keystore is the source of truth. Subsequent owner changes on the wallet do not propagate; wallets should route their own signature validation through `authenticateActor` after import. `chainId == 0` remains a valid multichain import; with the `msg.sender` gate and hash-bound confirmation it cannot be used by a third party.
+Import carries no `chainId`: it is a live `msg.sender` call plus a live confirm, so the chain is already fixed by where the transaction lands. A wallet that wants to bind import to a specific chain can check `block.chainid` inside `confirmKeystoreImport`.
 
-Reference integration (upgrade and import atomically with `upgradeToAndCall(newImpl, abi.encodeCall(importToKeystore, chainId))`):
+A wallet that always returns a valid `(digest, actors)` pair reopens `execute(keystore, importAccount())` for itself. Delegated EOAs can also add keys via `applySignedAccountChanges`.
+
+After import, the actor set in Keystore is the source of truth. Subsequent owner changes on the wallet do not propagate; wallets should route their own signature validation through `authenticateActor` after import.
+
+Import is an explicit wallet path, not an `execute()` call: `execute()` is reachable by every role that can drive it, whereas import moves where the account's authority lives, so gate it on a dedicated entry (`onlyOwner`, an owner signature, an initializer, a timelock) exactly as you would `upgradeTo`.
+
+Two confirmation styles:
 
 ```solidity
-function importToKeystore(uint256 chainId) external onlyEntryPointOrOwner {
-    InitialActor[] memory actors = getImportActors();
-    bytes32 digest = KEYSTORE.computeImportDigest(address(this), chainId, actors);
+// Transient (owner-gated entry). `execute(keystore, importAccount())` does not set the slot.
+function importToKeystore() external onlyOwner {
+    InitialActor[] memory actors = initialActors();
+    bytes32 digest = KEYSTORE.computeImportDigest(address(this), actors);
     assembly { tstore(IMPORT_DIGEST_TSLOT, digest) }
-    KEYSTORE.importAccount(chainId, "");
+    KEYSTORE.importAccount();
     assembly { tstore(IMPORT_DIGEST_TSLOT, 0) }
 }
 
-function isValidSignature(bytes32 hash, bytes calldata sig) public view override returns (bytes4) {
-    if (sig.length == 0 && msg.sender == address(KEYSTORE)) {
-        bytes32 expected; assembly { expected := tload(IMPORT_DIGEST_TSLOT) }
-        return (expected != 0 && hash == expected) ? this.isValidSignature.selector : bytes4(0);
-    }
-    return super.isValidSignature(hash, sig);
+function confirmKeystoreImport()
+    external
+    view
+    returns (bytes32 digest, InitialActor[] memory actors)
+{
+    actors = initialActors();
+    assembly { digest := tload(IMPORT_DIGEST_TSLOT) }
+    if (msg.sender != address(KEYSTORE) || digest == 0) return (bytes32(0), actors);
+}
+```
+
+```solidity
+// Stateless (init-time import). Always returns the code-derived set and its digest.
+function confirmKeystoreImport()
+    external
+    view
+    returns (bytes32 digest, InitialActor[] memory actors)
+{
+    actors = initialActors();
+    if (msg.sender != address(KEYSTORE)) return (bytes32(0), actors);
+    digest = KEYSTORE.computeImportDigest(address(this), actors);
 }
 ```
 

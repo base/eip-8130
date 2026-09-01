@@ -157,8 +157,8 @@ contract CreateAccountTest is KeystoreTest {
         keystore.createAccount(salt, bytecode, actors);
     }
 
-    /// @notice Verifies createAccount reverts when an initial actor names an authenticator below the K1 sentinel
-    /// @dev _authorizeActor rejects authenticator < K1_AUTHENTICATOR; the only such value is address(0)
+    /// @notice Verifies createAccount reverts when an initial actor names the zero authenticator
+    /// @dev _authorizeActor rejects authenticator == address(0), the empty-slot sentinel
     function test_createAccount_revert_invalidAuthenticator(bytes32 actorId, bytes32 salt) public {
         vm.assume(actorId != 0);
 

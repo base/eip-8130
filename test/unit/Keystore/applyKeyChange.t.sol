@@ -136,11 +136,11 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
             _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, uint48(block.timestamp - 1), ""))
         );
 
-        // Skipped, not installed inert: the slot was never written, so an explicit revoke finds nothing.
+        // Skipped, not installed inert: the slot was never written, and an explicit revoke is an idempotent no-op.
         assertFalse(_isActor(account, ACTOR_A));
         Keystore.SignedAccountChanges memory revokeBatch = _unseqBatch(pk, account, _one(_revokeChange(ACTOR_A)));
-        vm.expectRevert(Keystore.UnknownActor.selector);
         keystore.applySignedAccountChanges(account, revokeBatch);
+        assertFalse(_isActor(account, ACTOR_A));
     }
 
     /// @notice Partial application on the unsequenced (JIT) path: an already-expired grant is skipped while its live
@@ -261,6 +261,19 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
             pk, account, _one(_authorizeChange(bytes32(0), address(k1Authenticator), OPERATOR, _future(1 days), ""))
         );
         vm.expectRevert(Keystore.InvalidActorId.selector);
+        keystore.applySignedAccountChanges(account, s);
+    }
+
+    /// @notice AuthorizeActor with a sub-K1 authenticator reverts InvalidAuthenticator. createAccount/import reject
+    ///         this earlier in {_validateInitialActors}; the signed path is the only way to reach {_authorizeActor}'s
+    ///         floor check.
+    function test_authorize_revert_zeroAuthenticator(uint256 pk) public {
+        pk = _boundK1Pk(pk);
+        (address account,) = _createK1Account(pk);
+
+        Keystore.SignedAccountChanges memory s =
+            _localBatch(pk, account, _one(_authorizeChange(ACTOR_A, address(0), OPERATOR, _future(1 days), "")));
+        vm.expectRevert(Keystore.InvalidAuthenticator.selector);
         keystore.applySignedAccountChanges(account, s);
     }
 
