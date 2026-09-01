@@ -5,7 +5,7 @@ import {Keystore} from "../../../src/Keystore.sol";
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice Targeted tests closing the remaining reachable branches in {Keystore}: the zero-account guard, the
-///         revoke-unknown-actor guard, the environment-op payload-length guards, the expired inline-self read, the
+///         idempotent-revoke branch, the environment-op payload-length guards, the expired inline-self read, the
 ///         elapsed-unlock lock-status read, and the policy-slice length guards. Grouped here rather than scattered
 ///         across the behavioral suites because each is a defensive edge rather than a feature.
 contract KeystoreBranchCoverageTest is KeystoreTest {
@@ -27,13 +27,15 @@ contract KeystoreBranchCoverageTest is KeystoreTest {
 
     // ── RevokeActor ──
 
-    /// @notice Revoking an actorId that was never authorized reverts UnknownActor.
-    function test_revoke_revert_unknownActor() public {
+    /// @notice Revoking an actorId that was never authorized is an idempotent no-op that still consumes the sequence.
+    function test_revoke_success_unknownActorNoop() public {
         (address account,) = _createK1Account(OWNER_PK);
         bytes32 ghost = bytes32(uint256(0xDEAD));
+        uint64 sequenceBefore = _localSeqWord(account);
         Keystore.SignedAccountChanges memory s = _localBatch(OWNER_PK, account, _one(_revokeChange(ghost)));
-        vm.expectRevert(Keystore.UnknownActor.selector);
         keystore.applySignedAccountChanges(account, s);
+        assertEq(_localSeqWord(account), sequenceBefore + 1);
+        assertFalse(_isActor(account, ghost));
     }
 
     // ── Environment-op payload guards ──

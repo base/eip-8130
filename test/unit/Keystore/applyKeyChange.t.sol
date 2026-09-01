@@ -136,11 +136,11 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
             _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, uint48(block.timestamp - 1), ""))
         );
 
-        // Skipped, not installed inert: the slot was never written, so an explicit revoke finds nothing.
+        // Skipped, not installed inert: the slot was never written, and an explicit revoke is an idempotent no-op.
         assertFalse(_isActor(account, ACTOR_A));
         Keystore.SignedAccountChanges memory revokeBatch = _unseqBatch(pk, account, _one(_revokeChange(ACTOR_A)));
-        vm.expectRevert(Keystore.UnknownActor.selector);
         keystore.applySignedAccountChanges(account, revokeBatch);
+        assertFalse(_isActor(account, ACTOR_A));
     }
 
     /// @notice Partial application on the unsequenced (JIT) path: an already-expired grant is skipped while its live

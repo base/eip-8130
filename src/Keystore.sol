@@ -371,9 +371,6 @@ contract Keystore {
     ///         (manager(20) || commitment(32), making an 84-byte packed record).
     error InvalidPolicyData();
 
-    /// @notice The referenced actor is not currently authorized on the account.
-    error UnknownActor();
-
     /// @notice An authenticator resolved a zero actorId (authentication failed).
     error AuthenticationFailed();
 
@@ -789,14 +786,16 @@ contract Keystore {
         _authorizeActor(account, actorId, cfg, policyData);
     }
 
-    /// @dev RevokeActor. `payload = abi.encode(bytes32 actorId)`. Clears the actor's config and policy slots (and
-    ///      disables the inline k1 self for the self-actorId), emitting ActorRevoked; reverts UnknownActor if the
-    ///      actor is not currently live. Not durable against an outstanding replayable unsequenced grant for the same
-    ///      actorId (which would re-install into the emptied slot); batch a {IncrementLocalEpoch} for durable teardown.
+    /// @dev RevokeActor. `payload = abi.encode(bytes32 actorId)`. Idempotent when the actor is already absent so a
+    ///      Local revoke cannot invalidate a queued Multichain revoke (or vice versa) and block that channel's
+    ///      sequence. Otherwise clears the actor's config and policy slots (and disables the inline k1 self for the
+    ///      self-actorId), emitting ActorRevoked. Not durable against an outstanding replayable unsequenced grant for
+    ///      the same actorId (which would re-install into the emptied slot); batch a {IncrementLocalEpoch} for durable
+    ///      teardown.
     function _applyRevoke(address account, bytes calldata payload) private {
         bytes32 actorId = abi.decode(payload, (bytes32));
         if (!_isAuthorized(account, actorId)) {
-            revert UnknownActor();
+            return;
         }
         delete _actors[actorId][account];
         if (actorId == _selfActorId(account)) {
