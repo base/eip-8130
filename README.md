@@ -41,7 +41,7 @@ The canonical EIP-8130 authenticator set. secp256k1 (ECDSA) is built into `Keyst
 
 ### Importing an existing wallet
 
-`importAccount()` is not signature-relayable and takes no parameters. The account itself must call Keystore (`msg.sender`), and the account's code must return the actor set plus `computeImportDigest` of that set from a single callback, `confirmKeystoreImport()`. Keystore installs only that set, and only when the digest matches. Wallets that do not implement `IEIP8130Import` cannot be imported — including guarded Safes, delayed-upgrade and immutable wallets, 7579/6900 validators, 6551 TBAs, and Aragon plugins, until they upgrade.
+`importAccount()` is not signature-relayable and takes no parameters. The account itself must call Keystore (`msg.sender`), and the account's code must return the actor set plus `computeImportDigest` of that set from a single callback, `confirmKeystoreImport()`. Keystore installs only that set, and only when the digest matches. Wallets that do not implement `IKeystoreImport` cannot be imported — including guarded Safes, delayed-upgrade and immutable wallets, 7579/6900 validators, 6551 TBAs, and Aragon plugins, until they upgrade.
 
 Import carries no `chainId`: it is a live `msg.sender` call plus a live confirm, so the chain is already fixed by where the transaction lands. A wallet that wants to bind import to a specific chain can check `block.chainid` inside `confirmKeystoreImport`.
 

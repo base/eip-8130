@@ -819,6 +819,39 @@ contract ImportAccountTest is KeystoreTest {
         assertEq(selfConfig.authenticator, address(0));
     }
 
+    /// @notice k1 self EOA import: including the account's own self-actorId as a K1_AUTHENTICATOR entry re-enables
+    ///         the inline default EOA. Asserts localSequence == 1 and FLAG_REVOKE_DEFAULT_EOA cleared together.
+    function test_importAccount_success_k1SelfImport_localSequenceAndFlagCleared(uint256 eoaSeed) public {
+        uint256 eoaPk = _boundK1Pk(eoaSeed);
+        address eoa = vm.addr(eoaPk);
+
+        // Delegate derives its actor set from address(this): a single self-actorId as k1, so import re-enables
+        // the inline default EOA rather than revoking it.
+        DelegatedImportWallet impl = new DelegatedImportWallet(keystore);
+        vm.etch(eoa, abi.encodePacked(hex"ef0100", address(impl)));
+
+        _importAs(eoa);
+
+        // Bootstrap sets localSequence to 1; the other channels stay untouched.
+        assertEq(keystore.getChangeSequences(eoa).localSequence, 1);
+        assertEq(keystore.getChangeSequences(eoa).multichain, 0);
+        assertEq(keystore.getChangeSequences(eoa).localEpoch, 0);
+
+        // FLAG_REVOKE_DEFAULT_EOA is cleared: the self k1 entry re-enabled the inline default EOA. Read the flags
+        // byte directly from the packed AccountState slot (_accountState mapping at storage slot 1; the struct packs
+        // multichainSequence(8) || localSequence(4) || localEpoch(4) || flags(1)…, so flags sits at bits 128-135).
+        bytes32 stateSlot = keccak256(abi.encode(eoa, uint256(1)));
+        uint8 flags = uint8(uint256(vm.load(address(keystore), stateSlot)) >> 128);
+        assertEq(uint256(flags & keystore.FLAG_REVOKE_DEFAULT_EOA()), 0, "default EOA must be re-enabled");
+
+        // Corroborate behaviorally: the inline self resolves as a live full-owner k1 actor.
+        bytes32 selfId = bytes32(uint256(uint160(eoa)));
+        assertTrue(_isActor(eoa, selfId));
+        Keystore.ActorConfig memory selfConfig = keystore.getActorConfig(eoa, selfId);
+        assertEq(selfConfig.authenticator, address(k1Authenticator));
+        assertEq(selfConfig.scope, 0);
+    }
+
     /// @notice Every imported actor is live with the declared k1 config.
     function test_importAccount_success_importedActorsLive(uint256 countSeed, uint256 baseSeed) public {
         uint256 count = bound(countSeed, 1, 8);

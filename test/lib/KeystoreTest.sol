@@ -31,7 +31,7 @@ contract KeystoreTest is Test {
     // SECP256K1_ORDER (curve order n) is inherited from forge-std; _boundK1Pk bounds fuzzed keys to [1, n-1].
 
     bytes32 constant SIGNED_ACCOUNT_CHANGES_TYPEHASH = keccak256(
-        "SignedAccountChanges(address account,uint256 chainId,uint64 sequence,AccountChange[] changes)"
+        "SignedAccountChangeBatch(address account,uint256 chainId,uint64 sequence,AccountChange[] changes)"
         "AccountChange(uint8 changeType,bytes payload)"
     );
 

@@ -3,6 +3,7 @@ pragma solidity 0.8.36;
 
 import {ActorId} from "./libraries/ActorId.sol";
 import {IAuthenticator} from "./interfaces/IAuthenticator.sol";
+import {IKeystoreImport} from "./interfaces/IKeystoreImport.sol";
 
 /// @notice Keystore system contract for EIP-8130.
 ///         Manages actor authorization, account creation, change sequencing, and account lock. This contract is
@@ -137,7 +138,7 @@ contract Keystore {
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
     /// @notice Typehash binding an importAccount confirmation to its accountId and the actor set returned by
-    ///         {IEIP8130Import.confirmKeystoreImport}.
+    ///         {IKeystoreImport.confirmKeystoreImport}.
     ///
     /// @dev NOT compliant with EIP-712, to mitigate eth_signTypedData phishing. `accountId` is the importing account's
     ///      actorId (`ActorId.fromAddress(account)`), binding the digest to that account so it cannot be replayed
@@ -161,9 +162,10 @@ contract Keystore {
     ///
     /// @dev NOT compliant with EIP-712, to mitigate phishing attacks. `chainId` is the channel's replay domain
     ///      (0 for {AccountChangeChannel.Multichain}, block.chainid for {AccountChangeChannel.Local}). The digest
-    ///      scheme is confined to {_changesDigest}, keeping it independent of the apply pipeline.
+    ///      scheme is confined to {_changesDigest}, keeping it independent of the apply pipeline. First byte 0xbe:
+    ///      provably not a transaction encoding (RLP-string prefix, neither an EIP-2718 type byte nor an RLP list).
     bytes32 public constant SIGNED_ACCOUNT_CHANGES_TYPEHASH = keccak256(
-        "SignedAccountChanges(address account,uint256 chainId,uint64 sequence,AccountChange[] changes)"
+        "SignedAccountChangeBatch(address account,uint256 chainId,uint64 sequence,AccountChange[] changes)"
         "AccountChange(uint8 changeType,bytes payload)"
     );
 
@@ -172,9 +174,10 @@ contract Keystore {
 
     /// @notice Typehash binding a user signature to its account and chainId.
     /// @dev NOT compliant with EIP-712, to mitigate eth_signTypedData phishing, consistent with the other 8130
-    ///      signed-message typehashes. First byte 0x9d: provably not a transaction encoding.
+    ///      signed-message typehashes. First byte 0x9b: provably not a transaction encoding (RLP-string prefix,
+    ///      neither an EIP-2718 type byte nor an RLP list).
     bytes32 public constant SIGNED_MESSAGE_TYPEHASH =
-        keccak256("EIP8130SignedMessage(address account,uint256 chainId,bytes32 hash)");
+        keccak256("SignedMessageEnvelope(address account,uint256 chainId,bytes32 hash)");
 
     /// @notice Local-channel sequence low-half sentinel marking an unsequenced (JIT) batch. A {SignedAccountChanges}
     ///         whose low 32 bits equal this value does not consume a sequence, so it stays replayable until the local
@@ -302,7 +305,7 @@ contract Keystore {
     /// @notice The batch signer is not the account admin (scope 0). Every signed account change is admin-only.
     error UnauthorizedAccountChange();
 
-    /// @notice {IEIP8130Import.confirmKeystoreImport} did not return {computeImportDigest} of the actor set it
+    /// @notice {IKeystoreImport.confirmKeystoreImport} did not return {computeImportDigest} of the actor set it
     ///         returned (or the call failed).
     error ImportNotConfirmed();
 
@@ -355,7 +358,7 @@ contract Keystore {
     error InvalidAuthLength();
 
     /// @notice A bootstrap actor set was empty (createAccount's initialActors or importAccount's
-    ///         {IEIP8130Import.confirmKeystoreImport} actors).
+    ///         {IKeystoreImport.confirmKeystoreImport} actors).
     error NoInitialActors();
 
     /// @notice initialActors are not strictly ascending by actorId (unsorted or duplicated).
@@ -499,9 +502,9 @@ contract Keystore {
 
     /// @notice Imports `msg.sender` into Keystore management. Authority is the conjunction of: (a) the account
     ///         itself calling, and (b) the account's code returning the actor set and {computeImportDigest} of that
-    ///         set via {IEIP8130Import.confirmKeystoreImport}. There is no signature and no caller-supplied actor
+    ///         set via {IKeystoreImport.confirmKeystoreImport}. There is no signature and no caller-supplied actor
     ///         array; Keystore installs only the set the code returned, and only when the accompanying digest
-    ///         matches. Wallets must upgrade to implement {IEIP8130Import}.
+    ///         matches. Wallets must upgrade to implement {IKeystoreImport}.
     ///
     ///         After import, the actor set in this contract is the source of truth. Subsequent owner changes on the
     ///         wallet do not propagate here; wallets should route their own signature validation through
@@ -532,7 +535,7 @@ contract Keystore {
         _accountState[account].localSequence = 1;
 
         (bool success, bytes memory result) =
-            account.staticcall(abi.encodeCall(IEIP8130Import.confirmKeystoreImport, ()));
+            account.staticcall(abi.encodeCall(IKeystoreImport.confirmKeystoreImport, ()));
         if (!success) {
             revert ImportNotConfirmed();
         }
@@ -555,7 +558,7 @@ contract Keystore {
         emit AccountImported(account);
     }
 
-    /// @notice Typed digest of `account` plus `initialActors`. {IEIP8130Import.confirmKeystoreImport} must return
+    /// @notice Typed digest of `account` plus `initialActors`. {IKeystoreImport.confirmKeystoreImport} must return
     ///         this exact value alongside the same actor set.
     ///
     /// @dev Distinct from {_changesDigest} / {SIGNED_ACCOUNT_CHANGES_TYPEHASH} and {SIGNED_MESSAGE_TYPEHASH}: the
@@ -1203,7 +1206,7 @@ contract Keystore {
         // accepted deliberately: authenticators may be counterfactual (deployed later) and some are intentionally
         // codeless sentinels (e.g. EXTERNAL_POLICY_AUTHENTICATOR). A bad authenticator simply fails fail-closed at
         // authentication time.
-        if (config.authenticator < K1_AUTHENTICATOR) {
+        if (config.authenticator == address(0)) {
             revert InvalidAuthenticator();
         }
 
@@ -1334,7 +1337,7 @@ contract Keystore {
             if (actor.actorId <= previousActorId) {
                 revert ActorsNotSortedOrDuplicate();
             }
-            if (actor.authenticator < K1_AUTHENTICATOR) {
+            if (actor.authenticator == address(0)) {
                 revert InvalidAuthenticator();
             }
             // Same length rule as _slicePolicy: empty (config only) or exactly 52 bytes (config + policy).
@@ -1557,20 +1560,4 @@ contract Keystore {
             bytes1(0x61), bytes2(uint16(n)), hex"600e600039", bytes1(0x61), bytes2(uint16(n)), hex"6000f3", bytecode
         );
     }
-}
-
-/// @notice Opt-in for {Keystore.importAccount}. Not part of the EIP-8130 account ABI: created 8130 accounts
-///         never implement it. Existing wallets implement it so Keystore can read the bootstrap actor set and
-///         confirm its digest. A wallet that does not implement this function cannot be imported.
-///
-///         {confirmKeystoreImport} must return the intended actors and {Keystore.computeImportDigest} of that
-///         set. A wallet that always returns a valid pair reopens `execute(importAccount())` for itself — gate
-///         the return on the wallet's own import entry, or accept that anyone who can `execute` can finalize it.
-interface IEIP8130Import {
-    /// @notice Returns this account's intended import actor set and {Keystore.computeImportDigest} of that set.
-    ///         A digest that does not match the returned actors (or a revert) is {Keystore.ImportNotConfirmed}.
-    function confirmKeystoreImport()
-        external
-        view
-        returns (bytes32 digest, Keystore.InitialActor[] memory initialActors);
 }
