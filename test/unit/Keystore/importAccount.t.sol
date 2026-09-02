@@ -261,8 +261,6 @@ contract StorageReconstructedWallet {
     address public immutable PASSKEY_AUTHENTICATOR;
     address public immutable ENTRY_POINT;
 
-    address constant TRUSTED_EXECUTOR = address(uint160(uint256(keccak256("trustedExecutor"))));
-
     error OnlySelf();
     error NotOwner();
 
@@ -291,7 +289,10 @@ contract StorageReconstructedWallet {
             actors[i] = _storedOwners[i];
         }
         actors[_storedOwners.length] = Keystore.InitialActor({
-            actorId: bytes32(uint256(uint160(ENTRY_POINT))), authenticator: TRUSTED_EXECUTOR, scope: 0, policyData: ""
+            actorId: bytes32(uint256(uint160(ENTRY_POINT))),
+            authenticator: KEYSTORE.K1_AUTHENTICATOR(),
+            scope: 0,
+            policyData: ""
         });
         _sortByActorId(actors);
     }
@@ -926,7 +927,7 @@ contract ImportAccountTest is KeystoreTest {
         assertTrue(_isActor(address(wallet), bytes32(uint256(uint160(entryPoint)))));
         assertEq(
             keystore.getActorConfig(address(wallet), bytes32(uint256(uint160(entryPoint)))).authenticator,
-            address(uint160(uint256(keccak256("trustedExecutor"))))
+            k1Authenticator
         );
     }
 

@@ -18,20 +18,15 @@ struct Call {
     bytes data;
 }
 
-/// @dev Sentinel `authenticator` value marking an actor as a trusted executor: an address (e.g. a PolicyManager,
-///      EntryPoint, or relayer) authorized to drive execution on the account by matching `msg.sender` rather than
-///      by verifying a signature. No contract exists at this address; it is hash-derived and deterministic across
-///      all chains, so if the protocol ever calls authenticate() on it the call naturally fails.
-address constant TRUSTED_EXECUTOR = address(uint160(uint256(keccak256("trustedExecutor"))));
-
 /// @notice Canonical model of the EIP-8130 default account: the behavior every EOA exhibits by default on an
 ///         EIP-8130 chain, expressed in Solidity. It handles batched execution and ERC-1271 signature validation,
 ///         and defers all authorization to the Keystore system contract.
 ///
 ///         Caller authorization:
 ///           - address(this) is always authorized (hardcoded), covering 8130 self-call batches
-///           - Trusted executors (PolicyManagers, relayers, EntryPoints) are registered as actors with
-///             TRUSTED_EXECUTOR as the authenticator in Keystore
+///           - any live, operational Keystore actor (admin scope 0x00, or an OPERATOR actor) may drive execution
+///             directly by matching `msg.sender`: an owner EOA, or a contract such as a PolicyManager, relayer,
+///             or EntryPoint registered as an operational actor
 ///
 /// @dev Not a deployment target. This describes the default EOA behavior applied natively on an EIP-8130 chain; it
 ///      is intentionally minimal and is NOT ERC-4337 compatible. An account that wants smart-account features (for
@@ -51,7 +46,7 @@ contract DefaultAccount is Receiver {
     /// @notice ERC-1271 sentinel returned for an invalid signature.
     bytes4 internal constant ERC1271_INVALID = 0xffffffff;
 
-    /// @notice The caller is neither the account itself nor a registered TRUSTED_EXECUTOR actor.
+    /// @notice The caller is neither the account itself nor a live, operational Keystore actor.
     error UnauthorizedCaller();
 
     /// @notice Deploys the account implementation bound to an Keystore instance.
@@ -66,7 +61,7 @@ contract DefaultAccount is Receiver {
 
     /// @notice Executes a batch of calls from the account; reverts the entire batch if any call fails.
     ///
-    /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a TRUSTED_EXECUTOR actor.
+    /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a live operational actor.
     /// @dev Bubbles up the inner call's revert reason verbatim (a reason-less revert propagates as an empty revert).
     ///
     /// @param calls Ordered calls to execute, each as (target, value, data).
@@ -82,7 +77,7 @@ contract DefaultAccount is Receiver {
     /// @notice Executes a single call from the account.
     ///
     /// @dev Equivalent to a one-element {executeBatch}. Included for selector-compatibility with common existing wallet implementations.
-    /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a TRUSTED_EXECUTOR actor.
+    /// @dev Reverts with UnauthorizedCaller when the caller is neither the account nor a live operational actor.
     /// @dev Bubbles up the inner call's revert reason verbatim (a reason-less revert propagates as an empty revert).
     ///
     /// @param target Address the account calls.
@@ -126,7 +121,7 @@ contract DefaultAccount is Receiver {
     ///
     /// @param caller Address to check.
     ///
-    /// @return True if `caller` is the account itself or a registered TRUSTED_EXECUTOR actor.
+    /// @return True if `caller` is the account itself or a live, operational Keystore actor.
     function isAuthorizedCaller(address caller) external view returns (bool) {
         return _isAuthorizedCaller(caller);
     }
@@ -135,18 +130,18 @@ contract DefaultAccount is Receiver {
     //  INTERNALS
     // ══════════════════════════════════════════════
 
-    /// @dev Authorized if `caller` is the account itself, or holds the TRUSTED_EXECUTOR authenticator with an
-    ///      unexpired config AND operational authority. Expiry: 0 means none; a non-zero expiry is enforced so a
-    ///      user-set expiry is honored on the execution path. Scope: driving execution requires operational
-    ///      authority ({Scopes.isOperator}) — the unrestricted admin (scope == 0x00) or an OPERATOR actor.
-    ///      OPERATOR is more permissive than POLICY and the two do not combine: a POLICY-only actor must route
-    ///      every call through its manager, so granting it direct executeBatch would bypass that gate; fail closed.
-    ///      Sharing {Scopes.isOperator} keeps the execution and signing (ERC-1271) authorization surfaces aligned.
+    /// @dev Authorized if `caller` is the account itself, or is a live actor with operational authority. The
+    ///      `authenticator != address(0)` liveness check must run before the scope check: {Keystore.getActorConfig}
+    ///      zeroes any unknown/revoked/expired actor (so expiry is already enforced there), and {Scopes.isOperator}
+    ///      treats scope 0 as the unrestricted admin, so gating on scope alone would authorize every unregistered
+    ///      caller. Scope: driving execution requires operational authority ({Scopes.isOperator}), i.e. the
+    ///      unrestricted admin (scope == 0x00) or an OPERATOR actor; a POLICY-only actor is not operational and must
+    ///      route every call through its manager. Sharing {Scopes.isOperator} keeps the execution and signing
+    ///      (ERC-1271) authorization surfaces aligned.
     function _isAuthorizedCaller(address caller) internal view virtual returns (bool) {
         if (caller == address(this)) return true;
         Keystore.ActorConfig memory config = KEYSTORE.getActorConfig(address(this), ActorId.fromAddress(caller));
-        if (config.authenticator != TRUSTED_EXECUTOR) return false;
-        if (config.expiry != 0 && block.timestamp > config.expiry) return false;
+        if (config.authenticator == address(0)) return false;
         return Scopes.isOperator(config.scope);
     }
 }

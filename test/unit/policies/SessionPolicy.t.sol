@@ -4,7 +4,6 @@ pragma solidity ^0.8.30;
 import {Keystore} from "../../../src/Keystore.sol";
 import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../../src/interfaces/ITransactionContext.sol";
-import {TRUSTED_EXECUTOR} from "../../../src/accounts/DefaultAccount.sol";
 
 import {PolicyManager} from "../../../src/policies/PolicyManager.sol";
 import {SessionPolicy} from "../../../src/policies/SessionPolicy.sol";
@@ -893,7 +892,7 @@ contract SessionPolicyTest is KeystoreTest {
         });
         Keystore.InitialActor memory mgr = Keystore.InitialActor({
             actorId: bytes32(uint256(uint160(address(manager)))),
-            authenticator: TRUSTED_EXECUTOR,
+            authenticator: k1Authenticator,
             scope: 0,
             policyData: ""
         });
