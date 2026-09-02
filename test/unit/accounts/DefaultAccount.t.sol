@@ -96,6 +96,25 @@ contract DefaultAccountTest is KeystoreTest {
             .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1))));
     }
 
+    /// @notice An operational actor with a non-k1 authenticator (e.g. delegate) cannot drive executeBatch directly.
+    /// @dev Direct execution is restricted to k1, where the actorId-address is the authenticating principal. A
+    ///      delegate actor keys on an address but authorizes only via that account's admin signature, so it must not
+    ///      drive execution merely by being msg.sender; the k1 guard fails closed with UnauthorizedCaller.
+    function test_executeBatch_revert_nonK1ActorCaller(uint256 execSeed) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+
+        address actor = address(uint160(bound(execSeed, 10, type(uint160).max)));
+        vm.assume(actor != account && actor != vm.addr(ACTOR_PK));
+
+        // Operational (admin-scope) actor authenticated via the delegate authenticator, not k1.
+        _authorizeActor(account, ACTOR_PK, bytes32(uint256(uint160(actor))), address(delegateAuthenticator));
+
+        vm.prank(actor);
+        vm.expectRevert(DefaultAccount.UnauthorizedCaller.selector);
+        DefaultAccount(payable(account))
+            .executeBatch(_singleCall(address(target), 0, abi.encodeCall(MockTarget.setValue, (1))));
+    }
+
     /// @notice A failing inner call aborts the whole batch, bubbling the inner revert reason verbatim.
     /// @dev Exercises the failure leg of the low-level call; fuzzes the ETH value carried by the failing call.
     function test_executeBatch_revert_bubblesInnerRevert(uint256 value) public {
@@ -489,6 +508,21 @@ contract DefaultAccountTest is KeystoreTest {
         vm.assume(actor != account && actor != vm.addr(ACTOR_PK));
 
         _authorizeActorWithScope(account, ACTOR_PK, bytes32(uint256(uint160(actor))), k1Authenticator, SCOPE_SELF_PAYER);
+
+        assertFalse(DefaultAccount(payable(account)).isAuthorizedCaller(actor));
+    }
+
+    /// @notice A registered operational actor with a non-k1 authenticator (e.g. delegate) is not an authorized caller.
+    /// @dev Locks in the k1 restriction: only k1 actors (address == principal) may drive execution directly. A
+    ///      delegate actor is operational and address-keyed but authorizes via its account's admin signature, so the
+    ///      direct-call path must reject it.
+    function test_isAuthorizedCaller_success_nonK1ActorNotAuthorized(uint256 execSeed) public {
+        (address account,) = _createK1Account(ACTOR_PK);
+
+        address actor = address(uint160(bound(execSeed, 10, type(uint160).max)));
+        vm.assume(actor != account && actor != vm.addr(ACTOR_PK));
+
+        _authorizeActor(account, ACTOR_PK, bytes32(uint256(uint160(actor))), address(delegateAuthenticator));
 
         assertFalse(DefaultAccount(payable(account)).isAuthorizedCaller(actor));
     }
