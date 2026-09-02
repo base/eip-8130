@@ -97,9 +97,7 @@ contract DefaultAccountTest is KeystoreTest {
     }
 
     /// @notice An operational actor with a non-k1 authenticator (e.g. delegate) cannot drive executeBatch directly.
-    /// @dev Direct execution is restricted to k1, where the actorId-address is the authenticating principal. A
-    ///      delegate actor keys on an address but authorizes only via that account's admin signature, so it must not
-    ///      drive execution merely by being msg.sender; the k1 guard fails closed with UnauthorizedCaller.
+    /// @dev The direct-call path is k1-only, so a non-k1 operational actor reverts UnauthorizedCaller.
     function test_executeBatch_revert_nonK1ActorCaller(uint256 execSeed) public {
         (address account,) = _createK1Account(ACTOR_PK);
 
@@ -513,9 +511,7 @@ contract DefaultAccountTest is KeystoreTest {
     }
 
     /// @notice A registered operational actor with a non-k1 authenticator (e.g. delegate) is not an authorized caller.
-    /// @dev Locks in the k1 restriction: only k1 actors (address == principal) may drive execution directly. A
-    ///      delegate actor is operational and address-keyed but authorizes via its account's admin signature, so the
-    ///      direct-call path must reject it.
+    /// @dev Locks in the k1-only restriction on the direct-call path.
     function test_isAuthorizedCaller_success_nonK1ActorNotAuthorized(uint256 execSeed) public {
         (address account,) = _createK1Account(ACTOR_PK);
 

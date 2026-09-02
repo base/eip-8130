@@ -25,9 +25,7 @@ struct Call {
 ///         Caller authorization:
 ///           - address(this) is always authorized (hardcoded), covering 8130 self-call batches
 ///           - a live, operational k1 actor (admin scope 0x00, or an OPERATOR actor) may drive execution directly
-///             by matching `msg.sender`: an owner EOA, or a contract such as a PolicyManager, relayer, or EntryPoint
-///             registered as an operational k1 actor. Non-k1 actors (e.g. delegate, passkey) must use their
-///             signature path and cannot drive execution merely by being `msg.sender`
+///             by matching `msg.sender`, e.g. an owner EOA or a contract registered as an operational k1 actor
 ///
 /// @dev Not a deployment target. This describes the default EOA behavior applied natively on an EIP-8130 chain; it
 ///      is intentionally minimal and is NOT ERC-4337 compatible. An account that wants smart-account features (for
@@ -131,18 +129,10 @@ contract DefaultAccount is Receiver {
     //  INTERNALS
     // ══════════════════════════════════════════════
 
-    /// @dev Authorized if `caller` is the account itself, or a live k1 actor with operational authority. The
-    ///      authenticator must be the k1 sentinel. Direct execution authorizes on `msg.sender` matching the actor's
-    ///      address, which is sound only when that address IS the authenticating principal: true for k1 (an
-    ///      EOA/contract whose actorId is its own address), but not for authenticators whose address actorId is a
-    ///      proxy for other authorization logic. A {DelegateAuthenticator} actor, for instance, keys on a delegate
-    ///      account's address yet authorizes only via that account's admin signature; letting it drive execution by
-    ///      being `msg.sender` would skip that check (any operator of the delegate account could then drive this
-    ///      one). Restricting to k1 forces every other authenticator through its signature path, and also subsumes
-    ///      liveness ({Keystore.getActorConfig} zeroes an unknown/revoked/expired actor to authenticator address(0),
-    ///      which is not k1). Operational authority ({Scopes.isOperator}) is still required: the unrestricted admin
-    ///      (scope == 0x00) or an OPERATOR actor; a POLICY-only actor is not operational. Sharing {Scopes.isOperator}
-    ///      keeps the execution and signing (ERC-1271) authorization surfaces aligned.
+    /// @dev Authorized if `caller` is the account itself, or a live, operational k1 actor. The direct-call path is
+    ///      restricted to the k1 authenticator; the same check enforces liveness ({Keystore.getActorConfig} zeroes a
+    ///      non-live actor to authenticator address(0)). Operational authority ({Scopes.isOperator}) is the
+    ///      unrestricted admin (scope == 0x00) or an OPERATOR actor.
     function _isAuthorizedCaller(address caller) internal view virtual returns (bool) {
         if (caller == address(this)) return true;
         Keystore.ActorConfig memory config = KEYSTORE.getActorConfig(address(this), ActorId.fromAddress(caller));
