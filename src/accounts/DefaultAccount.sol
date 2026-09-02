@@ -24,9 +24,8 @@ struct Call {
 ///
 ///         Caller authorization:
 ///           - address(this) is always authorized (hardcoded), covering 8130 self-call batches
-///           - any live, operational Keystore actor (admin scope 0x00, or an OPERATOR actor) may drive execution
-///             directly by matching `msg.sender`: an owner EOA, or a contract such as a PolicyManager, relayer,
-///             or EntryPoint registered as an operational actor
+///           - a live, operational k1 actor (admin scope 0x00, or an OPERATOR actor) may drive execution directly
+///             by matching `msg.sender`, e.g. an owner EOA or a contract registered as an operational k1 actor
 ///
 /// @dev Not a deployment target. This describes the default EOA behavior applied natively on an EIP-8130 chain; it
 ///      is intentionally minimal and is NOT ERC-4337 compatible. An account that wants smart-account features (for
@@ -46,7 +45,7 @@ contract DefaultAccount is Receiver {
     /// @notice ERC-1271 sentinel returned for an invalid signature.
     bytes4 internal constant ERC1271_INVALID = 0xffffffff;
 
-    /// @notice The caller is neither the account itself nor a live, operational Keystore actor.
+    /// @notice The caller is neither the account itself nor a live, operational k1 actor.
     error UnauthorizedCaller();
 
     /// @notice Deploys the account implementation bound to an Keystore instance.
@@ -121,7 +120,7 @@ contract DefaultAccount is Receiver {
     ///
     /// @param caller Address to check.
     ///
-    /// @return True if `caller` is the account itself or a live, operational Keystore actor.
+    /// @return True if `caller` is the account itself or a live, operational k1 actor.
     function isAuthorizedCaller(address caller) external view returns (bool) {
         return _isAuthorizedCaller(caller);
     }
@@ -130,18 +129,14 @@ contract DefaultAccount is Receiver {
     //  INTERNALS
     // ══════════════════════════════════════════════
 
-    /// @dev Authorized if `caller` is the account itself, or is a live actor with operational authority. The
-    ///      `authenticator != address(0)` liveness check must run before the scope check: {Keystore.getActorConfig}
-    ///      zeroes any unknown/revoked/expired actor (so expiry is already enforced there), and {Scopes.isOperator}
-    ///      treats scope 0 as the unrestricted admin, so gating on scope alone would authorize every unregistered
-    ///      caller. Scope: driving execution requires operational authority ({Scopes.isOperator}), i.e. the
-    ///      unrestricted admin (scope == 0x00) or an OPERATOR actor; a POLICY-only actor is not operational and must
-    ///      route every call through its manager. Sharing {Scopes.isOperator} keeps the execution and signing
-    ///      (ERC-1271) authorization surfaces aligned.
+    /// @dev Authorized if `caller` is the account itself, or a live, operational k1 actor. The direct-call path is
+    ///      restricted to the k1 authenticator; the same check enforces liveness ({Keystore.getActorConfig} zeroes a
+    ///      non-live actor to authenticator address(0)). Operational authority ({Scopes.isOperator}) is the
+    ///      unrestricted admin (scope == 0x00) or an OPERATOR actor.
     function _isAuthorizedCaller(address caller) internal view virtual returns (bool) {
         if (caller == address(this)) return true;
         Keystore.ActorConfig memory config = KEYSTORE.getActorConfig(address(this), ActorId.fromAddress(caller));
-        if (config.authenticator == address(0)) return false;
+        if (config.authenticator != KEYSTORE.K1_AUTHENTICATOR()) return false;
         return Scopes.isOperator(config.scope);
     }
 }
