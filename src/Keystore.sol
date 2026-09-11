@@ -57,7 +57,9 @@ contract Keystore {
     /// @dev ABI-encodes as uint8. A locked account freezes every op except Unlock, IncrementLocalEpoch, and
     ///      AuthorizeActor (the last only as an add or expiry-only re-lease that outlives the unlock floor; see
     ///      {_applyAuthorize}). Unlock additionally self-checks it is hard-locked. Lock and Unlock are Local-only
-    ///      and must each be the batch's only op.
+    ///      and must each be the batch's only op. AuthorizeTransientActor is frozen while locked (it is not exempt)
+    ///      and is otherwise unrestricted on either channel. Append-only: new ops go at the end to preserve the
+    ///      uint8 wire values.
     enum ChangeType {
         // Authority ops (mutate who can act).
         AuthorizeActor, // payload: abi.encode(bytes32 actorId, ActorConfig cfg, bytes policyData); policyData empty or 52 bytes; cfg.expiry is the granted expiry
@@ -65,7 +67,10 @@ contract Keystore {
         // Environment ops (mutate the rules ops are checked against).
         IncrementLocalEpoch, // Either channel; payload: empty (length == 0 enforced)
         Lock, // Local only; payload: abi.encode(uint16 unlockDelay)
-        Unlock // Local only; payload: empty (length == 0 enforced)
+        Unlock, // Local only; payload: empty (length == 0 enforced)
+        // Ephemeral authority op: installs a transient (per-transaction) actor. Same payload as AuthorizeActor; the
+        // actor is written to the transient tier and cleared at transaction end. Frozen while locked.
+        AuthorizeTransientActor // payload: abi.encode(bytes32 actorId, ActorConfig cfg, bytes policyData)
     }
 
     /// @notice The replay domain a {SignedAccountChanges} batch is bound to.
@@ -179,6 +184,10 @@ contract Keystore {
     bytes32 public constant SIGNED_MESSAGE_TYPEHASH =
         keccak256("SignedMessageEnvelope(address account,uint256 chainId,bytes32 hash)");
 
+    /// @notice Domain tag mixed into every transient-actor storage-slot key, isolating the ephemeral tier's
+    ///         EIP-1153 transient slots from any other transient use.
+    bytes32 private constant TRANSIENT_ACTOR_NAMESPACE = keccak256("eip8130.transient.actor.v1");
+
     /// @notice Local-channel sequence low-half sentinel marking an unsequenced (JIT) batch. A {SignedAccountChanges}
     ///         whose low 32 bits equal this value does not consume a sequence, so it stays replayable until the local
     ///         epoch moves. Any op may use it, but Lock and Unlock must remain standalone. Sequenced batches may run up
@@ -253,6 +262,18 @@ contract Keystore {
     /// @param account The account whose actor was revoked.
     /// @param actorId The revoked actor's identifier.
     event ActorRevoked(address indexed account, bytes32 indexed actorId);
+
+    /// @notice Emitted when a transient (ephemeral) actor is materialized for the current transaction.
+    ///
+    /// @dev The actor is NOT persisted: it lives in EIP-1153 transient storage and is cleared automatically at
+    ///      transaction end (no corresponding revoke event is emitted). `actorData` mirrors {ActorAuthorized}'s
+    ///      packing and carries the admin-granted scope.
+    ///
+    /// @param account The account the transient actor was installed for.
+    /// @param actorId The transient actor's identifier.
+    /// @param actorData Tightly packed authorization surface (see {ActorAuthorized}): 32 bytes (config only) or 84
+    ///        bytes (config + policy).
+    event TransientActorInstalled(address indexed account, bytes32 indexed actorId, bytes actorData);
 
     /// @notice Emitted when a new account is created.
     ///
@@ -403,6 +424,10 @@ contract Keystore {
 
     /// @notice The signature envelope is empty (missing its leading type byte).
     error EmptySignatureEnvelope();
+
+    /// @notice An AuthorizeTransientActor change targeted the account's self-actorId, which is reserved for the
+    ///         inline key.
+    error TransientSelfActorForbidden();
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
     // STORAGE
@@ -721,6 +746,10 @@ contract Keystore {
                 _applyUnlock(account, batch.changes[i].payload);
                 continue;
             }
+            if (t == ChangeType.AuthorizeTransientActor) {
+                _applyAuthorizeTransient(account, batch.changes[i].payload);
+                continue;
+            }
             // Unreachable at runtime (the enum decoder rejects out-of-range values). Kept to force any future
             // ChangeType to be dispatched here rather than silently no-op'ing.
             revert UnknownChangeType();
@@ -769,8 +798,10 @@ contract Keystore {
             if (cfg.expiry != 0 && cfg.expiry <= _unlockFloor(account)) {
                 revert ExpiryDoesNotOutliveUnlock();
             }
-            // Live entry: expiry-only. Expired reads as empty ({_resolveActorConfig}), so that id is a new add.
-            ActorConfig memory current = _resolveActorConfig(account, actorId);
+            // Live entry: expiry-only. Expired reads as empty, so that id is a new add. Durable-only resolve: this
+            // guard governs the persistent slot we are about to write, so a transient twin must not count as current
+            // (transient installs are frozen while locked anyway, so this only matters for a same-tx install→lock).
+            ActorConfig memory current = _resolvePersistentActorConfig(account, actorId);
             if (current.authenticator != address(0)) {
                 (address manager, bytes32 commitment) = _slicePolicy(policyData);
                 ActorRecord storage rec = _actors[actorId][account];
@@ -850,6 +881,109 @@ contract Keystore {
         st.flags = flags | FLAG_UNLOCK_INITIATED;
         st.lockUnion = unlocksAt;
         emit AccountUnlockInitiated(account, unlocksAt);
+    }
+
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+    // TRANSIENT (EPHEMERAL) ACTOR TIER
+    // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
+
+    /// @dev AuthorizeTransientActor. `payload = abi.encode(bytes32 actorId, ActorConfig cfg, bytes policyData)` —
+    ///      the same shape as {_applyAuthorize}, but the actor is written to the ephemeral (transient) tier for the
+    ///      current transaction instead of being persisted. It then looks and resolves exactly like a durable actor
+    ///      for the rest of the transaction and clears automatically at transaction end.
+    ///
+    ///      Authorization is the batch's admin signature, checked once up front by {applySignedAccountChanges} (the
+    ///      signer's scope must be 0), so there is no separate proof or scope attenuation here — the admin grants the
+    ///      scope directly, exactly as it would for a durable {AuthorizeActor}. Replay is the existing epoch /
+    ///      sequence machinery of the signed batch. Frozen while the account is locked by the apply loop (this op is
+    ///      not lock-exempt), so there is no lock or expiry-window guard here.
+    ///
+    ///      Reuses the durable per-actor invariants: rejects the zero actorId, the self-actorId (reserved for the
+    ///      inline key), and a zero authenticator, and validates optional policy by length (empty or 52 bytes).
+    function _applyAuthorizeTransient(address account, bytes calldata payload) private {
+        (bytes32 actorId, ActorConfig memory cfg, bytes memory policyData) =
+            abi.decode(payload, (bytes32, ActorConfig, bytes));
+        if (actorId == bytes32(0)) {
+            revert InvalidActorId();
+        }
+        if (actorId == _selfActorId(account)) {
+            revert TransientSelfActorForbidden();
+        }
+        if (cfg.authenticator == address(0)) {
+            revert InvalidAuthenticator();
+        }
+        (address manager, bytes32 commitment) = _slicePolicy(policyData);
+        _storeTransientActor(account, actorId, cfg, manager, commitment);
+        _emitTransientActorInstalled(account, actorId, cfg, manager, commitment, policyData.length == 52);
+    }
+
+    /// @dev Base transient-storage slot for `actorId`'s ephemeral record: three consecutive EIP-1153 slots holding
+    ///      the packed config, the policy manager, and the policy commitment. Namespaced so the ephemeral tier can
+    ///      never collide with any other transient use.
+    function _transientBaseSlot(address account, bytes32 actorId) private pure returns (bytes32) {
+        return keccak256(abi.encode(TRANSIENT_ACTOR_NAMESPACE, account, actorId));
+    }
+
+    /// @dev Writes `cfg`/policy into the ephemeral tier for `actorId`. The config packs into one word using the same
+    ///      field layout as the persistent slot (authenticator ‖ expiry ‖ scope ‖ reserved). A non-zero config word
+    ///      marks the slot populated (a live actor always has a non-zero authenticator).
+    function _storeTransientActor(
+        address account,
+        bytes32 actorId,
+        ActorConfig memory cfg,
+        address manager,
+        bytes32 commitment
+    ) private {
+        bytes32 base = _transientBaseSlot(account, actorId);
+        uint256 packed =
+            (uint256(uint160(cfg.authenticator)) << 96) | (uint256(cfg.expiry) << 48) | (uint256(cfg.scope) << 32);
+        uint256 mgr = uint256(uint160(manager));
+        assembly ("memory-safe") {
+            tstore(base, packed)
+            tstore(add(base, 1), mgr)
+            tstore(add(base, 2), commitment)
+        }
+    }
+
+    /// @dev Reads `actorId`'s ephemeral record, or the empty config (and zero policy) when none is installed. A zero
+    ///      config word means "no transient actor" (a live actor always has a non-zero authenticator).
+    function _loadTransientActor(address account, bytes32 actorId)
+        private
+        view
+        returns (ActorConfig memory cfg, address manager, bytes32 commitment)
+    {
+        bytes32 base = _transientBaseSlot(account, actorId);
+        uint256 packed;
+        uint256 mgr;
+        bytes32 comm;
+        assembly ("memory-safe") {
+            packed := tload(base)
+            mgr := tload(add(base, 1))
+            comm := tload(add(base, 2))
+        }
+        if (packed == 0) {
+            return (_emptyActorConfig(), address(0), bytes32(0));
+        }
+        cfg = ActorConfig({
+            authenticator: address(uint160(packed >> 96)), expiry: uint48(packed >> 48), scope: uint16(packed >> 32)
+        });
+        manager = address(uint160(mgr));
+        commitment = comm;
+    }
+
+    /// @dev Emit TransientActorInstalled with the same tightly packed payload as {ActorAuthorized}.
+    function _emitTransientActorInstalled(
+        address account,
+        bytes32 actorId,
+        ActorConfig memory cfg,
+        address manager,
+        bytes32 commitment,
+        bool policyAttached
+    ) private {
+        bytes memory actorData = policyAttached
+            ? abi.encodePacked(cfg.authenticator, cfg.expiry, cfg.scope, bytes4(0), manager, commitment)
+            : abi.encodePacked(cfg.authenticator, cfg.expiry, cfg.scope, bytes4(0));
+        emit TransientActorInstalled(account, actorId, actorData);
     }
 
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
@@ -1012,19 +1146,41 @@ contract Keystore {
     {
         config = _resolveActorConfig(account, actorId);
         if (config.authenticator != address(0)) {
-            ActorRecord storage rec = _actors[actorId][account];
-            policyManager = rec.policyManager;
-            policyCommitment = rec.policyCommitment;
+            (policyManager, policyCommitment) = _resolvePolicySlots(account, actorId);
         }
     }
 
     /// @dev The single liveness resolver behind every read surface ({getActorConfig}, {getActorWithPolicy},
-    ///      {getPolicyCommitment}, {getPolicyManager}). A populated _actors[].config entry returns verbatim unless expired;
-    ///      the k1 self (inline in AccountState) resolves to a native ecrecover owner unless disabled or expired;
-    ///      anything unknown/revoked/disabled/expired resolves to the all-zero (empty) config. Centralizing this is
-    ///      what makes "expired" read identically to "revoked" on every surface — the invariant that lets a node
-    ///      garbage-collect an expired actor's slots without changing anything observable on-chain.
+    ///      {getPolicyCommitment}, {getPolicyManager}). Persistent-first, then the ephemeral (transient) tier:
+    ///      resolve the durable config ({_resolvePersistentActorConfig}) and, only when that is empty, fall back to
+    ///      any transient actor installed for the current transaction. Persistent ALWAYS wins, so a transient
+    ///      install can never shadow or downgrade a durable actor. A transient actor is otherwise resolved exactly
+    ///      like a durable one (same `>= K1_AUTHENTICATOR` populated test, same expiry gating), which is what makes
+    ///      it indistinguishable to every consumer for the rest of the transaction.
+    ///
+    ///      Centralizing this is what makes "expired" read identically to "revoked" on every surface — the invariant
+    ///      that lets a node garbage-collect an expired actor's slots without changing anything observable on-chain.
     function _resolveActorConfig(address account, bytes32 actorId) private view returns (ActorConfig memory) {
+        ActorConfig memory config = _resolvePersistentActorConfig(account, actorId);
+        if (config.authenticator != address(0)) {
+            return config;
+        }
+
+        // Durable (explicit + inline self) resolves empty: fall back to the ephemeral tier.
+        (ActorConfig memory transientConfig,,) = _loadTransientActor(account, actorId);
+        if (transientConfig.authenticator >= K1_AUTHENTICATOR) {
+            return _isExpired(transientConfig.expiry) ? _emptyActorConfig() : transientConfig;
+        }
+        return transientConfig;
+    }
+
+    /// @dev The durable-only liveness resolver: the persistent {_actors} home and the inline k1 self, WITHOUT the
+    ///      transient fallback. A populated _actors[].config entry returns verbatim unless expired; the k1 self
+    ///      (inline in AccountState) resolves to a native ecrecover owner unless disabled or expired; anything
+    ///      unknown/revoked/disabled/expired resolves to the all-zero (empty) config. Used where transient authority
+    ///      must not bleed in: the {_resolveActorConfig} base (so a transient twin can never shadow or downgrade a
+    ///      durable actor), and the locked expiry-only guard (which governs the durable slot it is about to write).
+    function _resolvePersistentActorConfig(address account, bytes32 actorId) private view returns (ActorConfig memory) {
         // Common path first: the inline k1 self. A clear FLAG_REVOKE_DEFAULT_EOA means the inline self is live, so
         // resolve it from AccountState alone (all-zero = full owner). When the flag is set the inline self is off —
         // either a non-k1 self lives in _actors[].config, or the self was revoked — so fall through to the shared home.
@@ -1061,7 +1217,8 @@ contract Keystore {
         if (_resolveActorConfig(account, actorId).authenticator == address(0)) {
             return bytes32(0);
         }
-        return _actors[actorId][account].policyCommitment;
+        (, bytes32 commitment) = _resolvePolicySlots(account, actorId);
+        return commitment;
     }
 
     /// @notice The actor's policy manager, or 0 when the actor is not live. See {_resolveActorConfig}.
@@ -1069,7 +1226,25 @@ contract Keystore {
         if (_resolveActorConfig(account, actorId).authenticator == address(0)) {
             return address(0);
         }
-        return _actors[actorId][account].policyManager;
+        (address manager,) = _resolvePolicySlots(account, actorId);
+        return manager;
+    }
+
+    /// @dev The policy (manager, commitment) co-located with `actorId`'s live config, read from whichever tier
+    ///      holds that config: the persistent {_actors} record for an explicit actor or the inline k1 self (whose
+    ///      policy co-locates in _actors), or the ephemeral tier for a transient actor. Callers gate on liveness
+    ///      first via {_resolveActorConfig}.
+    function _resolvePolicySlots(address account, bytes32 actorId)
+        private
+        view
+        returns (address manager, bytes32 commitment)
+    {
+        ActorRecord storage rec = _actors[actorId][account];
+        if (rec.config.authenticator >= K1_AUTHENTICATOR || actorId == _selfActorId(account)) {
+            return (rec.policyManager, rec.policyCommitment);
+        }
+        // The live config came from the ephemeral tier.
+        (, manager, commitment) = _loadTransientActor(account, actorId);
     }
 
     /// @notice Returns the account's replay counters: the multichain counter and the local channel's epoch and
@@ -1449,15 +1624,21 @@ contract Keystore {
         return (actorId, _resolveExplicitActor(account, actorId, authenticator));
     }
 
-    /// @dev Resolves an explicit _actors-homed actor: requires a matching authenticator and an unexpired entry,
-    ///      returning its scope. Shared by the non-k1 (_authenticate) and k1 other-actor (_authenticateK1) paths.
-    ///      Reverts with AuthenticatorMismatch or ActorExpired.
+    /// @dev Resolves an explicit actor: requires a matching authenticator and an unexpired entry, returning its
+    ///      scope. Shared by the non-k1 (_authenticate) and k1 other-actor (_authenticateK1) paths. The durable
+    ///      {_actors} home is checked first; when its slot is empty the ephemeral (transient) tier is consulted, so
+    ///      a transient actor authenticates exactly like a durable one. Persistent always wins. Reverts with
+    ///      AuthenticatorMismatch or ActorExpired.
     function _resolveExplicitActor(address account, bytes32 actorId, address expectedAuthenticator)
         private
         view
         returns (uint16 scope)
     {
         ActorConfig memory config = _actors[actorId][account].config;
+        if (config.authenticator < K1_AUTHENTICATOR) {
+            // Durable slot empty: fall back to the ephemeral tier (empty if no transient actor is installed).
+            (config,,) = _loadTransientActor(account, actorId);
+        }
         if (config.authenticator != expectedAuthenticator) {
             revert AuthenticatorMismatch();
         }

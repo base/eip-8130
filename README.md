@@ -37,6 +37,10 @@ The canonical EIP-8130 authenticator set. secp256k1 (ECDSA) is built into `Keyst
 | `WebAuthnAuthenticator` | secp256r1 / P-256 (WebAuthn) |
 | `DelegateAuthenticator` | Delegated validation (1-hop) |
 
+### Transient (ephemeral) actors
+
+`ChangeType.AuthorizeTransientActor` is a signed account change (same payload shape as `AuthorizeActor`) that installs an actor into an EIP-1153 transient tier for the current transaction only — never persisted, cleared automatically at transaction end. It rides the existing `applySignedAccountChanges` path: the batch's admin signature and the existing epoch/sequence replay machinery authorize it, exactly like any other change, so there is no separate proof to check. The unified actor read is persistent-first, transient-fallback (identical shape), so a transient install can never shadow or downgrade a durable actor, and a transient actor is otherwise indistinguishable from a durable one for the rest of the transaction.
+
 ## Usage
 
 ### Importing an existing wallet

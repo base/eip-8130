@@ -154,6 +154,23 @@ contract KeystoreTest is Test {
         });
     }
 
+    /// @dev An AuthorizeTransientActor change: same payload shape as AuthorizeActor, but the actor is written to the
+    ///      ephemeral (transient) tier for the current transaction only.
+    function _authorizeTransientChange(
+        bytes32 actorId,
+        address auth,
+        uint16 scope,
+        uint48 expiry,
+        bytes memory policyData
+    ) internal pure returns (Keystore.AccountChange memory) {
+        return Keystore.AccountChange({
+            changeType: Keystore.ChangeType.AuthorizeTransientActor,
+            payload: abi.encode(
+                actorId, Keystore.ActorConfig({authenticator: auth, scope: scope, expiry: expiry}), policyData
+            )
+        });
+    }
+
     function _revokeChange(bytes32 actorId) internal pure returns (Keystore.AccountChange memory) {
         return Keystore.AccountChange({changeType: Keystore.ChangeType.RevokeActor, payload: abi.encode(actorId)});
     }
