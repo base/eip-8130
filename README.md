@@ -37,9 +37,22 @@ The canonical EIP-8130 authenticator set. secp256k1 (ECDSA) is built into `Keyst
 | `WebAuthnAuthenticator` | secp256r1 / P-256 (WebAuthn) |
 | `DelegateAuthenticator` | Delegated validation (1-hop) |
 
+### Signed account changes: channels & epochs
+
+`applySignedAccountChanges` uses two symmetric replay **tracks** that differ only in what the signature binds:
+
+| Channel | Binds | Replay word | Modes | Revocation |
+|---------|-------|-------------|-------|------------|
+| `Local` | `block.chainid` (this chain) | `localEpoch(32) ‖ localSequence(32)` | sequenced (one-shot) or JIT | `IncrementEpoch` on `Local` |
+| `Multichain` | chainId `0` (all chains / global) | `globalEpoch(32) ‖ globalSequence(32)` | sequenced (one-shot) or JIT | `IncrementEpoch` on `Multichain` |
+
+Both channels share one grammar: the `sequence` word is `epoch(32, high) ‖ counter(32, low)`. A counter equal to `UNSEQUENCED` marks a **JIT (unsequenced)** batch that consumes no counter and stays replayable until its track's epoch moves; any other counter is a one-shot batch consumed against that track. `IncrementEpoch` bumps the epoch of the channel it rides on (`Local` → local, `Multichain` → global), resetting that track's counter and retiring every unlanded signature on it.
+
+The two tracks are **independent**: this-chain (`Local`) activity never advances the global counter, so a global one-shot batch (e.g. "install this admin on every chain") stays applicable across chains no matter how much local churn happens. JIT on the `Multichain` channel is the reusable, all-chains grant — one admin signature that any relayer may replay on every chain until an admin lands a `Multichain` `IncrementEpoch` (per chain) to revoke it.
+
 ### Transient (ephemeral) actors
 
-`ChangeType.AuthorizeTransientActor` is a signed account change (same payload shape as `AuthorizeActor`) that installs an actor into an EIP-1153 transient tier for the current transaction only — never persisted, cleared automatically at transaction end. It rides the existing `applySignedAccountChanges` path: the batch's admin signature and the existing epoch/sequence replay machinery authorize it, exactly like any other change, so there is no separate proof to check. The unified actor read is persistent-first, transient-fallback (identical shape), so a transient install can never shadow or downgrade a durable actor, and a transient actor is otherwise indistinguishable from a durable one for the rest of the transaction.
+`ChangeType.AuthorizeTransientActor` is a signed account change (same payload shape as `AuthorizeActor`) that installs an actor into an EIP-1153 transient tier for the current transaction only — never persisted, cleared automatically at transaction end. It rides the existing `applySignedAccountChanges` path: the batch's admin signature and the epoch/sequence replay machinery (above) authorize it, exactly like any other change, so there is no separate proof to check. Because both channels support JIT, an install can be **reusable** — a `Local` JIT grant is replayable on this chain, and a `Multichain` JIT grant is replayable on every chain — with no nonce burned, bounded by the grant's own `expiry` and revocable by the matching `IncrementEpoch`. The unified actor read is persistent-first, transient-fallback (identical shape), so a transient install can never shadow or downgrade a durable actor, and a transient actor is otherwise indistinguishable from a durable one for the rest of the transaction.
 
 ## Usage
 

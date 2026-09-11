@@ -408,7 +408,7 @@ contract ImportAccountTest is KeystoreTest {
 
     function _assertUnimported(address account) internal view {
         assertEq(keystore.getChangeSequences(account).localSequence, 0);
-        assertEq(keystore.getChangeSequences(account).multichain, 0);
+        assertEq(keystore.getChangeSequences(account).globalSequence, 0);
         assertEq(keystore.getChangeSequences(account).localEpoch, 0);
     }
 
@@ -511,7 +511,7 @@ contract ImportAccountTest is KeystoreTest {
             _one(_authorizeChange(bytes32(uint256(uint160(device))), address(k1Authenticator), 0x00, UNBOUNDED, ""))
         );
 
-        assertEq(keystore.getChangeSequences(eoa).multichain, 1);
+        assertEq(keystore.getChangeSequences(eoa).globalSequence, 1);
         assertEq(keystore.getChangeSequences(eoa).localSequence, 0);
 
         vm.expectRevert(Keystore.AlreadyInitialized.selector);
@@ -777,7 +777,7 @@ contract ImportAccountTest is KeystoreTest {
         wallet.importToKeystore();
 
         assertEq(keystore.getChangeSequences(address(wallet)).localSequence, 1);
-        assertEq(keystore.getChangeSequences(address(wallet)).multichain, 0);
+        assertEq(keystore.getChangeSequences(address(wallet)).globalSequence, 0);
         assertTrue(_isActor(address(wallet), bytes32(uint256(uint160(owner)))));
     }
 
@@ -835,7 +835,7 @@ contract ImportAccountTest is KeystoreTest {
 
         // Bootstrap sets localSequence to 1; the other channels stay untouched.
         assertEq(keystore.getChangeSequences(eoa).localSequence, 1);
-        assertEq(keystore.getChangeSequences(eoa).multichain, 0);
+        assertEq(keystore.getChangeSequences(eoa).globalSequence, 0);
         assertEq(keystore.getChangeSequences(eoa).localEpoch, 0);
 
         // FLAG_REVOKE_DEFAULT_EOA is cleared: the self k1 entry re-enabled the inline default EOA. Read the flags

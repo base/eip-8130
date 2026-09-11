@@ -86,6 +86,35 @@ contract TransientActorTest is KeystoreTest {
         assertTrue(_isActor(account, leafActorId));
     }
 
+    /// @notice The motivating case: a reusable, all-chains install grant. A global (Multichain) JIT batch installs
+    ///         the transient actor, consumes no counter, and is replayable on every chain until the global epoch moves.
+    function test_install_viaGlobalUnsequenced_reusable() public {
+        (, uint32 gSeqBefore) = _globalEpochSeq(account);
+        _applyGlobalUnsequenced(
+            ADMIN_PK,
+            account,
+            _one(_authorizeTransientChange(leafActorId, address(p256Authenticator), Scopes.OPERATOR, UNBOUNDED, ""))
+        );
+        assertTrue(_isActor(account, leafActorId));
+        (, uint32 gSeqAfter) = _globalEpochSeq(account);
+        assertEq(gSeqAfter, gSeqBefore); // reusable: no global counter burned
+    }
+
+    /// @notice A reusable (JIT) install of an already-expired grant is silently skipped, mirroring _applyAuthorize,
+    ///         so a lapsed reusable grant cannot keep materializing an inert actor.
+    function test_install_jitExpired_skipped() public {
+        _applyGlobalUnsequenced(
+            ADMIN_PK,
+            account,
+            _one(
+                _authorizeTransientChange(
+                    leafActorId, address(p256Authenticator), Scopes.OPERATOR, uint48(block.timestamp - 1), ""
+                )
+            )
+        );
+        assertFalse(_isActor(account, leafActorId));
+    }
+
     function test_persistentWins_overTransient() public {
         // A durable actor at the leafActorId is never shadowed or downgraded by a transient install.
         _authorizeActorWithScope(account, ADMIN_PK, leafActorId, address(webAuthnAuthenticator), Scopes.SELF_PAYER);

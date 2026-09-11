@@ -16,11 +16,17 @@ contract Keystore {
     // STRUCTS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice Per-account replay counters for signed changes.
+    /// @notice Per-account replay counters for signed changes. Two symmetric tracks — Local (this-chain, binds
+    ///         block.chainid) and Multichain/global (all-chains, binds chainId 0) — each with its own epoch and
+    ///         counter. A track's epoch is bumped by an IncrementEpoch on that channel and invalidates every
+    ///         unlanded signature on that track; a track's counter is consumed by that channel's sequenced batches
+    ///         (a JIT/UNSEQUENCED batch consumes none). The tracks are independent so this-chain activity never
+    ///         desyncs the global counter across chains.
     struct ChangeSequences {
-        uint64 multichain; // chain_id 0 (multichain channel)
-        uint32 localEpoch; // local channel epoch; incremented by IncrementLocalEpoch, invalidates unlanded local signatures
-        uint32 localSequence; // current local counter; reset to 0 by IncrementLocalEpoch
+        uint32 globalEpoch; // all-chains (Multichain) epoch; bumped by a Multichain IncrementEpoch
+        uint32 globalSequence; // all-chains (Multichain) counter; reset to 0 by a Multichain IncrementEpoch
+        uint32 localEpoch; // this-chain (Local) epoch; bumped by a Local IncrementEpoch
+        uint32 localSequence; // this-chain (Local) counter; reset to 0 by a Local IncrementEpoch
     }
 
     /// @notice An actor's authorization: authenticator, expiry, and scope. Field order matches the normative
@@ -54,7 +60,7 @@ contract Keystore {
 
     /// @notice The operation an {AccountChange} applies within an {applySignedAccountChanges} batch.
     ///
-    /// @dev ABI-encodes as uint8. A locked account freezes every op except Unlock, IncrementLocalEpoch, and
+    /// @dev ABI-encodes as uint8. A locked account freezes every op except Unlock, IncrementEpoch, and
     ///      AuthorizeActor (the last only as an add or expiry-only re-lease that outlives the unlock floor; see
     ///      {_applyAuthorize}). Unlock additionally self-checks it is hard-locked. Lock and Unlock are Local-only
     ///      and must each be the batch's only op. AuthorizeTransientActor is frozen while locked (it is not exempt)
@@ -65,7 +71,7 @@ contract Keystore {
         AuthorizeActor, // payload: abi.encode(bytes32 actorId, ActorConfig cfg, bytes policyData); policyData empty or 52 bytes; cfg.expiry is the granted expiry
         RevokeActor, // payload: abi.encode(bytes32 actorId)
         // Environment ops (mutate the rules ops are checked against).
-        IncrementLocalEpoch, // Either channel; payload: empty (length == 0 enforced)
+        IncrementEpoch, // Either channel; bumps that channel's epoch track (Local → local, Multichain → global); payload: empty (length == 0 enforced)
         Lock, // Local only; payload: abi.encode(uint16 unlockDelay)
         Unlock, // Local only; payload: empty (length == 0 enforced)
         // Ephemeral authority op: installs a transient (per-transaction) actor. Same payload as AuthorizeActor; the
@@ -75,10 +81,13 @@ contract Keystore {
 
     /// @notice The replay domain a {SignedAccountChanges} batch is bound to.
     ///
-    /// @dev {AccountChangeChannel.Local} binds `block.chainid` and carries the full local
-    ///      epoch machinery (see {SignedAccountChanges.sequence}); {AccountChangeChannel.Multichain} binds chainId 0 and keeps a plain
-    ///      monotonic counter with no epochs and no unsequenced (JIT) mode. {ChangeType.Lock} and {ChangeType.Unlock} are rejected on the
-    ///      Multichain channel; {ChangeType.IncrementLocalEpoch} is allowed on either channel.
+    /// @dev The two channels are symmetric replay tracks that differ only in what the digest binds:
+    ///      {AccountChangeChannel.Local} binds `block.chainid` (this chain); {AccountChangeChannel.Multichain} binds
+    ///      chainId 0 (the all-chains / global track, replayable on every chain). Each carries the SAME machinery —
+    ///      its own epoch and counter, and both sequenced and unsequenced (JIT) modes (see
+    ///      {SignedAccountChanges.sequence}). {ChangeType.Lock} and {ChangeType.Unlock} are rejected on the
+    ///      Multichain channel; {ChangeType.IncrementEpoch} is allowed on either channel and targets that channel's
+    ///      own epoch track.
     enum AccountChangeChannel {
         Local,
         Multichain
@@ -93,12 +102,13 @@ contract Keystore {
     /// @notice An ordered, atomic batch of account changes with its replay binding and signature.
     ///
     /// @dev `changes` are applied in order, all-or-nothing (intersection-strict: any rejected op reverts the whole
-    ///      batch). `sequence` is interpreted per `channel`:
-    ///        - Local: localEpoch(32, high) || localSequence(32, low). A low half equal to {UNSEQUENCED} marks the
-    ///          batch as unsequenced (JIT) — it does not consume a sequence (so it stays replayable until the epoch
-    ///          moves); any other low value is a sequenced batch consumed against the account's localSequence.
-    ///        - Multichain: a plain uint64 consumed against the account's multichainSequence; never {UNSEQUENCED},
-    ///          never carries an epoch.
+    ///      batch). `sequence` is interpreted identically on both channels as `epoch(32, high) || counter(32, low)`,
+    ///      against the channel's own track (Local → local epoch/sequence; Multichain → global epoch/sequence):
+    ///        - A low half equal to {UNSEQUENCED} marks the batch as unsequenced (JIT) — it consumes no counter (so
+    ///          it stays replayable until that track's epoch moves).
+    ///        - Any other low half is a sequenced batch consumed against that track's counter.
+    ///      The committed epoch must equal the track's current epoch, so bumping a track's epoch retires every
+    ///      unlanded signature (sequenced and JIT) on that track.
     ///      `signature` is the standard authenticator(20) || authenticator-data blob authenticating the signer.
     struct SignedAccountChanges {
         AccountChangeChannel channel;
@@ -111,14 +121,17 @@ contract Keystore {
     ///
     /// @dev Packed into a single storage slot; the field layout is normative (nodes read the raw slot for mempool
     ///      rate-limit tiering, see the EIP's Account Lock section). Field order and widths match the spec's
-    ///      account-state table: multichainSequence, localSequence, localEpoch, flags, lockUnion, defaultEOAExpiry,
-    ///      defaultEOAScope, then 1 reserved byte that MUST stay zero.
-    ///      The local replay counter is stored as two adjacent uint32 fields — `localSequence` (low) then `localEpoch`
-    ///      (high) — which occupy the same 8 bytes as, and read identically to, the single `localEpoch(32)||
-    ///      localSequence(32)` word committed in a signed batch's `sequence` (see {getChangeSequences}). Storing
-    ///      them split keeps the layout size-neutral (still one slot) while removing pack/unpack math from the hot path.
-    ///      The combined local word marks local initialization; the multichain counter covers global-only activity.
-    ///      {IncrementLocalEpoch} resets the sequence while keeping the combined local word non-zero.
+    ///      account-state table: globalSequence, globalEpoch, localSequence, localEpoch, flags, lockUnion,
+    ///      defaultEOAExpiry, defaultEOAScope, then 1 reserved byte that MUST stay zero.
+    ///      Each replay track is stored as two adjacent uint32 fields — `sequence` (low) then `epoch` (high) — which
+    ///      occupy the same 8 bytes as, and read identically to, the single `epoch(32)||sequence(32)` word committed
+    ///      in a signed batch's `sequence` (see {getChangeSequences}). Storing them split keeps the layout
+    ///      size-neutral (the two tracks are 16 bytes total, one slot with the other fields) while removing
+    ///      pack/unpack math from the hot path. The two tracks are symmetric — Local binds block.chainid, Multichain
+    ///      (global) binds chainId 0 — and independent, so this-chain (Local) activity never advances the global
+    ///      counter and thus never desyncs it across chains. Any non-zero counter or epoch on either track marks the
+    ///      account initialized. {IncrementEpoch} bumps the epoch of the channel it rides on and resets that track's
+    ///      sequence to 0, keeping that track's combined word non-zero.
     ///      See {FLAG_REVOKE_DEFAULT_EOA}, {FLAG_LOCKED}, and {FLAG_UNLOCK_INITIATED} for `flags` and `lockUnion`.
     ///      The defaultEOA* fields are the inline home for the account's own secp256k1 ("self") key, whose actorId is
     ///      `ActorId.fromAddress(account)`. When FLAG_REVOKE_DEFAULT_EOA is unset, a k1 signature recovering to the
@@ -128,9 +141,10 @@ contract Keystore {
     ///      self authenticator (e.g. a post-quantum verifier returning the self-actorId); the two homes are mutually
     ///      exclusive (see _authorizeActor).
     struct AccountState {
-        uint64 multichainSequence; // 8 bytes
-        uint32 localSequence; // 4 bytes – low half of the signed local word
-        uint32 localEpoch; // 4 bytes – high half of the signed local word
+        uint32 globalSequence; // 4 bytes – low half of the signed Multichain (all-chains) word
+        uint32 globalEpoch; // 4 bytes – high half of the signed Multichain (all-chains) word
+        uint32 localSequence; // 4 bytes – low half of the signed Local (this-chain) word
+        uint32 localEpoch; // 4 bytes – high half of the signed Local (this-chain) word
         uint8 flags; // 1 byte – bitfield: bit 0 REVOKE_DEFAULT_EOA, bit 1 LOCKED, bit 2 UNLOCK_INITIATED
         uint48 lockUnion; // 6 bytes – union: unlockDelay while UNLOCK_INITIATED clear, else unlocksAt (timestamp)
         uint48 defaultEOAExpiry; // 6 bytes – inline self k1 expiry (Unix seconds; 0 = no expiry)
@@ -356,7 +370,7 @@ contract Keystore {
     error ChangeRequiresLocalChannel();
 
     /// @notice A change payload did not match the shape required by its ChangeType (e.g. a non-empty payload on
-    ///         IncrementLocalEpoch / Unlock).
+    ///         IncrementEpoch / Unlock).
     error InvalidChangePayload();
 
     /// @notice A signed batch carried no changes. An empty batch is rejected so it can neither consume a sequence nor
@@ -610,23 +624,24 @@ contract Keystore {
     }
 
     /// @notice The sole signed-change entry point: applies an ordered, atomic batch of account changes (authorize,
-    ///         revoke, increment-local-epoch, lock, unlock) authenticated by `s.signature`.
+    ///         revoke, increment-epoch, lock, unlock) authenticated by `s.signature`.
     ///
-    /// @dev The governing axiom is Replay: a signed local change is valid only while it could still be validly
-    ///      applied — the committed local epoch must match and grants self-expire (`cfg.expiry > now`, unless
-    ///      `cfg.expiry == 0` which is the never-expiring sentinel).
+    /// @dev The governing axiom is Replay: a signed change is valid only while it could still be validly applied —
+    ///      the committed epoch must match its track's current epoch and grants self-expire (`cfg.expiry > now`,
+    ///      unless `cfg.expiry == 0` which is the never-expiring sentinel).
     ///
     ///      Reduction is NOT contract-enforced. Removing authority durably (revoke, shorter expiry, narrower scope)
-    ///      requires retiring the signatures that granted it, which on the local channel means a {IncrementLocalEpoch};
-    ///      the contract lets a bare reduction land, so pairing it with an increment is a wallet responsibility. A bare
-    ///      revoke (or expiry cut) is not durable while a replayable unsequenced grant for that actor is outstanding.
+    ///      requires retiring the signatures that granted it, which means an {IncrementEpoch} on the same channel
+    ///      (Local retires this-chain grants, Multichain retires global grants); the contract lets a bare reduction
+    ///      land, so pairing it with an increment is a wallet responsibility. A bare revoke (or expiry cut) is not
+    ///      durable while a replayable unsequenced grant for that actor is outstanding.
     ///
     ///      Authorization is flat: every signed account change is admin-only, so a single up-front scope check
     ///      (signer scope must be 0) authorizes the whole batch — there is no per-op authorization and no per-op
-    ///      sequencing restriction. Lock and Unlock are Local-only and must also be standalone; IncrementLocalEpoch is
+    ///      sequencing restriction. Lock and Unlock are Local-only and must also be standalone; IncrementEpoch is
     ///      allowed on either channel. Other ops may share a non-empty batch.
     ///
-    ///      Pipeline (in order): (1) split the sequence word; (2) reject a stale epoch on Local batches;
+    ///      Pipeline (in order): (1) split the sequence word; (2) reject a stale epoch against the channel's track;
     ///      (3) validate/advance the sequence counter BEFORE apply (reentrancy discipline); (4) compute the digest
     ///      via {_changesDigest}, authenticate, and reject a non-admin signer; (5) iterate
     ///      changes enforcing channel and lock policy (Lock/Unlock rejected on Multichain; RevokeActor and Lock
@@ -642,10 +657,10 @@ contract Keystore {
     {
         AccountState storage st = _accountState[account];
         bool isLocal = batch.channel == AccountChangeChannel.Local;
-        // A JIT (unsequenced) batch — local channel with the low sequence half == UNSEQUENCED — is the only replayable
-        // form (it consumes no counter). This gates the AuthorizeActor expiry fail-fast: only a replayable grant needs
-        // its expiry to bound replay. Multichain is never unsequenced, so this short-circuits false there.
-        bool isUnsequenced = isLocal && uint32(batch.sequence) == UNSEQUENCED;
+        // A JIT (unsequenced) batch — low sequence half == UNSEQUENCED — is the replayable form on EITHER channel: it
+        // consumes no counter, so it stays valid until its track's epoch moves. This gates the AuthorizeActor (and
+        // AuthorizeTransientActor) expiry fail-fast: only a replayable grant needs its expiry to bound replay.
+        bool isUnsequenced = uint32(batch.sequence) == UNSEQUENCED;
 
         // Reject an empty batch: a no-op signed change would otherwise consume a sequence (or initialize a fresh
         // account, below) without altering any configuration.
@@ -653,38 +668,38 @@ contract Keystore {
             revert EmptyChangeSet();
         }
 
-        // Epoch / sequence gate. An unsequenced (JIT) batch exists only on the local channel (low half ==
-        // UNSEQUENCED) and does not consume a counter; every other batch consumes its channel's counter.
-        if (isLocal) {
-            uint32 epoch = uint32(batch.sequence >> 32);
-            uint32 seq = uint32(batch.sequence);
-            if (epoch != st.localEpoch) {
-                revert StaleEpoch();
+        // Unified epoch / sequence gate. Both channels share one grammar: sequence == epoch(32, high) ||
+        // counter(32, low), interpreted against the channel's own track — Local (this-chain) uses localEpoch/
+        // localSequence, Multichain (global/all-chains) uses globalEpoch/globalSequence. A JIT (UNSEQUENCED) batch
+        // consumes no counter; any other batch consumes its track's counter. The tracks are independent, so this-chain
+        // activity never advances the global counter and thus never desyncs it across chains.
+        uint32 epoch = uint32(batch.sequence >> 32);
+        uint32 seq = uint32(batch.sequence);
+        uint32 curEpoch = isLocal ? st.localEpoch : st.globalEpoch;
+        if (epoch != curEpoch) {
+            revert StaleEpoch();
+        }
+        if (seq != UNSEQUENCED) {
+            uint32 curSeq = isLocal ? st.localSequence : st.globalSequence;
+            if (seq != curSeq) {
+                revert BadSequence(curSeq, seq);
             }
-            if (seq != UNSEQUENCED) {
-                if (seq != st.localSequence) {
-                    revert BadSequence(st.localSequence, seq);
-                }
-                if (seq >= UNSEQUENCED - 1) {
-                    revert SequenceSaturated();
-                }
-                // Advance the local sequence before apply.
-                st.localSequence = seq + 1;
-            } else if (!_isInitialized(account)) {
-                // Mark a fresh account initialized and invalidate outstanding sequence-0 signatures. The unsequenced
-                // batch remains replayable; failed authentication rolls this write back.
-                st.localSequence = 1;
-            }
-        } else {
-            // Multichain: a plain monotonic counter, never epoch-bearing or UNSEQUENCED.
-            uint64 seq = batch.sequence;
-            if (seq != st.multichainSequence) {
-                revert BadSequence(st.multichainSequence, seq);
-            }
-            if (seq == type(uint64).max) {
+            if (seq >= UNSEQUENCED - 1) {
                 revert SequenceSaturated();
             }
-            st.multichainSequence = seq + 1;
+            // Advance the consumed track's counter before apply.
+            if (isLocal) {
+                st.localSequence = seq + 1;
+            } else {
+                st.globalSequence = seq + 1;
+            }
+        } else if (!_isInitialized(account)) {
+            // JIT-first on a fresh account: mark it initialized via the canonical local marker (createAccount and
+            // importAccount set the same field) and invalidate outstanding local sequence-0 signatures. This
+            // deliberately does NOT advance the global counter, so a Multichain seq-0 one-shot (e.g. "install this
+            // admin on every chain") stays applicable on every chain. The JIT batch remains replayable; failed
+            // authentication rolls this write back.
+            st.localSequence = 1;
         }
 
         // Authenticate over the digest. Authorization is flat: every signed account change is
@@ -707,10 +722,7 @@ contract Keystore {
 
             // Preconditions: freeze non-exempt ops on a locked account, and hold Lock/Unlock to a standalone local batch.
             // AuthorizeActor is exempt here; {_applyAuthorize} still applies the locked add / expiry-only rule.
-            if (
-                locked && t != ChangeType.Unlock && t != ChangeType.IncrementLocalEpoch
-                    && t != ChangeType.AuthorizeActor
-            ) {
+            if (locked && t != ChangeType.Unlock && t != ChangeType.IncrementEpoch && t != ChangeType.AuthorizeActor) {
                 revert AccountIsLocked();
             }
             if (t == ChangeType.Lock || t == ChangeType.Unlock) {
@@ -734,8 +746,8 @@ contract Keystore {
                 _applyRevoke(account, batch.changes[i].payload);
                 continue;
             }
-            if (t == ChangeType.IncrementLocalEpoch) {
-                _applyIncrementLocalEpoch(account, batch.changes[i].payload);
+            if (t == ChangeType.IncrementEpoch) {
+                _applyIncrementEpoch(account, isLocal, batch.changes[i].payload);
                 continue;
             }
             if (t == ChangeType.Lock) {
@@ -747,7 +759,7 @@ contract Keystore {
                 continue;
             }
             if (t == ChangeType.AuthorizeTransientActor) {
-                _applyAuthorizeTransient(account, batch.changes[i].payload);
+                _applyAuthorizeTransient(account, batch.changes[i].payload, isUnsequenced);
                 continue;
             }
             // Unreachable at runtime (the enum decoder rejects out-of-range values). Kept to force any future
@@ -775,7 +787,7 @@ contract Keystore {
     ///        a catching-up chain can step its counter through historical expiring grants to reach the live one.
     ///
     ///      A JIT grant is last-write-wins on its slot until the epoch is incremented; durable reduction (revoke, shorter
-    ///      expiry, narrower scope) is a wallet responsibility — batch it with {IncrementLocalEpoch} to retire outstanding
+    ///      expiry, narrower scope) is a wallet responsibility — batch it with {IncrementEpoch} to retire outstanding
     ///      grants.
     ///
     ///      Locked rule: the grant must outlive the unlock floor (`now + delay` / `unlocksAt`; `expiry == 0` always
@@ -821,7 +833,7 @@ contract Keystore {
     ///      Local revoke cannot invalidate a queued Multichain revoke (or vice versa) and block that channel's
     ///      sequence. Otherwise clears the actor's config and policy slots (and disables the inline k1 self for the
     ///      self-actorId), emitting ActorRevoked. Not durable against an outstanding replayable unsequenced grant for
-    ///      the same actorId (which would re-install into the emptied slot); batch a {IncrementLocalEpoch} for durable
+    ///      the same actorId (which would re-install into the emptied slot); batch an {IncrementEpoch} for durable
     ///      teardown.
     function _applyRevoke(address account, bytes calldata payload) private {
         bytes32 actorId = abi.decode(payload, (bytes32));
@@ -835,21 +847,32 @@ contract Keystore {
         emit ActorRevoked(account, actorId);
     }
 
-    /// @dev IncrementLocalEpoch. Empty payload. Strict increment of the local epoch, resetting the local sequence to 0
-    ///      and thereby invalidating every unlanded local signature (they commit the full 64-bit word). Allowed on
-    ///      either channel: a Multichain batch may bump the local epoch even though it carries no epoch of its own.
-    function _applyIncrementLocalEpoch(address account, bytes calldata payload) private {
+    /// @dev IncrementEpoch. Empty payload. Strict increment of the epoch of the channel it rides on — Local bumps the
+    ///      this-chain (local) epoch, Multichain bumps the all-chains (global) epoch — resetting that track's sequence
+    ///      to 0 and thereby invalidating every unlanded signature on that track (they commit the full 64-bit
+    ///      epoch||counter word). The target is the channel's own track, so to revoke global grants across every chain
+    ///      an admin signs ONE Multichain IncrementEpoch and lands it on each chain; a Local IncrementEpoch retires
+    ///      this-chain grants only. Allowed on either channel and exempt while locked.
+    function _applyIncrementEpoch(address account, bool isLocal, bytes calldata payload) private {
         if (payload.length != 0) {
             revert InvalidChangePayload();
         }
         AccountState storage st = _accountState[account];
         // The epoch half has no reserved sentinel (unlike UNSEQUENCED on the sequence half), so the full uint32 range
         // is usable: only the terminal value itself cannot advance.
-        if (st.localEpoch == type(uint32).max) {
-            revert EpochSaturated();
+        if (isLocal) {
+            if (st.localEpoch == type(uint32).max) {
+                revert EpochSaturated();
+            }
+            st.localEpoch += 1;
+            st.localSequence = 0;
+        } else {
+            if (st.globalEpoch == type(uint32).max) {
+                revert EpochSaturated();
+            }
+            st.globalEpoch += 1;
+            st.globalSequence = 0;
         }
-        st.localEpoch += 1;
-        st.localSequence = 0;
     }
 
     /// @dev Lock. Local-only; `payload = abi.encode(uint16 unlockDelay)`. Must be standalone. The caller
@@ -900,9 +923,16 @@ contract Keystore {
     ///
     ///      Reuses the durable per-actor invariants: rejects the zero actorId, the self-actorId (reserved for the
     ///      inline key), and a zero authenticator, and validates optional policy by length (empty or 52 bytes).
-    function _applyAuthorizeTransient(address account, bytes calldata payload) private {
+    ///
+    ///      Unsequenced (JIT) only: silently skips an already-expired grant, mirroring {_applyAuthorize} — a reusable
+    ///      install that has lapsed is a no-op rather than materializing an inert actor, so a stale reusable grant
+    ///      cannot keep re-landing. The install's own `expiry` (with the track's epoch) bounds a reusable grant.
+    function _applyAuthorizeTransient(address account, bytes calldata payload, bool isUnsequenced) private {
         (bytes32 actorId, ActorConfig memory cfg, bytes memory policyData) =
             abi.decode(payload, (bytes32, ActorConfig, bytes));
+        if (isUnsequenced && _isExpired(cfg.expiry)) {
+            return;
+        }
         if (actorId == bytes32(0)) {
             revert InvalidActorId();
         }
@@ -1247,16 +1277,18 @@ contract Keystore {
         (, manager, commitment) = _loadTransientActor(account, actorId);
     }
 
-    /// @notice Returns the account's replay counters: the multichain counter and the local channel's epoch and
-    ///         sequence.
+    /// @notice Returns the account's replay counters: the global (Multichain) and local (Local) epoch/sequence pairs.
     ///
     /// @param account The account to read.
     ///
-    /// @return The account's ChangeSequences (multichain counter, local epoch, local sequence).
+    /// @return The account's ChangeSequences (global epoch/sequence, local epoch/sequence).
     function getChangeSequences(address account) external view returns (ChangeSequences memory) {
         AccountState storage st = _accountState[account];
         return ChangeSequences({
-            multichain: st.multichainSequence, localEpoch: st.localEpoch, localSequence: st.localSequence
+            globalEpoch: st.globalEpoch,
+            globalSequence: st.globalSequence,
+            localEpoch: st.localEpoch,
+            localSequence: st.localSequence
         });
     }
 
@@ -1331,11 +1363,11 @@ contract Keystore {
         return uint48(block.timestamp + uint16(st.lockUnion));
     }
 
-    /// @dev True after bootstrap or any successful signed change. The epoch and multichain counter keep initialization
-    ///      observable when the current local sequence is zero.
+    /// @dev True after bootstrap or any successful signed change. A non-zero epoch or counter on either track keeps
+    ///      initialization observable even when the local sequence is zero.
     function _isInitialized(address account) private view returns (bool) {
         AccountState storage st = _accountState[account];
-        return st.localSequence != 0 || st.localEpoch != 0 || st.multichainSequence != 0;
+        return st.localSequence != 0 || st.localEpoch != 0 || st.globalSequence != 0 || st.globalEpoch != 0;
     }
 
     // ----------------------------------------------------------------------------------------------------------------

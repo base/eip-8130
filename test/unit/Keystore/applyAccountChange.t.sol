@@ -612,20 +612,24 @@ contract AccountEnvironmentTest is KeystoreTest {
         _revokeActor(account, pk, ACTOR_A);
     }
 
-    /// @notice A Multichain IncrementLocalEpoch bumps the local epoch (resetting the local sequence) and consumes the
-    ///         multichain counter, retiring outstanding unlanded local signatures without a Local batch.
+    /// @notice A Multichain IncrementEpoch bumps the GLOBAL epoch (resetting the global sequence) and leaves the
+    ///         local track untouched, retiring outstanding unlanded global signatures across every chain.
     function test_multichain_success_bump(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
-        (uint32 epochBefore,) = _localEpochSeq(account);
-        uint64 mcBefore = _multichainSeq(account);
+        (uint32 gEpochBefore,) = _globalEpochSeq(account);
+        (uint32 lEpochBefore, uint32 lSeqBefore) = _localEpochSeq(account);
 
         _applyMultichain(pk, account, _one(_bumpChange()));
 
-        (uint32 epochAfter, uint32 seqAfter) = _localEpochSeq(account);
-        assertEq(epochAfter, epochBefore + 1);
-        assertEq(seqAfter, 0); // local sequence reset by the epoch bump
-        assertEq(_multichainSeq(account), mcBefore + 1);
+        (uint32 gEpochAfter, uint32 gSeqAfter) = _globalEpochSeq(account);
+        assertEq(gEpochAfter, gEpochBefore + 1);
+        assertEq(gSeqAfter, 0); // global sequence reset by the global epoch bump
+
+        // The local track is independent and untouched.
+        (uint32 lEpochAfter, uint32 lSeqAfter) = _localEpochSeq(account);
+        assertEq(lEpochAfter, lEpochBefore);
+        assertEq(lSeqAfter, lSeqBefore);
     }
 
     /// @notice A Lock on the Multichain channel reverts ChangeRequiresLocalChannel.
@@ -663,7 +667,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         assertEq(epoch, 0);
         assertEq(seq, 1);
         assertEq(keystore.getChangeSequences(account).localSequence, 1);
-        assertEq(keystore.getChangeSequences(account).multichain, 0);
+        assertEq(keystore.getChangeSequences(account).globalSequence, 0);
     }
 
     /// @notice The deleted entry points (applySignedActorChanges / applySignedLockChanges) are absent from the ABI —
@@ -794,7 +798,7 @@ contract AccountEnvironmentTest is KeystoreTest {
         address account = vm.addr(pk);
         _assumeSafeAccount(account);
 
-        // Bootstrap via multichain: multichain counter 0 -> 1, local word stays 0/0 (initialized via the multichain
+        // Bootstrap via multichain: global counter 0 -> 1, local word stays 0/0 (initialized via the global-sequence
         // term of _isInitialized).
         _applyMultichain(
             pk, account, _one(_authorizeChange(ACTOR_A, address(k1Authenticator), OPERATOR, _future(1 days), ""))

@@ -206,7 +206,7 @@ contract CreateAccountTest is KeystoreTest {
 
         assertEq(predicted.code.length, 0);
         assertEq(keystore.getChangeSequences(predicted).localSequence, 0);
-        assertEq(keystore.getChangeSequences(predicted).multichain, 0);
+        assertEq(keystore.getChangeSequences(predicted).globalSequence, 0);
         assertFalse(_isActor(predicted, actorId));
 
         // The writes were unwound, so the re-init guard is not tripped: the retry re-attempts the deploy and fails
@@ -296,7 +296,7 @@ contract CreateAccountTest is KeystoreTest {
         assertEq(cfg.expiry, 0);
 
         assertEq(keystore.getChangeSequences(account).localSequence, 1);
-        assertEq(keystore.getChangeSequences(account).multichain, 0);
+        assertEq(keystore.getChangeSequences(account).globalSequence, 0);
 
         (bool locked, bool hasInitiatedUnlock, uint48 unlocksAt, uint16 unlockDelay) = keystore.getLockStatus(account);
         assertFalse(locked);
