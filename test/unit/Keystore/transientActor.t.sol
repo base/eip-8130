@@ -125,6 +125,81 @@ contract TransientActorTest is KeystoreTest {
         assertEq(cfg.scope, Scopes.SELF_PAYER);
     }
 
+    function test_expiredPersistent_shadowsTransient_onEveryRead() public {
+        // An OCCUPIED-but-expired durable entry keeps the ephemeral tier shadowed on every surface, exactly as the
+        // authentication path does. A transient twin must not resurrect (or re-scope) a lapsed durable actor.
+        _applyLocal(
+            ADMIN_PK,
+            account,
+            _one(
+                _authorizeChange(
+                    leafActorId, address(p256Authenticator), Scopes.SELF_PAYER, uint48(block.timestamp + 10), ""
+                )
+            )
+        );
+        vm.warp(block.timestamp + 100);
+        _installTransient(0, UNBOUNDED, "");
+
+        // Read surface: empty (expired durable entry wins).
+        Keystore.ActorConfig memory cfg = keystore.getActorConfig(account, leafActorId);
+        assertEq(cfg.authenticator, address(0));
+        assertFalse(_isActor(account, leafActorId));
+        (Keystore.ActorConfig memory cfg2, address mgr, bytes32 comm) =
+            keystore.getActorWithPolicy(account, leafActorId);
+        assertEq(cfg2.authenticator, address(0));
+        assertEq(mgr, address(0));
+        assertEq(comm, bytes32(0));
+
+        // Authentication surface agrees: ActorExpired, not the transient twin.
+        bytes32 digest = keccak256("op");
+        bytes memory auth = abi.encodePacked(address(p256Authenticator), _p256SignData(LEAF_PK, digest));
+        vm.expectRevert(Keystore.ActorExpired.selector);
+        keystore.authenticateActor(account, digest, auth);
+    }
+
+    function test_expiredPersistentPolicy_notMixedWithTransientConfig() public {
+        // Durable POLICY actor (manager M1) expires; a transient twin (manager M2) is installed. The read must not
+        // pair one tier's config with the other tier's policy slots: the durable entry is occupied, so every surface
+        // resolves empty.
+        address m1 = address(0x1111);
+        address m2 = address(0x2222);
+        _applyLocal(
+            ADMIN_PK,
+            account,
+            _one(
+                _authorizeChange(
+                    leafActorId,
+                    address(p256Authenticator),
+                    Scopes.POLICY,
+                    uint48(block.timestamp + 10),
+                    abi.encodePacked(m1, bytes32(uint256(1)))
+                )
+            )
+        );
+        vm.warp(block.timestamp + 100);
+        _installTransient(Scopes.POLICY, UNBOUNDED, abi.encodePacked(m2, bytes32(uint256(2))));
+
+        assertEq(keystore.getPolicyManager(account, leafActorId), address(0));
+        assertEq(keystore.getPolicyCommitment(account, leafActorId), bytes32(0));
+        (, address mgr, bytes32 comm) = keystore.getActorWithPolicy(account, leafActorId);
+        assertEq(mgr, address(0));
+        assertEq(comm, bytes32(0));
+    }
+
+    function test_revokedPersistent_unshadowsTransient() public {
+        // Revoke empties the durable home, so a transient install for the same id is reachable again on both the
+        // read and authentication surfaces (consistent occupancy rule).
+        _authorizeActorWithScope(account, ADMIN_PK, leafActorId, address(p256Authenticator), Scopes.SELF_PAYER);
+        _revokeActor(account, ADMIN_PK, leafActorId);
+        _installTransient(Scopes.OPERATOR, UNBOUNDED, "");
+
+        assertEq(keystore.getActorConfig(account, leafActorId).scope, Scopes.OPERATOR);
+        bytes32 digest = keccak256("op");
+        bytes memory auth = abi.encodePacked(address(p256Authenticator), _p256SignData(LEAF_PK, digest));
+        (, uint16 scope) = keystore.authenticateActor(account, digest, auth);
+        assertEq(scope, Scopes.OPERATOR);
+    }
+
     // ── policy on a transient actor ──
 
     function test_transientPolicy_resolves() public {

@@ -202,10 +202,10 @@ contract Keystore {
     ///         EIP-1153 transient slots from any other transient use.
     bytes32 private constant TRANSIENT_ACTOR_NAMESPACE = keccak256("eip8130.transient.actor.v1");
 
-    /// @notice Local-channel sequence low-half sentinel marking an unsequenced (JIT) batch. A {SignedAccountChanges}
-    ///         whose low 32 bits equal this value does not consume a sequence, so it stays replayable until the local
-    ///         epoch moves. Any op may use it, but Lock and Unlock must remain standalone. Sequenced batches may run up
-    ///         to UNSEQUENCED - 2.
+    /// @notice Sequence low-half sentinel marking an unsequenced (JIT) batch on either channel. A
+    ///         {SignedAccountChanges} whose low 32 bits equal this value does not consume a counter, so it stays
+    ///         replayable until its track's epoch moves (Local → local epoch, Multichain → global epoch). Any op may
+    ///         use it, but Lock and Unlock must remain standalone. Sequenced batches may run up to UNSEQUENCED - 2.
     uint32 public constant UNSEQUENCED = type(uint32).max;
 
     // ----------------------------------------------------------------------------------------------------------------
@@ -351,11 +351,13 @@ contract Keystore {
     ///         FLAG_UNLOCK_INITIATED clear) — i.e. never locked, or an unlock was already initiated.
     error NotLocked();
 
-    /// @notice The batch's committed local epoch does not match the account's current local epoch: every unlanded
-    ///         local signature at a prior epoch is dead. Applies to sequenced and unsequenced Local batches.
+    /// @notice The batch's committed epoch does not match its channel's current epoch (Local → local epoch,
+    ///         Multichain → global epoch): every unlanded signature on that track at a prior epoch is dead. Applies
+    ///         to sequenced and unsequenced batches on either channel.
     error StaleEpoch();
 
-    /// @notice A sequenced batch's sequence did not match the account's current (local or multichain) counter.
+    /// @notice A sequenced batch's sequence did not match the account's current counter on that channel's track
+    ///         (local or global).
     /// @param expected The account's current channel counter the batch had to match.
     /// @param provided The sequence the batch carried.
     error BadSequence(uint64 expected, uint64 provided);
@@ -363,7 +365,7 @@ contract Keystore {
     /// @notice The channel's sequence counter is at its terminal value and cannot advance.
     error SequenceSaturated();
 
-    /// @notice The local epoch is at its terminal value and cannot be incremented.
+    /// @notice The channel's epoch (local or global) is at its terminal value and cannot be incremented.
     error EpochSaturated();
 
     /// @notice A local-only change (Lock or Unlock) was submitted on the Multichain channel.
@@ -458,15 +460,6 @@ contract Keystore {
     // MODIFIERS
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice Modifier to check if an account is unlocked.
-    /// @dev Reverts with AccountIsLocked when the account is locked.
-    modifier onlyUnlocked(address account) {
-        if (_isLocked(account)) {
-            revert AccountIsLocked();
-        }
-        _;
-    }
-
     /// @notice Modifier to check if an account is not the zero address.
     /// @dev Reverts with ZeroAccount when the account is the zero address.
     modifier nonZeroAccount(address account) {
@@ -552,15 +545,15 @@ contract Keystore {
     ///
     /// @dev Uses a custom (non-EIP-712) digest to partially mitigate eth_signTypedData phishing. The wallet returns
     ///      the actor set and its digest; Keystore installs that set only when the digest matches.
-    /// @dev Reverts with AccountIsLocked when the account is locked.
-    /// @dev Reverts with AlreadyInitialized when the account already has EIP-8130 state.
+    /// @dev Reverts with AlreadyInitialized when the account already has EIP-8130 state. A locked account is always
+    ///      caught here: Lock is a signed change that initializes the account, so there is no separate lock check.
     /// @dev Reverts with ImportNotConfirmed when {confirmKeystoreImport} reverts or returns a digest that is not
     ///      {computeImportDigest} of the returned actors. A wallet that does not implement it (including a
     ///      constructor or plain EOA) yields an empty return and reverts on ABI-decode.
     /// @dev The actor set is validated after a successful confirm decode, so a malformed set fails with its specific
     ///      error (NoInitialActors / ActorsNotSortedOrDuplicate / InvalidAuthenticator / InvalidPolicyData) rather
     ///      than a generic ImportNotConfirmed. This ordering is normative.
-    function importAccount() external onlyUnlocked(msg.sender) {
+    function importAccount() external {
         address account = msg.sender;
 
         // Import is a one-time bootstrap for accounts with no 8130 state yet.
@@ -954,8 +947,10 @@ contract Keystore {
         return keccak256(abi.encode(TRANSIENT_ACTOR_NAMESPACE, account, actorId));
     }
 
-    /// @dev Writes `cfg`/policy into the ephemeral tier for `actorId`. The config packs into one word using the same
-    ///      field layout as the persistent slot (authenticator ‖ expiry ‖ scope ‖ reserved). A non-zero config word
+    /// @dev Writes `cfg`/policy into the ephemeral tier for `actorId`. The config packs into one word with the SAME
+    ///      bit layout as the persistent `_actors[].config` storage word (Solidity struct packing, low-order first):
+    ///      authenticator in bits [0,160), expiry in [160,208), scope in [208,224), reserved [224,256) zero. Sharing
+    ///      the layout means a native implementation can decode both tiers with one routine. A non-zero config word
     ///      marks the slot populated (a live actor always has a non-zero authenticator).
     function _storeTransientActor(
         address account,
@@ -966,7 +961,7 @@ contract Keystore {
     ) private {
         bytes32 base = _transientBaseSlot(account, actorId);
         uint256 packed =
-            (uint256(uint160(cfg.authenticator)) << 96) | (uint256(cfg.expiry) << 48) | (uint256(cfg.scope) << 32);
+            uint256(uint160(cfg.authenticator)) | (uint256(cfg.expiry) << 160) | (uint256(cfg.scope) << 208);
         uint256 mgr = uint256(uint160(manager));
         assembly ("memory-safe") {
             tstore(base, packed)
@@ -995,7 +990,7 @@ contract Keystore {
             return (_emptyActorConfig(), address(0), bytes32(0));
         }
         cfg = ActorConfig({
-            authenticator: address(uint160(packed >> 96)), expiry: uint48(packed >> 48), scope: uint16(packed >> 32)
+            authenticator: address(uint160(packed)), expiry: uint48(packed >> 160), scope: uint16(packed >> 208)
         });
         manager = address(uint160(mgr));
         commitment = comm;
@@ -1182,11 +1177,15 @@ contract Keystore {
 
     /// @dev The single liveness resolver behind every read surface ({getActorConfig}, {getActorWithPolicy},
     ///      {getPolicyCommitment}, {getPolicyManager}). Persistent-first, then the ephemeral (transient) tier:
-    ///      resolve the durable config ({_resolvePersistentActorConfig}) and, only when that is empty, fall back to
-    ///      any transient actor installed for the current transaction. Persistent ALWAYS wins, so a transient
-    ///      install can never shadow or downgrade a durable actor. A transient actor is otherwise resolved exactly
-    ///      like a durable one (same `>= K1_AUTHENTICATOR` populated test, same expiry gating), which is what makes
-    ///      it indistinguishable to every consumer for the rest of the transaction.
+    ///      resolve the durable config ({_resolvePersistentActorConfig}) and fall back to any transient actor
+    ///      installed for the current transaction only when the durable home is UNOCCUPIED ({_isAuthorized} false).
+    ///      An occupied-but-expired durable entry keeps the tier shadowed: it reads empty here and is NOT replaced by
+    ///      a transient twin. This is the same occupancy rule {_resolveExplicitActor} applies on the authentication
+    ///      path, so a read surface can never report a live transient actor that authentication would reject as
+    ///      ActorExpired (or vice versa). Persistent ALWAYS wins, so a transient install can never shadow or
+    ///      downgrade a durable actor. A transient actor is otherwise resolved exactly like a durable one (same
+    ///      `>= K1_AUTHENTICATOR` populated test, same expiry gating), which is what makes it indistinguishable to
+    ///      every consumer for the rest of the transaction.
     ///
     ///      Centralizing this is what makes "expired" read identically to "revoked" on every surface — the invariant
     ///      that lets a node garbage-collect an expired actor's slots without changing anything observable on-chain.
@@ -1196,7 +1195,13 @@ contract Keystore {
             return config;
         }
 
-        // Durable (explicit + inline self) resolves empty: fall back to the ephemeral tier.
+        // Durable resolves empty. If the durable home is still occupied (an expired entry) the ephemeral tier stays
+        // shadowed — mirror the authentication path, which also never consults the tier over an occupied slot.
+        if (_isAuthorized(account, actorId)) {
+            return config;
+        }
+
+        // Durable home unoccupied: fall back to the ephemeral tier.
         (ActorConfig memory transientConfig,,) = _loadTransientActor(account, actorId);
         if (transientConfig.authenticator >= K1_AUTHENTICATOR) {
             return _isExpired(transientConfig.expiry) ? _emptyActorConfig() : transientConfig;
@@ -1261,16 +1266,17 @@ contract Keystore {
     }
 
     /// @dev The policy (manager, commitment) co-located with `actorId`'s live config, read from whichever tier
-    ///      holds that config: the persistent {_actors} record for an explicit actor or the inline k1 self (whose
-    ///      policy co-locates in _actors), or the ephemeral tier for a transient actor. Callers gate on liveness
-    ///      first via {_resolveActorConfig}.
+    ///      holds that config: the persistent {_actors} record when the durable home is occupied ({_isAuthorized},
+    ///      covering an explicit actor and the inline k1 self whose policy co-locates in _actors), or the ephemeral
+    ///      tier otherwise. Uses the same occupancy rule as {_resolveActorConfig}, so the policy always comes from
+    ///      the tier that produced the config. Callers gate on liveness first via {_resolveActorConfig}.
     function _resolvePolicySlots(address account, bytes32 actorId)
         private
         view
         returns (address manager, bytes32 commitment)
     {
-        ActorRecord storage rec = _actors[actorId][account];
-        if (rec.config.authenticator >= K1_AUTHENTICATOR || actorId == _selfActorId(account)) {
+        if (_isAuthorized(account, actorId)) {
+            ActorRecord storage rec = _actors[actorId][account];
             return (rec.policyManager, rec.policyCommitment);
         }
         // The live config came from the ephemeral tier.

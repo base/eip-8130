@@ -416,15 +416,16 @@ contract ImportAccountTest is KeystoreTest {
     // REVERTS (source-execution order)
     // ≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡≡
 
-    /// @notice Verifies importAccount reverts when the account is hard-locked (onlyUnlocked runs before all else).
-    function test_importAccount_revert_accountIsLocked(uint256 ownerSeed, uint16 delay) public {
+    /// @notice A locked account cannot be imported: Lock is a signed change that initializes the account, so import
+    ///         is caught by the AlreadyInitialized gate (there is no separate lock check on import).
+    function test_importAccount_revert_lockedIsAlreadyInitialized(uint256 ownerSeed, uint16 delay) public {
         uint256 ownerPk = _boundK1Pk(ownerSeed);
         vm.assume(delay != 0);
         address account = vm.addr(ownerPk);
 
         _signedLock(ownerPk, account, delay);
 
-        vm.expectRevert(Keystore.AccountIsLocked.selector);
+        vm.expectRevert(Keystore.AlreadyInitialized.selector);
         _importAs(account);
     }
 
