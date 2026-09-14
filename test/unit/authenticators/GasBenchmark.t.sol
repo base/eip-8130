@@ -30,7 +30,7 @@ contract GasBenchmarkTest is Test {
 
     function setUp() public {
         p256 = new P256Authenticator();
-        webAuthn = new WebAuthnAuthenticator(false);
+        webAuthn = new WebAuthnAuthenticator();
         config = new Keystore();
         delegate = new DelegateAuthenticator(address(config));
         defaultImpl = address(new DefaultAccount(address(config)));

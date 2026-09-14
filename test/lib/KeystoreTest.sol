@@ -22,7 +22,6 @@ contract KeystoreTest is Test {
     address public k1Authenticator;
     IAuthenticator public p256Authenticator;
     IAuthenticator public webAuthnAuthenticator;
-    IAuthenticator public webAuthnAuthenticatorUV;
     IAuthenticator public delegateAuthenticator;
     address public defaultAccountImplementation;
 
@@ -46,8 +45,7 @@ contract KeystoreTest is Test {
         keystore = new Keystore();
         k1Authenticator = keystore.K1_AUTHENTICATOR();
         p256Authenticator = IAuthenticator(new P256Authenticator());
-        webAuthnAuthenticator = IAuthenticator(new WebAuthnAuthenticator(false));
-        webAuthnAuthenticatorUV = IAuthenticator(new WebAuthnAuthenticator(true));
+        webAuthnAuthenticator = IAuthenticator(new WebAuthnAuthenticator());
         delegateAuthenticator = IAuthenticator(new DelegateAuthenticator(address(keystore)));
         defaultAccountImplementation = address(new DefaultAccount(address(keystore)));
     }

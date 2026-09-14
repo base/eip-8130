@@ -6,14 +6,12 @@ import {Math} from "openzeppelin/utils/math/Math.sol";
 import {P256} from "openzeppelin/utils/cryptography/P256.sol";
 import {WebAuthn} from "openzeppelin/utils/cryptography/WebAuthn.sol";
 
-import {WebAuthnAuthenticator} from "../../../src/authenticators/WebAuthnAuthenticator.sol";
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice WebAuthnAuthenticator tests. The authenticator decodes abi.encode(WebAuthnAuth, x, y), derives
 ///         actorId = keccak256(x‖y), and calls WebAuthn.verify(challenge: abi.encode(hash), auth, x, y,
-///         requireUV: REQUIRE_UV). REQUIRE_UV is fixed per deployment: `webAuthnAuthenticator` is the UV-optional
-///         instance, `webAuthnAuthenticatorUV` the UV-required one. It returns bytes32(0) on any verification failure
-///         and reverts only when the calldata cannot be abi-decoded into the expected tuple.
+///         requireUV: false). It returns bytes32(0) on any verification failure and reverts only when the calldata
+///         cannot be abi-decoded into the expected tuple.
 contract WebAuthnAuthenticatorTest is KeystoreTest {
     // ── revert: undecodable calldata ──
 
@@ -74,29 +72,6 @@ contract WebAuthnAuthenticatorTest is KeystoreTest {
         bytes memory data = _webauthnSignData(pk, hash, WebAuthn.AUTH_DATA_FLAGS_UP | WebAuthn.AUTH_DATA_FLAGS_UV);
 
         assertEq(webAuthnAuthenticator.authenticate(hash, data), _p256ActorId(pk));
-    }
-
-    // ── REQUIRE_UV instance ──
-
-    /// @notice The two canonical instances expose their UV policy and derive the same actorId for the same key.
-    function test_requireUV_flagAndSharedActorId(uint256 pk, bytes32 hash) public view {
-        pk = _boundP256Pk(pk);
-        assertFalse(WebAuthnAuthenticator(address(webAuthnAuthenticator)).REQUIRE_UV());
-        assertTrue(WebAuthnAuthenticator(address(webAuthnAuthenticatorUV)).REQUIRE_UV());
-
-        bytes memory data = _webauthnSignData(pk, hash, WebAuthn.AUTH_DATA_FLAGS_UP | WebAuthn.AUTH_DATA_FLAGS_UV);
-        assertEq(webAuthnAuthenticator.authenticate(hash, data), _p256ActorId(pk));
-        assertEq(webAuthnAuthenticatorUV.authenticate(hash, data), _p256ActorId(pk));
-    }
-
-    /// @notice The UV-required instance rejects a User-Present-only assertion that the UV-optional one accepts.
-    /// @dev UV is the account's choice (by authenticator address), never the signer's.
-    function test_requireUV_rejectsUserPresentOnly(uint256 pk, bytes32 hash) public view {
-        pk = _boundP256Pk(pk);
-        bytes memory data = _webauthnSignData(pk, hash, WebAuthn.AUTH_DATA_FLAGS_UP);
-
-        assertEq(webAuthnAuthenticator.authenticate(hash, data), _p256ActorId(pk));
-        assertEq(webAuthnAuthenticatorUV.authenticate(hash, data), bytes32(0));
     }
 
     /// @notice Backup-eligible + backed-up assertion authenticates (BE=1, BS=1 is a valid state).
