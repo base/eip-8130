@@ -10,9 +10,9 @@ import {Scopes} from "../libraries/Scopes.sol";
 ///
 ///         The returned actorId encodes WHICH CLASS of the delegate account's actors signed, so the registering
 ///         account chooses the class it trusts simply by which actorId it authorizes:
-///           - `ActorId.fromAddress(delegate)`            — the nested signer is an ADMIN (scope 0) of `delegate`.
-///           - `ActorId.operatorOfAddress(delegate)`      — the nested signer is a non-admin OPERATOR of `delegate`
-///                                                          ({Scopes.isOperator}; e.g. its hot key).
+///           - `ActorId.fromAddress(delegate)`   — the nested signer is an ADMIN (scope 0) of `delegate`.
+///           - {operatorActorId}`(delegate)`     — the nested signer is a non-admin OPERATOR of `delegate`
+///                                                 ({Scopes.isOperator}; e.g. its hot key).
 ///         An account that wants both classes to act for it registers both actorIds. Any other nested scope
 ///         (POLICY-only, payer-only, ...) does not authenticate.
 ///
@@ -22,6 +22,11 @@ import {Scopes} from "../libraries/Scopes.sol";
 contract DelegateAuthenticator is IAuthenticator {
     /// @notice The Keystore system contract used to validate the nested (delegate) signature.
     Keystore public immutable KEYSTORE;
+
+    /// @notice Class tag OR'd into the high bytes of the delegate address to form the OPERATOR-class actorId:
+    ///         `0x10 ‖ 11 zero bytes ‖ delegate`. The admin-class id (`ActorId.fromAddress`) has all 12 high bytes
+    ///         zero, so the two classes can never collide.
+    bytes32 public constant OPERATOR_CLASS_TAG = 0x1000000000000000000000000000000000000000000000000000000000000000;
 
     /// @notice The auth data is shorter than the 40-byte delegate + nested-authenticator prefix.
     error InvalidDataLength();
@@ -54,7 +59,7 @@ contract DelegateAuthenticator is IAuthenticator {
     /// @param data delegate address (20) then the nested auth blob (nested authenticator address then its data).
     ///
     /// @return actorId `ActorId.fromAddress(delegate)` for an admin nested signer, or
-    ///         `ActorId.operatorOfAddress(delegate)` for an operator nested signer.
+    ///         {operatorActorId}`(delegate)` for an operator nested signer.
     function authenticate(bytes32 hash, bytes calldata data) external view returns (bytes32 actorId) {
         if (data.length < 40) revert InvalidDataLength();
         address delegate = address(bytes20(data[:20]));
@@ -72,7 +77,13 @@ contract DelegateAuthenticator is IAuthenticator {
         }
 
         if (nestedScope == 0) return ActorId.fromAddress(delegate);
-        if (Scopes.isOperator(nestedScope)) return ActorId.operatorOfAddress(delegate);
+        if (Scopes.isOperator(nestedScope)) return operatorActorId(delegate);
         revert InvalidNestedSignature();
+    }
+
+    /// @notice The OPERATOR-class actorId for `delegate`: {OPERATOR_CLASS_TAG} ‖ `delegate`. Register this id on an
+    ///         account to let `delegate`'s operators (not only its admins) act for it.
+    function operatorActorId(address delegate) public pure returns (bytes32) {
+        return OPERATOR_CLASS_TAG | ActorId.fromAddress(delegate);
     }
 }

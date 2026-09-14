@@ -18,7 +18,7 @@ import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 ///                                        that is neither admin nor operator
 ///         On success the returned actorId encodes the nested signer's CLASS on the delegate account:
 ///           - admin (scope 0x00)              → ActorId.fromAddress(delegate)
-///           - operator (Scopes.isOperator)    → ActorId.operatorOfAddress(delegate)
+///           - operator (Scopes.isOperator)    → _operatorId(delegate)
 ///         The registering account picks the class it trusts by which actorId it authorizes; the class is decided
 ///         by the nested signer's stored scope, never by anything the signer declares.
 contract DelegateAuthenticatorTest is KeystoreTest {
@@ -126,7 +126,7 @@ contract DelegateAuthenticatorTest is KeystoreTest {
     }
 
     /// @dev An OPERATOR nested actor on the delegate account CAN satisfy the account's ERC-1271 (it is operational)
-    ///      and CAN vouch — but only as the OPERATOR class: the returned actorId is operatorOfAddress(delegate), never
+    ///      and CAN vouch — but only as the OPERATOR class: the returned actorId is operatorActorId(delegate), never
     ///      the admin-class fromAddress(delegate). An account that registered only the admin-class id therefore does
     ///      not accept it (Keystore's actorId binding fails on the unregistered id).
     function test_authenticate_success_operatorResolvesToOperatorClass(
@@ -150,7 +150,7 @@ contract DelegateAuthenticatorTest is KeystoreTest {
 
         bytes memory data = abi.encodePacked(delegateAccount, nestedAuth);
         bytes32 actorId = delegateAuthenticator.authenticate(hash, data);
-        assertEq(actorId, ActorId.operatorOfAddress(delegateAccount));
+        assertEq(actorId, _operatorId(delegateAccount));
         assertTrue(actorId != ActorId.fromAddress(delegateAccount));
     }
 
@@ -171,7 +171,7 @@ contract DelegateAuthenticatorTest is KeystoreTest {
 
         bytes memory data =
             abi.encodePacked(delegateAccount, abi.encodePacked(k1Authenticator, _signDigest(signerPk, hash)));
-        assertEq(delegateAuthenticator.authenticate(hash, data), ActorId.operatorOfAddress(delegateAccount));
+        assertEq(delegateAuthenticator.authenticate(hash, data), _operatorId(delegateAccount));
     }
 
     /// @dev End to end through Keystore: account A registers ONLY the admin-class delegate id for B. B's operator
@@ -213,10 +213,10 @@ contract DelegateAuthenticatorTest is KeystoreTest {
 
         // Now A also trusts B's OPERATOR class, as an OPERATOR on A.
         _authorizeActorWithScope(
-            accountA, ownerAPk, ActorId.operatorOfAddress(accountB), address(delegateAuthenticator), SCOPE_OPERATOR
+            accountA, ownerAPk, _operatorId(accountB), address(delegateAuthenticator), SCOPE_OPERATOR
         );
         (gotId, gotScope) = keystore.authenticateActor(accountA, hash, opAuth);
-        assertEq(gotId, ActorId.operatorOfAddress(accountB));
+        assertEq(gotId, _operatorId(accountB));
         assertEq(gotScope, SCOPE_OPERATOR);
     }
 
@@ -255,6 +255,11 @@ contract DelegateAuthenticatorTest is KeystoreTest {
     }
 
     // ── Helpers ──
+
+    /// @dev The OPERATOR-class delegate actorId for `delegate`, as computed by the authenticator under test.
+    function _operatorId(address delegate) internal view returns (bytes32) {
+        return DelegateAuthenticator(address(delegateAuthenticator)).operatorActorId(delegate);
+    }
 
     /// @dev Authorizes a new K1 actor (`newPk`) with `scope` on `account`, signed by the unrestricted owner
     ///      (`ownerPk`). Granted UNBOUNDED (the new "no expiry") on a sequenced local batch via the harness helper.
