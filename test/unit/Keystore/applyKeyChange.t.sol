@@ -6,7 +6,7 @@ import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice §10 test matrix for the authority / environment ops driven through {applySignedAccountChanges}:
-///         AuthorizeActor (sequenced + unsequenced), RevokeActor, IncrementLocalEpoch, the op-ordering fence,
+///         AuthorizeActor (sequenced + unsequenced), RevokeActor, IncrementEpoch, the op-ordering fence,
 ///         and the sequenced-channel replay/saturation edges. Lock/unlock (admin-only),
 ///         and multichain regression live in applyAccountChange.t.sol.
 contract ApplySignedAccountChangesTest is KeystoreTest {
@@ -360,7 +360,7 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
         assertEq(keystore.getActorConfig(account, ACTOR_A).scope, OPERATOR);
     }
 
-    /// @notice A sequenced expiry lowering may still be batched with an IncrementLocalEpoch (the durable teardown form).
+    /// @notice A sequenced expiry lowering may still be batched with an IncrementEpoch (the durable teardown form).
     function test_authorizeSequenced_success_lowerPlusBump(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);
@@ -397,7 +397,7 @@ contract ApplySignedAccountChangesTest is KeystoreTest {
 
     /// @notice Documents the accepted footgun: a bare revoke is NOT durable while a replayable unsequenced grant for
     ///         the same actor is outstanding — replaying it re-installs the actor into the emptied slot. Durable
-    ///         teardown requires an IncrementLocalEpoch (see test_revoke_success_revokeBumpThenReplayFails).
+    ///         teardown requires an IncrementEpoch (see test_revoke_success_revokeBumpThenReplayFails).
     function test_revoke_bareRevokeNotDurable_replayReinstalls(uint256 pk) public {
         pk = _boundK1Pk(pk);
         (address account,) = _createK1Account(pk);

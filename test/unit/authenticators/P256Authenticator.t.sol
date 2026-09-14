@@ -44,6 +44,46 @@ contract P256AuthenticatorTest is KeystoreTest {
         p256Authenticator.authenticate(hash, data);
     }
 
+    // ── pre_hash selector ──
+
+    /// @notice Any pre_hash byte other than PRE_HASH_NONE (0x00) or PRE_HASH_SHA256 (0x01) reverts InvalidPreHash.
+    /// @dev An uninterpreted trailing byte would make 256 distinct blobs valid for one signature.
+    function test_authenticate_revert_unknownPreHash(uint256 pk, bytes32 hash, uint8 preHash) public {
+        pk = _boundP256Pk(pk);
+        vm.assume(preHash > 1);
+        bytes memory data = _p256SignData(pk, hash);
+        data[128] = bytes1(preHash);
+        vm.expectRevert(abi.encodeWithSelector(P256Authenticator.InvalidPreHash.selector, preHash));
+        p256Authenticator.authenticate(hash, data);
+    }
+
+    /// @notice With PRE_HASH_SHA256 the signature is verified against sha256(hash), not hash.
+    /// @dev Models a signer that SHA-256-hashes its input before signing: sign sha256(hash), present pre_hash = 1.
+    function test_authenticate_success_preHashSha256(uint256 pk, bytes32 hash) public view {
+        pk = _boundP256Pk(pk);
+        (bytes32 x, bytes32 y) = _p256PubKey(pk);
+        (bytes32 r, bytes32 s) = vm.signP256(pk, sha256(abi.encodePacked(hash)));
+        s = bytes32(Math.min(uint256(s), P256.N - uint256(s)));
+        bytes memory data = abi.encodePacked(r, s, x, y, uint8(1));
+
+        assertEq(p256Authenticator.authenticate(hash, data), _p256ActorId(pk));
+    }
+
+    /// @notice A signature over sha256(hash) presented with pre_hash = 0 (and vice versa) does not authenticate.
+    /// @dev The selector is binding: the two framings of one signature are not interchangeable.
+    function test_authenticate_success_preHashMismatchReturnsZero(uint256 pk, bytes32 hash) public view {
+        pk = _boundP256Pk(pk);
+        (bytes32 x, bytes32 y) = _p256PubKey(pk);
+
+        (bytes32 r, bytes32 s) = vm.signP256(pk, sha256(abi.encodePacked(hash)));
+        s = bytes32(Math.min(uint256(s), P256.N - uint256(s)));
+        assertEq(p256Authenticator.authenticate(hash, abi.encodePacked(r, s, x, y, uint8(0))), bytes32(0));
+
+        bytes memory rawSigned = _p256SignData(pk, hash);
+        rawSigned[128] = bytes1(uint8(1));
+        assertEq(p256Authenticator.authenticate(hash, rawSigned), bytes32(0));
+    }
+
     // ── success: valid signature returns actorId ──
 
     /// @notice A valid P-256 signature over `hash` returns keccak256(x‖y).
@@ -82,18 +122,6 @@ contract P256AuthenticatorTest is KeystoreTest {
         bytes32 id2 = p256Authenticator.authenticate(hash, _p256SignData(pk2, hash));
 
         assertTrue(id1 != id2);
-    }
-
-    /// @notice The trailing preHash byte is not validated; any value still authenticates.
-    /// @dev Documents that data[128] is inert in this implementation.
-    function test_authenticate_success_preHashByteIgnored(uint256 pk, bytes32 hash, uint8 preByte) public view {
-        pk = _boundP256Pk(pk);
-        (bytes32 x, bytes32 y) = _p256PubKey(pk);
-        (bytes32 r, bytes32 s) = vm.signP256(pk, hash);
-        s = bytes32(Math.min(uint256(s), P256.N - uint256(s)));
-        bytes memory data = abi.encodePacked(r, s, x, y, preByte);
-
-        assertEq(p256Authenticator.authenticate(hash, data), _p256ActorId(pk));
     }
 
     // ── success: verification failures return bytes32(0) (no revert) ──

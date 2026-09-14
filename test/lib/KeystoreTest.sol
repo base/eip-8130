@@ -123,20 +123,37 @@ contract KeystoreTest is Test {
         return (uint64(cs.localEpoch) << 32) | uint64(cs.localSequence);
     }
 
-    /// @dev An unsequenced (JIT) local sequence word at the account's current epoch: epoch || UNSEQUENCED.
+    /// @dev An unsequenced (JIT) local sequence word at the account's current epoch: localEpoch || UNSEQUENCED.
     function _unseqWord(address account) internal view returns (uint64) {
         return (uint64(keystore.getChangeSequences(account).localEpoch) << 32) | uint64(keystore.UNSEQUENCED());
     }
 
-    /// @dev The account's current multichain sequence.
+    /// @dev The account's current GLOBAL (Multichain) sequence WORD: globalEpoch(32) || globalSequence(32).
+    function _globalSeqWord(address account) internal view returns (uint64) {
+        Keystore.ChangeSequences memory cs = keystore.getChangeSequences(account);
+        return (uint64(cs.globalEpoch) << 32) | uint64(cs.globalSequence);
+    }
+
+    /// @dev An unsequenced (JIT) GLOBAL sequence word at the account's current global epoch: globalEpoch || UNSEQUENCED.
+    function _globalUnseqWord(address account) internal view returns (uint64) {
+        return (uint64(keystore.getChangeSequences(account).globalEpoch) << 32) | uint64(keystore.UNSEQUENCED());
+    }
+
+    /// @dev The account's current global (Multichain) sequence counter (bare, for assertions).
     function _multichainSeq(address account) internal view returns (uint64) {
-        return keystore.getChangeSequences(account).multichain;
+        return keystore.getChangeSequences(account).globalSequence;
     }
 
     /// @dev The account's current local epoch and local sequence (split), for terse test assertions.
     function _localEpochSeq(address account) internal view returns (uint32 epoch, uint32 sequence) {
         Keystore.ChangeSequences memory cs = keystore.getChangeSequences(account);
         return (cs.localEpoch, cs.localSequence);
+    }
+
+    /// @dev The account's current global epoch and global sequence (split), for terse test assertions.
+    function _globalEpochSeq(address account) internal view returns (uint32 epoch, uint32 sequence) {
+        Keystore.ChangeSequences memory cs = keystore.getChangeSequences(account);
+        return (cs.globalEpoch, cs.globalSequence);
     }
 
     // ── Change builders ──
@@ -176,7 +193,7 @@ contract KeystoreTest is Test {
     }
 
     function _bumpChange() internal pure returns (Keystore.AccountChange memory) {
-        return Keystore.AccountChange({changeType: Keystore.ChangeType.IncrementLocalEpoch, payload: ""});
+        return Keystore.AccountChange({changeType: Keystore.ChangeType.IncrementEpoch, payload: ""});
     }
 
     function _lockChange(uint16 unlockDelay) internal pure returns (Keystore.AccountChange memory) {
@@ -245,10 +262,20 @@ contract KeystoreTest is Test {
         );
     }
 
-    /// @dev Build + relay a multichain batch at the account's current multichain sequence, K1-signed by `pk`.
+    /// @dev Build + relay a sequenced multichain (global) batch at the account's current global sequence word,
+    ///      K1-signed by `pk`.
     function _applyMultichain(uint256 pk, address account, Keystore.AccountChange[] memory changes) internal {
         keystore.applySignedAccountChanges(
-            account, _signBatch(pk, account, Keystore.AccountChangeChannel.Multichain, _multichainSeq(account), changes)
+            account, _signBatch(pk, account, Keystore.AccountChangeChannel.Multichain, _globalSeqWord(account), changes)
+        );
+    }
+
+    /// @dev Build + relay an unsequenced (JIT) multichain (global) batch at the account's current global epoch,
+    ///      K1-signed by `pk`.
+    function _applyGlobalUnsequenced(uint256 pk, address account, Keystore.AccountChange[] memory changes) internal {
+        keystore.applySignedAccountChanges(
+            account,
+            _signBatch(pk, account, Keystore.AccountChangeChannel.Multichain, _globalUnseqWord(account), changes)
         );
     }
 
@@ -280,7 +307,15 @@ contract KeystoreTest is Test {
         view
         returns (Keystore.SignedAccountChanges memory)
     {
-        return _signBatch(pk, account, Keystore.AccountChangeChannel.Multichain, _multichainSeq(account), changes);
+        return _signBatch(pk, account, Keystore.AccountChangeChannel.Multichain, _globalSeqWord(account), changes);
+    }
+
+    function _globalUnseqBatch(uint256 pk, address account, Keystore.AccountChange[] memory changes)
+        internal
+        view
+        returns (Keystore.SignedAccountChanges memory)
+    {
+        return _signBatch(pk, account, Keystore.AccountChangeChannel.Multichain, _globalUnseqWord(account), changes);
     }
 
     // ── Back-compat actor helpers (re-implemented on applySignedAccountChanges) ──
@@ -338,21 +373,31 @@ contract KeystoreTest is Test {
 
     // ── Direct AccountState storage pokes (for saturation edge cases) ──
     //
-    // AccountState packs into one slot at base-slot 1 (declaration order: _actors, _accountState).
-    // multichainSequence occupies bytes[0:8] and localSequence bytes[8:16] of that slot; localSequence's high
-    // 32 bits are the epoch, its low 32 bits the sequence.
+    // AccountState packs into one slot at base-slot 1 (declaration order: _actors, _accountState). The two replay
+    // tracks occupy the low 16 bytes: the GLOBAL (Multichain) word in bytes[0:8] (globalSequence low, globalEpoch
+    // high) and the LOCAL word in bytes[8:16] (localSequence low, localEpoch high). Each word reads as epoch<<32|seq.
 
     function _accountStateSlot(address account) internal pure returns (bytes32) {
         return keccak256(abi.encode(account, uint256(1)));
     }
 
-    /// @dev Overwrite the packed localSequence word (epoch<<32 | seq), preserving every other field in the slot.
+    /// @dev Overwrite the packed local word (epoch<<32 | seq) in bytes[8:16], preserving every other field.
     function _forceLocalWord(address account, uint64 word) internal {
         bytes32 slot = _accountStateSlot(account);
         uint256 cur = uint256(vm.load(address(keystore), slot));
         // Clear bytes[8:16] (bits 64..127) and write the new word there.
         uint256 mask = ~(uint256(type(uint64).max) << 64);
         uint256 updated = (cur & mask) | (uint256(word) << 64);
+        vm.store(address(keystore), slot, bytes32(updated));
+    }
+
+    /// @dev Overwrite the packed global (Multichain) word (epoch<<32 | seq) in bytes[0:8], preserving every other field.
+    function _forceGlobalWord(address account, uint64 word) internal {
+        bytes32 slot = _accountStateSlot(account);
+        uint256 cur = uint256(vm.load(address(keystore), slot));
+        // Clear bytes[0:8] (bits 0..63) and write the new word there.
+        uint256 mask = ~uint256(type(uint64).max);
+        uint256 updated = (cur & mask) | uint256(word);
         vm.store(address(keystore), slot, bytes32(updated));
     }
 

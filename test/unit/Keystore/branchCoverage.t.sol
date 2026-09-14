@@ -40,11 +40,11 @@ contract KeystoreBranchCoverageTest is KeystoreTest {
 
     // ── Environment-op payload guards ──
 
-    /// @notice IncrementLocalEpoch carries an empty payload; a non-empty one reverts InvalidChangePayload.
-    function test_incrementLocalEpoch_revert_nonEmptyPayload() public {
+    /// @notice IncrementEpoch carries an empty payload; a non-empty one reverts InvalidChangePayload.
+    function test_incrementEpoch_revert_nonEmptyPayload() public {
         (address account,) = _createK1Account(OWNER_PK);
         Keystore.AccountChange memory change =
-            Keystore.AccountChange({changeType: Keystore.ChangeType.IncrementLocalEpoch, payload: hex"01"});
+            Keystore.AccountChange({changeType: Keystore.ChangeType.IncrementEpoch, payload: hex"01"});
         Keystore.SignedAccountChanges memory s = _localBatch(OWNER_PK, account, _one(change));
         vm.expectRevert(Keystore.InvalidChangePayload.selector);
         keystore.applySignedAccountChanges(account, s);
@@ -102,17 +102,15 @@ contract KeystoreBranchCoverageTest is KeystoreTest {
         assertEq(delay, 0);
     }
 
-    // ── Multichain sequence saturation ──
+    // ── Multichain (global) sequence saturation ──
 
-    /// @notice A Multichain batch at the terminal counter (type(uint64).max) reverts SequenceSaturated.
+    /// @notice A sequenced Multichain batch at the terminal global counter (UNSEQUENCED - 1) reverts
+    ///         SequenceSaturated (the global track now mirrors the local track's uint32 counter and JIT sentinel).
     function test_multichain_revert_sequenceSaturated() public {
         (address account,) = _createK1Account(OWNER_PK);
 
-        // Force the multichain counter (low 64 bits of the packed AccountState slot at base-slot 1) to its max.
-        bytes32 slot = keccak256(abi.encode(account, uint256(1)));
-        uint256 cur = uint256(vm.load(address(keystore), slot));
-        uint256 updated = (cur & ~uint256(type(uint64).max)) | uint256(type(uint64).max);
-        vm.store(address(keystore), slot, bytes32(updated));
+        // Force the global counter to its terminal value (globalEpoch stays 0).
+        _forceGlobalWord(account, uint64(keystore.UNSEQUENCED()) - 1);
 
         Keystore.AccountChange memory change = _authorizeChange(bytes32(uint256(1)), k1Authenticator, 0, UNBOUNDED, "");
         Keystore.SignedAccountChanges memory s = _multichainBatch(OWNER_PK, account, _one(change));
