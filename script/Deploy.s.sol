@@ -27,8 +27,10 @@ bytes32 constant DEFAULT_ACCOUNT_SALT = 0x00000000000000000000000000000000000000
 bytes32 constant HIGH_RATE_PAYER_SALT = 0x000000000000000000000000000000000000000000000000000000007257d389;
 /// @dev P256Authenticator: 0x8130...a256
 bytes32 constant P256_SALT = 0x000000000000000000000000000000000000000000000000000000014139e07b;
-/// @dev WebAuthnAuthenticator: 0x8130...f1d0
+/// @dev WebAuthnAuthenticator (UV optional): 0x8130...f1d0
 bytes32 constant WEBAUTHN_SALT = 0x000000000000000000000000000000000000000000000000000000015ec496a4;
+/// @dev WebAuthnAuthenticator (UV required). Salt to be mined for a vanity address before deployment.
+bytes32 constant WEBAUTHN_UV_SALT = 0x0000000000000000000000000000000000000000000000000000000000000000;
 /// @dev DelegateAuthenticator: 0x8130...ade1
 bytes32 constant DELEGATE_SALT = 0x000000000000000000000000000000000000000000000000000000012b221529;
 /// @dev PolicyManager: 0x8130...0ac1
@@ -105,6 +107,10 @@ contract Deploy is Script {
         return abi.encodePacked(type(CanonicalHighRatePayerAccount).creationCode, abi.encode(accountConfig));
     }
 
+    function _webAuthnInit(bool requireUV) internal pure returns (bytes memory) {
+        return abi.encodePacked(type(WebAuthnAuthenticator).creationCode, abi.encode(requireUV));
+    }
+
     function _delegateAuthInit(address accountConfig) internal pure returns (bytes memory) {
         return abi.encodePacked(type(DelegateAuthenticator).creationCode, abi.encode(accountConfig));
     }
@@ -152,7 +158,8 @@ contract Deploy is Script {
         console.log("=== Authenticators ===");
         console.log("(secp256k1 is built in: Keystore.K1_AUTHENTICATOR() == address(1))");
         console.log("P256Authenticator:       ", _addr(type(P256Authenticator).creationCode, P256_SALT));
-        console.log("WebAuthnAuthenticator:   ", _addr(type(WebAuthnAuthenticator).creationCode, WEBAUTHN_SALT));
+        console.log("WebAuthnAuthenticator:   ", _addr(_webAuthnInit(false), WEBAUTHN_SALT));
+        console.log("WebAuthnAuthenticator(UV):", _addr(_webAuthnInit(true), WEBAUTHN_UV_SALT));
         console.log("DelegateAuthenticator:   ", _addr(_delegateAuthInit(accountConfig), DELEGATE_SALT));
         console.log("");
         console.log("=== Example policies (unaudited) ===");
@@ -183,7 +190,8 @@ contract Deploy is Script {
         // ── Authenticators (secp256k1 is built into Keystore; no contract to deploy) ──
 
         address p256 = _create2(type(P256Authenticator).creationCode, P256_SALT);
-        address webAuthn = _create2(type(WebAuthnAuthenticator).creationCode, WEBAUTHN_SALT);
+        address webAuthn = _create2(_webAuthnInit(false), WEBAUTHN_SALT);
+        address webAuthnUV = _create2(_webAuthnInit(true), WEBAUTHN_UV_SALT);
         address delegate = _create2(_delegateAuthInit(accountConfig), DELEGATE_SALT);
 
         // ── Example policies (unaudited reference implementations) ──
@@ -203,6 +211,7 @@ contract Deploy is Script {
         console.log("(secp256k1 is built in: Keystore.K1_AUTHENTICATOR() == address(1))");
         console.log("P256Authenticator:       ", p256);
         console.log("WebAuthnAuthenticator:   ", webAuthn);
+        console.log("WebAuthnAuthenticator(UV):", webAuthnUV);
         console.log("DelegateAuthenticator:   ", delegate);
         console.log("");
         console.log("=== Example policies (unaudited) ===");

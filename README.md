@@ -34,8 +34,8 @@ The canonical EIP-8130 authenticator set. secp256k1 (ECDSA) is built into `Keyst
 |----------|-----------|
 | `K1_AUTHENTICATOR` (built in, `address(1)`) | secp256k1 (ECDSA) |
 | `P256Authenticator` | secp256r1 / P-256 (raw) |
-| `WebAuthnAuthenticator` | secp256r1 / P-256 (WebAuthn) |
-| `DelegateAuthenticator` | Delegated validation (1-hop) |
+| `WebAuthnAuthenticator` | secp256r1 / P-256 (WebAuthn). Two instances: UV-optional and UV-required (`REQUIRE_UV`); the account chooses by which address it registers the key under. Same actorId derivation for both |
+| `DelegateAuthenticator` | Delegated validation (1-hop). The returned actorId encodes the nested signer's class on the delegate account: `ActorId.fromAddress(B)` when B's **admin** signed, `ActorId.operatorOfAddress(B)` (`0x10 ‖ 0…0 ‖ B`) when a B **operator** signed. Register one or both |
 
 ## Usage
 
