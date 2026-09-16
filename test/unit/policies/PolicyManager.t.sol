@@ -6,7 +6,8 @@ import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
 import {Keystore} from "../../../src/Keystore.sol";
 import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../../src/interfaces/ITransactionContext.sol";
-import {Call, DefaultAccount} from "../../../src/accounts/DefaultAccount.sol";
+import {Call, ICallTransformer, IExecuteBatch} from "../../../src/interfaces/ICallTransformer.sol";
+import {DefaultAccount} from "../../../src/accounts/DefaultAccount.sol";
 
 import {PolicyManager} from "../../../src/policies/PolicyManager.sol";
 import {Policy} from "../../../src/policies/Policy.sol";
@@ -23,14 +24,14 @@ contract EmptyPlanPolicy is Policy {
         internal
         pure
         override
-        returns (bytes memory, bytes memory)
+        returns (Call[] memory, bytes memory)
     {
-        return ("", "");
+        return (new Call[](0), "");
     }
 }
 
-/// @notice Policy that returns a successful empty `executeBatch` plus non-empty `postCallData`, so the manager's
-///         {onPostExecute} forwarding can be asserted end-to-end.
+/// @notice Policy that returns a single-call plan plus non-empty `postCallData`, so the manager's {onPostExecute}
+///         forwarding can be asserted end-to-end.
 contract PostCallPolicy is Policy {
     bytes32 public lastPostCommitment;
     address public lastPostAccount;
@@ -45,10 +46,11 @@ contract PostCallPolicy is Policy {
         internal
         pure
         override
-        returns (bytes memory accountCallData, bytes memory postCallData)
+        returns (Call[] memory calls, bytes memory postCallData)
     {
-        Call[] memory calls = new Call[](0);
-        return (abi.encodeCall(DefaultAccount.executeBatch, (calls)), POST_PAYLOAD);
+        calls = new Call[](1);
+        calls[0] = Call({target: address(0xBEEF), value: 0, data: ""});
+        return (calls, POST_PAYLOAD);
     }
 
     function _onPostExecute(bytes32 commitment, address account, bytes calldata postCallData) internal override {
@@ -67,13 +69,28 @@ contract ReentrantExecutePolicy is Policy {
     function _onExecute(bytes32, address account, bytes calldata, bytes calldata, address)
         internal
         override
-        returns (bytes memory, bytes memory)
+        returns (Call[] memory, bytes memory)
     {
         PolicyManager.PolicyBinding memory dummy;
         dummy.account = account;
         // Guard is locked by the outer call -> this reverts ReentrancyGuardReentrantCall before any body check.
         PolicyManager(address(POLICY_MANAGER)).execute(dummy, "");
-        return ("", "");
+        return (new Call[](0), "");
+    }
+}
+
+/// @notice Transformer that encodes the first call as a single {DefaultAccount.execute}, proving the manager can
+///         drive an account through a non-default execution entrypoint the binding selects.
+contract ExecuteTransformer is ICallTransformer {
+    function transform(address, Call[] calldata calls) external pure returns (bytes memory) {
+        return abi.encodeCall(DefaultAccount.execute, (calls[0].target, calls[0].value, calls[0].data));
+    }
+}
+
+/// @notice Transformer that returns empty calldata, exercising the manager's {EmptyTransformerOutput} guard.
+contract EmptyOutputTransformer is ICallTransformer {
+    function transform(address, Call[] calldata) external pure returns (bytes memory) {
+        return "";
     }
 }
 
@@ -198,7 +215,13 @@ contract PolicyManagerTest is KeystoreTest {
     function test_execute_revert_reentrantReenter() public {
         ReentrantExecutePolicy evil = new ReentrantExecutePolicy(address(manager));
         PolicyManager.PolicyBinding memory binding = PolicyManager.PolicyBinding({
-            account: account, policy: address(evil), policyConfig: "", validAfter: 0, validUntil: 0, salt: 7
+            account: account,
+            policy: address(evil),
+            transformer: address(0),
+            policyConfig: "",
+            validAfter: 0,
+            validUntil: 0,
+            salt: 7
         });
         bytes32 actorId = _sessionActorId(7);
         _authorizePolicyActor(actorId, manager.commitmentOf(binding));
@@ -223,7 +246,13 @@ contract PolicyManagerTest is KeystoreTest {
     function test_execute_success_emptyCallPlanIsNoOp() public {
         EmptyPlanPolicy emptyPolicy = new EmptyPlanPolicy(address(manager));
         PolicyManager.PolicyBinding memory binding = PolicyManager.PolicyBinding({
-            account: account, policy: address(emptyPolicy), policyConfig: "", validAfter: 0, validUntil: 0, salt: 42
+            account: account,
+            policy: address(emptyPolicy),
+            transformer: address(0),
+            policyConfig: "",
+            validAfter: 0,
+            validUntil: 0,
+            salt: 42
         });
         bytes32 actorId = _sessionActorId(42);
         bytes32 commitment = manager.commitmentOf(binding);
@@ -241,7 +270,13 @@ contract PolicyManagerTest is KeystoreTest {
     function test_execute_success_forwardsPostCallData() public {
         PostCallPolicy postPolicy = new PostCallPolicy(address(manager));
         PolicyManager.PolicyBinding memory binding = PolicyManager.PolicyBinding({
-            account: account, policy: address(postPolicy), policyConfig: "", validAfter: 0, validUntil: 0, salt: 43
+            account: account,
+            policy: address(postPolicy),
+            transformer: address(0),
+            policyConfig: "",
+            validAfter: 0,
+            validUntil: 0,
+            salt: 43
         });
         bytes32 actorId = _sessionActorId(43);
         bytes32 commitment = manager.commitmentOf(binding);
@@ -273,6 +308,89 @@ contract PolicyManagerTest is KeystoreTest {
         assertEq(keystore.getPolicyCommitment(account, actorId), commitment);
     }
 
+    // ── Transformer encoding ──
+
+    /// @notice Verifies execute encodes the default executeBatch(Call[]) plan when the binding sets no transformer.
+    /// @dev Asserts the account receives abi.encodeCall(IExecuteBatch.executeBatch, calls) for the single action.
+    function test_execute_success_defaultEncodesExecuteBatch() public {
+        _installSession(1);
+        _mockActingActor(_sessionActorId(1));
+
+        Call[] memory calls = new Call[](1);
+        calls[0] = Call({target: target, value: 0, data: ""});
+        vm.expectCall(account, abi.encodeCall(IExecuteBatch.executeBatch, (calls)));
+        vm.prank(account);
+        manager.execute(_binding(1), _action());
+    }
+
+    /// @notice Verifies execute uses the binding's transformer to encode the account call when one is set.
+    /// @dev With an {ExecuteTransformer}, asserts the account receives DefaultAccount.execute(target, 0, "") — a
+    ///      non-default entrypoint — proving wallet-agnostic dispatch.
+    function test_execute_success_usesTransformerEncoding() public {
+        ExecuteTransformer transformer = new ExecuteTransformer();
+        (bytes32 actorId, PolicyManager.PolicyBinding memory binding) =
+            _installSessionWithTransformer(50, address(transformer));
+        _mockActingActor(actorId);
+
+        vm.expectCall(account, abi.encodeCall(DefaultAccount.execute, (target, uint256(0), bytes(""))));
+        vm.prank(account);
+        manager.execute(binding, _action());
+    }
+
+    /// @notice Verifies execute reverts when the binding's transformer address has no code.
+    /// @dev Checks TransformerHasNoCode(transformer); the policy plan is produced, then encoding fails before the call.
+    function test_execute_revert_transformerHasNoCode() public {
+        address transformer = makeAddr("noCodeTransformer");
+        (bytes32 actorId, PolicyManager.PolicyBinding memory binding) = _installSessionWithTransformer(51, transformer);
+        _mockActingActor(actorId);
+
+        vm.expectRevert(abi.encodeWithSelector(PolicyManager.TransformerHasNoCode.selector, transformer));
+        vm.prank(account);
+        manager.execute(binding, _action());
+    }
+
+    /// @notice Verifies execute reverts when the binding's transformer returns empty calldata.
+    /// @dev Checks EmptyTransformerOutput(transformer); guards against forwarding an empty call to the account.
+    function test_execute_revert_emptyTransformerOutput() public {
+        EmptyOutputTransformer transformer = new EmptyOutputTransformer();
+        (bytes32 actorId, PolicyManager.PolicyBinding memory binding) =
+            _installSessionWithTransformer(52, address(transformer));
+        _mockActingActor(actorId);
+
+        vm.expectRevert(abi.encodeWithSelector(PolicyManager.EmptyTransformerOutput.selector, address(transformer)));
+        vm.prank(account);
+        manager.execute(binding, _action());
+    }
+
+    /// @notice Verifies the transformer is bound by the commitment: a binding whose transformer differs from the
+    ///         committed one is rejected.
+    /// @dev Authorizes a default (transformer == address(0)) commitment, then executes an otherwise-identical binding
+    ///      with a non-zero transformer; checks BindingCommitmentMismatch(signed, actual).
+    function test_execute_revert_transformerNotCommitted() public {
+        ExecuteTransformer transformer = new ExecuteTransformer();
+        bytes32 actorId = _installSession(60);
+        PolicyManager.PolicyBinding memory tampered = _binding(60);
+        tampered.transformer = address(transformer);
+        bytes32 signed = keystore.getPolicyCommitment(account, actorId);
+        bytes32 actual = manager.commitmentOf(tampered);
+        _mockActingActor(actorId);
+
+        vm.expectRevert(abi.encodeWithSelector(PolicyManager.BindingCommitmentMismatch.selector, signed, actual));
+        vm.prank(account);
+        manager.execute(tampered, _action());
+    }
+
+    /// @notice Verifies commitmentOf depends on the transformer field.
+    /// @dev Two bindings equal but for the transformer produce different commitments.
+    function test_commitmentOf_dependsOnTransformer(address transformerA, address transformerB) public view {
+        vm.assume(transformerA != transformerB);
+        PolicyManager.PolicyBinding memory bindingA = _binding(70);
+        PolicyManager.PolicyBinding memory bindingB = _binding(70);
+        bindingA.transformer = transformerA;
+        bindingB.transformer = transformerB;
+        assertTrue(manager.commitmentOf(bindingA) != manager.commitmentOf(bindingB));
+    }
+
     // ── Helpers ──
 
     function _mockActingActor(bytes32 actorId) internal {
@@ -299,12 +417,28 @@ contract PolicyManagerTest is KeystoreTest {
 
     function _bindingFor(address acct, uint256 salt) internal view returns (PolicyManager.PolicyBinding memory) {
         return PolicyManager.PolicyBinding({
-            account: acct, policy: address(policy), policyConfig: _config(), validAfter: 0, validUntil: 0, salt: salt
+            account: acct,
+            policy: address(policy),
+            transformer: address(0),
+            policyConfig: _config(),
+            validAfter: 0,
+            validUntil: 0,
+            salt: salt
         });
     }
 
     function _sessionActorId(uint256 salt) internal pure returns (bytes32) {
         return keccak256(abi.encode("session-key", salt));
+    }
+
+    function _installSessionWithTransformer(uint256 salt, address transformer)
+        internal
+        returns (bytes32 actorId, PolicyManager.PolicyBinding memory binding)
+    {
+        binding = _binding(salt);
+        binding.transformer = transformer;
+        actorId = _sessionActorId(salt);
+        _authorizePolicyActor(actorId, manager.commitmentOf(binding));
     }
 
     function _installSession(uint256 salt) internal returns (bytes32 actorId) {
@@ -324,6 +458,7 @@ contract PolicyManagerTest is KeystoreTest {
         binding = PolicyManager.PolicyBinding({
             account: account,
             policy: address(policy),
+            transformer: address(0),
             policyConfig: _config(),
             validAfter: validAfter,
             validUntil: validUntil,

@@ -3,7 +3,7 @@ pragma solidity ^0.8.30;
 
 import {IERC20} from "openzeppelin/token/ERC20/IERC20.sol";
 
-import {Call, DefaultAccount} from "../accounts/DefaultAccount.sol";
+import {Call} from "../interfaces/ICallTransformer.sol";
 import {Policy} from "./Policy.sol";
 import {RecurringAllowance} from "./RecurringAllowance.sol";
 
@@ -327,15 +327,15 @@ contract SessionPolicy is Policy {
     /// @param policyConfig  ABI-encoded {Config} committed by the account.
     /// @param executionData ABI-encoded {Action} for this call.
     ///
-    /// @return accountCallData ABI-encoded {DefaultAccount.executeBatch} plan for the single action.
-    /// @return postCallData    Always empty (no post-call hook).
+    /// @return calls        Single-element call plan for the decoded action.
+    /// @return postCallData Always empty (no post-call hook).
     function _onExecute(
         bytes32 commitment,
         address account,
         bytes calldata policyConfig,
         bytes calldata executionData,
         address
-    ) internal override returns (bytes memory accountCallData, bytes memory postCallData) {
+    ) internal override returns (Call[] memory calls, bytes memory postCallData) {
         Config memory config = abi.decode(policyConfig, (Config));
         _validateConfig(account, config);
         Action memory action = abi.decode(executionData, (Action));
@@ -392,9 +392,9 @@ contract SessionPolicy is Policy {
             _consume(commitment, address(0), uint160(nativeLimit.limit), _period(nativeLimit), action.value);
         }
 
-        Call[] memory calls = new Call[](1);
+        calls = new Call[](1);
         calls[0] = Call({target: action.target, value: action.value, data: action.data});
-        return (abi.encodeCall(DefaultAccount.executeBatch, (calls)), "");
+        return (calls, "");
     }
 
     // ── Internal helpers ──

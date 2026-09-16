@@ -5,18 +5,9 @@ import {Receiver} from "solady/accounts/Receiver.sol";
 import {LibCall} from "solady/utils/LibCall.sol";
 
 import {Keystore} from "../Keystore.sol";
+import {Call} from "../interfaces/ICallTransformer.sol";
 import {ActorId} from "../libraries/ActorId.sol";
 import {Scopes} from "../libraries/Scopes.sol";
-
-/// @notice A single call in an execution batch.
-struct Call {
-    /// @dev Address the account calls.
-    address target;
-    /// @dev Wei forwarded with the call.
-    uint256 value;
-    /// @dev Calldata passed to `target`.
-    bytes data;
-}
 
 /// @notice Canonical model of the EIP-8130 default account: the behavior every EOA exhibits by default on an
 ///         EIP-8130 chain, expressed in Solidity. It handles batched execution and ERC-1271 signature validation,
