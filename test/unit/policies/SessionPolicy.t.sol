@@ -5,6 +5,7 @@ import {Keystore} from "../../../src/Keystore.sol";
 import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../../src/interfaces/ITransactionContext.sol";
 
+import {PolicyBinding} from "../../../src/policies/PolicyBinding.sol";
 import {PolicyManager} from "../../../src/policies/PolicyManager.sol";
 import {SessionPolicy} from "../../../src/policies/SessionPolicy.sol";
 import {RecurringAllowance} from "../../../src/policies/RecurringAllowance.sol";
@@ -81,14 +82,14 @@ contract SessionPolicyTest is KeystoreTest {
     uint40 internal constant WEEK = 7 days;
 
     uint256 internal saltNonce;
-    PolicyManager.PolicyBinding internal lastBinding;
+    PolicyBinding internal lastBinding;
 
     function setUp() public override {
         super.setUp();
         vm.warp(1_700_000_000);
 
         manager = new PolicyManager(address(keystore));
-        policy = new SessionPolicy(address(manager));
+        policy = new SessionPolicy(address(keystore));
         token = new SessionMockERC20();
         target = new SessionMockTarget();
 
@@ -533,7 +534,7 @@ contract SessionPolicyTest is KeystoreTest {
         bytes32 actorId = _authorize(_config(_noLimits(), _anySelectorScopes(address(target))));
         bytes32 commitment = keystore.getPolicyCommitment(account, actorId);
 
-        PolicyManager.PolicyBinding memory wrong = lastBinding;
+        PolicyBinding memory wrong = lastBinding;
         wrong.policyConfig = _config(_noLimits(), _anySelectorScopes(address(token)));
         bytes32 actual = manager.commitmentOf(wrong);
 
@@ -609,7 +610,7 @@ contract SessionPolicyTest is KeystoreTest {
     ///         _validateConfig already rejects it at enforce entry. Reached only via a harness that bypasses
     ///         validation, since the enforce path can never present an oversized limit here.
     function test_findTokenLimit_revert_limitTooLargeDefensive() public {
-        SessionPolicyHarness harness = new SessionPolicyHarness(address(manager));
+        SessionPolicyHarness harness = new SessionPolicyHarness(address(keystore));
         uint256 tooLarge = uint256(type(uint160).max) + 1;
 
         SessionPolicy.TokenLimit[] memory limits = _limit(address(token), tooLarge, WEEK);
@@ -779,7 +780,7 @@ contract SessionPolicyTest is KeystoreTest {
         internal
         returns (bytes32 actorId, bytes32 commitment)
     {
-        PolicyManager.PolicyBinding memory binding;
+        PolicyBinding memory binding;
         (actorId, binding) = _prepareBinding(policyConfig);
         lastBinding = binding;
         commitment = manager.commitmentOf(binding);
@@ -907,7 +908,7 @@ contract SessionPolicyTest is KeystoreTest {
     /// @dev Authorize a fresh session-key actor gated to the manager committing to `policyConfig`. Returns the
     ///      actorId. Stashes the binding for subsequent {_execute} calls.
     function _authorize(bytes memory policyConfig) internal returns (bytes32 actorId) {
-        PolicyManager.PolicyBinding memory binding;
+        PolicyBinding memory binding;
         (actorId, binding) = _prepareBinding(policyConfig);
         lastBinding = binding;
     }
@@ -920,10 +921,10 @@ contract SessionPolicyTest is KeystoreTest {
     /// @dev Authorize a fresh session-key actor committing to `policyConfig` and return the (actorId, binding).
     function _prepareBinding(bytes memory policyConfig)
         internal
-        returns (bytes32 actorId, PolicyManager.PolicyBinding memory binding)
+        returns (bytes32 actorId, PolicyBinding memory binding)
     {
         actorId = keccak256(abi.encode("session", saltNonce++));
-        binding = PolicyManager.PolicyBinding({
+        binding = PolicyBinding({
             account: account,
             policy: address(policy),
             policyConfig: policyConfig,
@@ -954,7 +955,7 @@ contract SessionPolicyTest is KeystoreTest {
 /// @dev Exposes {SessionPolicy._findTokenLimit} so the defensive LimitTooLarge guard — unreachable through the
 ///      validated {_enforce} path — can be exercised directly with an oversized limit.
 contract SessionPolicyHarness is SessionPolicy {
-    constructor(address policyManager) SessionPolicy(policyManager) {}
+    constructor(address keystore) SessionPolicy(keystore) {}
 
     function exposedFindTokenLimit(SessionPolicy.Config calldata config, address token)
         external

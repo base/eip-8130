@@ -5,9 +5,11 @@ import {Address} from "openzeppelin/utils/Address.sol";
 import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
 
 import {Keystore} from "../Keystore.sol";
+import {Call, IExecuteBatch} from "../interfaces/IExecuteBatch.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../interfaces/ITransactionContext.sol";
 import {ActorId} from "../libraries/ActorId.sol";
 import {Policy} from "./Policy.sol";
+import {PolicyBinding, PolicyBindingLib} from "./PolicyBinding.sol";
 
 /// @dev Sentinel `authenticator` marking an actor as a policy-only external-pull caller (e.g. a subscription
 ///      provider): recognized by Keystore but unable to drive the account directly or authenticate an 8130
@@ -32,6 +34,7 @@ address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak2
 ///      {execute} from resolving a different account's identity mid-call.
 contract PolicyManager is ReentrancyGuard {
     using Address for address;
+    using PolicyBindingLib for PolicyBinding;
 
     /// @notice The EIP-8130 Keystore system contract used to resolve signed policy commitments.
     Keystore public immutable KEYSTORE;
@@ -40,22 +43,6 @@ contract PolicyManager is ReentrancyGuard {
     /// @param keystore Address of the EIP-8130 Keystore system contract.
     constructor(address keystore) {
         KEYSTORE = Keystore(keystore);
-    }
-
-    /// @notice Policy binding authorized by the account. Its hash is the policy commitment.
-    struct PolicyBinding {
-        /// @dev Account that authorizes the binding and is the execution target.
-        address account;
-        /// @dev Policy contract implementing the hook interface.
-        address policy;
-        /// @dev Committed, opaque policy configuration interpreted by `policy`.
-        bytes policyConfig;
-        /// @dev Earliest timestamp (seconds) at which execution is allowed. Zero = no lower bound.
-        uint40 validAfter;
-        /// @dev Timestamp (seconds) at/after which execution is disallowed. Zero = no upper bound.
-        uint40 validUntil;
-        /// @dev Salt allowing multiple distinct bindings for the same (account, policy, config).
-        uint256 salt;
     }
 
     /// @notice Emitted for each successful policy execution (a non-empty account call).
@@ -104,7 +91,7 @@ contract PolicyManager is ReentrancyGuard {
     ///
     /// @return The binding commitment: keccak256 over the binding fields, with the config bound by its own hash.
     function commitmentOf(PolicyBinding calldata binding) public pure returns (bytes32) {
-        return _commitment(binding);
+        return binding.commitment();
     }
 
     /// @notice Exercises a policy authorized by the account's signed commitment and forwards the resulting call plan
@@ -126,13 +113,13 @@ contract PolicyManager is ReentrancyGuard {
         if (binding.account != account) revert InvalidBindingAccount(account, binding.account);
 
         bytes32 actorId = _actingActorId();
-        bytes32 commitment = _commitment(binding);
+        bytes32 commitment = binding.commitment();
         bytes32 signed = KEYSTORE.getPolicyCommitment(account, actorId);
         if (signed == bytes32(0)) revert NoActivePolicy(actorId);
         if (signed != commitment) revert BindingCommitmentMismatch(signed, commitment);
 
         // No manager-match / expiry checks here — see @dev above. The external entrypoints below re-add both.
-        _enforce(binding, commitment, executionData, account);
+        _enforce(binding, actorId, commitment, executionData, account);
     }
 
     /// @notice External-caller variant of {execute}: an external party drives a policy an account authorized for it
@@ -217,19 +204,25 @@ contract PolicyManager is ReentrancyGuard {
         if (config.authenticator != EXTERNAL_POLICY_AUTHENTICATOR) revert InvalidActor(actorId);
         if (manager != address(this)) revert NoActivePolicy(actorId);
 
-        bytes32 commitment = _commitment(binding);
+        bytes32 commitment = binding.commitment();
         if (signed == bytes32(0)) revert NoActivePolicy(actorId);
         if (signed != commitment) revert BindingCommitmentMismatch(signed, commitment);
 
-        _enforce(binding, commitment, executionData, caller);
+        _enforce(binding, actorId, commitment, executionData, caller);
     }
 
-    /// @dev Enforces the binding's validity window, runs the policy hooks, forwards the account call, then
-    ///      post-executes. Reverts with OutsideValidityWindow outside `[validAfter, validUntil)`; bubbles the policy
-    ///      or account-call revert. Emits {PolicyExecuted} on a non-empty account call.
-    function _enforce(PolicyBinding calldata binding, bytes32 commitment, bytes calldata executionData, address caller)
-        internal
-    {
+    /// @dev Enforces the binding's validity window, runs the policy hooks, encodes and forwards the account call,
+    ///      then post-executes. The policy independently re-authenticates the binding against the Keystore; this
+    ///      window check and the entrypoints' commitment checks are defense in depth. Reverts with
+    ///      OutsideValidityWindow outside `[validAfter, validUntil)`; bubbles the policy, encoder, or account-call
+    ///      revert. Emits {PolicyExecuted} on a non-empty call plan.
+    function _enforce(
+        PolicyBinding calldata binding,
+        bytes32 actorId,
+        bytes32 commitment,
+        bytes calldata executionData,
+        address caller
+    ) internal {
         if (
             (binding.validAfter != 0 && block.timestamp < binding.validAfter)
                 || (binding.validUntil != 0 && block.timestamp >= binding.validUntil)
@@ -238,13 +231,28 @@ contract PolicyManager is ReentrancyGuard {
         }
 
         address account = binding.account;
-        (bytes memory accountCallData, bytes memory postCallData) =
-            Policy(binding.policy).onExecute(commitment, account, binding.policyConfig, executionData, caller);
-        if (accountCallData.length == 0) return;
+        (Call[] memory calls, bytes memory postCallData) =
+            Policy(binding.policy).onExecute(binding, actorId, executionData, caller);
+        if (calls.length == 0) return;
 
-        account.functionCall(accountCallData);
-        Policy(binding.policy).onPostExecute(commitment, account, postCallData);
+        account.functionCall(_encodeCalls(account, calls));
+        Policy(binding.policy).onPostExecute(binding, actorId, postCallData);
         emit PolicyExecuted(account, binding.policy, commitment, caller);
+    }
+
+    /// @notice Encodes a policy's wallet-agnostic call plan into calldata for `account`'s execution entrypoint.
+    ///
+    /// @dev The default encodes `executeBatch(Call[])` — the surface shared by the EIP-8130 default account and
+    ///      common smart wallets. A manager targeting a wallet with a different execution ABI overrides this and is
+    ///      deployed as its own instance; accounts select an encoding by gating their actor to that manager.
+    ///
+    /// @param account Account the calldata will be forwarded to (unused by the default encoding).
+    /// @param calls   Wallet-agnostic call plan produced by the policy.
+    ///
+    /// @return Calldata the manager forwards to `account`.
+    function _encodeCalls(address account, Call[] memory calls) internal view virtual returns (bytes memory) {
+        account;
+        return abi.encodeCall(IExecuteBatch.executeBatch, (calls));
     }
 
     /// @dev Reads the in-flight transaction's authenticated actorId from the transaction-context precompile.
@@ -255,19 +263,5 @@ contract PolicyManager is ReentrancyGuard {
             abi.encodeWithSelector(ITransactionContext.getTransactionSenderActorId.selector)
         );
         if (ok && ret.length == 32) actorId = abi.decode(ret, (bytes32));
-    }
-
-    /// @dev Computes the binding commitment: keccak256 over the binding fields, with the config bound by its hash.
-    function _commitment(PolicyBinding calldata binding) internal pure returns (bytes32) {
-        return keccak256(
-            abi.encode(
-                binding.account,
-                binding.policy,
-                keccak256(binding.policyConfig),
-                binding.validAfter,
-                binding.validUntil,
-                binding.salt
-            )
-        );
     }
 }
