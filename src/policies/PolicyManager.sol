@@ -5,6 +5,7 @@ import {Address} from "openzeppelin/utils/Address.sol";
 import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
 
 import {Keystore} from "../Keystore.sol";
+import {Call, ICallTransformer, IExecuteBatch} from "../interfaces/ICallTransformer.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../interfaces/ITransactionContext.sol";
 import {ActorId} from "../libraries/ActorId.sol";
 import {Policy} from "./Policy.sol";
@@ -48,6 +49,9 @@ contract PolicyManager is ReentrancyGuard {
         address account;
         /// @dev Policy contract implementing the hook interface.
         address policy;
+        /// @dev Transformer encoding the policy's calls into account calldata; address(0) uses the default
+        ///      `executeBatch(Call[])` encoding.
+        address transformer;
         /// @dev Committed, opaque policy configuration interpreted by `policy`.
         bytes policyConfig;
         /// @dev Earliest timestamp (seconds) at which execution is allowed. Zero = no lower bound.
@@ -98,6 +102,12 @@ contract PolicyManager is ReentrancyGuard {
     /// @notice The {executeForMany} self-call boundary was invoked by someone other than this contract.
     error OnlySelf();
 
+    /// @notice The binding's transformer has no deployed code, so it cannot encode the account call.
+    error TransformerHasNoCode(address transformer);
+
+    /// @notice The binding's transformer returned empty calldata, which would forward an empty call to the account.
+    error EmptyTransformerOutput(address transformer);
+
     /// @notice Computes the commitment (binding identifier) for a binding.
     ///
     /// @param binding Full policy binding to hash.
@@ -114,7 +124,8 @@ contract PolicyManager is ReentrancyGuard {
     /// @dev Reverts with NoActivePolicy when the acting actor has no signed policy commitment.
     /// @dev Reverts with BindingCommitmentMismatch when `binding` does not recompute to the signed commitment.
     /// @dev Reverts with OutsideValidityWindow when the current time is outside `[validAfter, validUntil)`.
-    /// @dev Bubbles up the policy or account-call revert reason when the forwarded call reverts.
+    /// @dev Reverts with TransformerHasNoCode or EmptyTransformerOutput when the binding's transformer is invalid.
+    /// @dev Bubbles up the policy, transformer, or account-call revert reason when the forwarded call reverts.
     /// @dev Account-acting path only: identity is read from the transaction-context precompile and the account is
     ///      `msg.sender`, so it is usable only on EIP-8130 chains. Actor liveness is enforced by the protocol before
     ///      dispatch and not re-checked here.
@@ -142,7 +153,8 @@ contract PolicyManager is ReentrancyGuard {
     /// @dev Reverts with NoActivePolicy when the account has not gated this manager for the caller.
     /// @dev Reverts with BindingCommitmentMismatch when `binding` does not recompute to the signed commitment.
     /// @dev Reverts with OutsideValidityWindow when the current time is outside `[validAfter, validUntil)`.
-    /// @dev Bubbles up the policy or account-call revert reason when the forwarded call reverts.
+    /// @dev Reverts with TransformerHasNoCode or EmptyTransformerOutput when the binding's transformer is invalid.
+    /// @dev Bubbles up the policy, transformer, or account-call revert reason when the forwarded call reverts.
     /// @dev Identity is the caller (`ActorId.fromAddress(msg.sender)`); works on any chain. Unlike {execute}, it
     ///      re-verifies the actor and manager binding since there is no protocol routing.
     ///
@@ -183,8 +195,9 @@ contract PolicyManager is ReentrancyGuard {
     /// @notice Self-call boundary used by {executeForMany} for per-account revert isolation. Not for external use.
     ///
     /// @dev Reverts with OnlySelf when the caller is not this contract.
-    /// @dev Reverts via {_enforceExternal} with InvalidActor, NoActivePolicy, BindingCommitmentMismatch, or
-    ///      OutsideValidityWindow, or bubbles the forwarded call's revert.
+    /// @dev Reverts via {_enforceExternal} with InvalidActor, NoActivePolicy, BindingCommitmentMismatch,
+    ///      OutsideValidityWindow, TransformerHasNoCode, or EmptyTransformerOutput, or bubbles the forwarded call's
+    ///      revert.
     ///
     /// @param binding       Full account-authorized binding (config, window, salt).
     /// @param actorId       Acting external caller's actorId.
@@ -224,9 +237,10 @@ contract PolicyManager is ReentrancyGuard {
         _enforce(binding, commitment, executionData, caller);
     }
 
-    /// @dev Enforces the binding's validity window, runs the policy hooks, forwards the account call, then
-    ///      post-executes. Reverts with OutsideValidityWindow outside `[validAfter, validUntil)`; bubbles the policy
-    ///      or account-call revert. Emits {PolicyExecuted} on a non-empty account call.
+    /// @dev Enforces the binding's validity window, runs the policy hooks, encodes and forwards the account call,
+    ///      then post-executes. Reverts with OutsideValidityWindow outside `[validAfter, validUntil)`; with
+    ///      TransformerHasNoCode or EmptyTransformerOutput when the binding's transformer is invalid; bubbles the
+    ///      policy, transformer, or account-call revert. Emits {PolicyExecuted} on a non-empty call plan.
     function _enforce(PolicyBinding calldata binding, bytes32 commitment, bytes calldata executionData, address caller)
         internal
     {
@@ -238,13 +252,28 @@ contract PolicyManager is ReentrancyGuard {
         }
 
         address account = binding.account;
-        (bytes memory accountCallData, bytes memory postCallData) =
+        (Call[] memory calls, bytes memory postCallData) =
             Policy(binding.policy).onExecute(commitment, account, binding.policyConfig, executionData, caller);
-        if (accountCallData.length == 0) return;
+        if (calls.length == 0) return;
 
-        account.functionCall(accountCallData);
+        account.functionCall(_encodeCalls(binding.transformer, account, calls));
         Policy(binding.policy).onPostExecute(commitment, account, postCallData);
         emit PolicyExecuted(account, binding.policy, commitment, caller);
+    }
+
+    /// @dev Encodes a policy's call plan into account calldata: the default `executeBatch(Call[])` encoding when
+    ///      `transformer` is address(0), otherwise the binding's transformer (staticcalled). Reverts with
+    ///      TransformerHasNoCode when a non-zero transformer has no code, or EmptyTransformerOutput when it returns
+    ///      empty calldata. A transformer is fully trusted by the committing account: its output is forwarded verbatim.
+    function _encodeCalls(address transformer, address account, Call[] memory calls)
+        internal
+        view
+        returns (bytes memory accountCallData)
+    {
+        if (transformer == address(0)) return abi.encodeCall(IExecuteBatch.executeBatch, (calls));
+        if (transformer.code.length == 0) revert TransformerHasNoCode(transformer);
+        accountCallData = ICallTransformer(transformer).transform(account, calls);
+        if (accountCallData.length == 0) revert EmptyTransformerOutput(transformer);
     }
 
     /// @dev Reads the in-flight transaction's authenticated actorId from the transaction-context precompile.
@@ -263,6 +292,7 @@ contract PolicyManager is ReentrancyGuard {
             abi.encode(
                 binding.account,
                 binding.policy,
+                binding.transformer,
                 keccak256(binding.policyConfig),
                 binding.validAfter,
                 binding.validUntil,

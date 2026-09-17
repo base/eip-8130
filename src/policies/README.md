@@ -21,20 +21,23 @@ interpret scope bits; policy attachment is a length check (empty vs 52).
    (`policy_manager(account, actorId)`) and reverts any call whose `call.to` isn't that address before dispatch, so
    the key's call can only arrive at `PolicyManager.execute(binding, executionData)` with `msg.sender == account`.
    The caller supplies the full [`PolicyBinding`](./PolicyManager.sol); the manager recomputes
-   `commitment = keccak256(account, policy, keccak256(policyConfig), validAfter, validUntil, salt)` and requires it
-   to equal the live `getPolicyCommitment(account, actorId)`. That single check authenticates config, validity
-   window, and owning account — so neither the manager nor the policy stores a config hash (strictly better than
+   `commitment = keccak256(account, policy, transformer, keccak256(policyConfig), validAfter, validUntil, salt)` and
+   requires it to equal the live `getPolicyCommitment(account, actorId)`. That single check authenticates config,
+   transformer, validity window, and owning account — so neither the manager nor the policy stores a config hash
+   (strictly better than
    [Account Policies](https://github.com/base/account-policies)' per-binding `_configHashByPolicyId` slot). A
    revoked *or expired* key reads back a zero commitment and stops immediately: `getPolicyCommitment` (like every
    Keystore read accessor) is liveness-gated and resolves an expired actor to zero, identical to a revoked one.
    `execute` doesn't rely on this — protocol authentication already rejects expired actors before dispatch (the
    external `executeFor` path enforces expiry itself, via a single `getActorWithPolicy` read) — but the gating means no off-chain
-   reader ever sees a live-looking commitment for a dead actor. The manager then invokes the policy, forwards a
-   non-empty `executeBatch` plan to the account, and calls `onPostExecute` when applicable.
+   reader ever sees a live-looking commitment for a dead actor. The manager then invokes the policy, encodes its
+   non-empty call plan into account calldata (the default `executeBatch(Call[])`, or the binding's transformer),
+   forwards it, and calls `onPostExecute` when applicable.
 
 ```
 session key ──(8130 gate: only PolicyManager)──▶ PolicyManager.execute
-                                                     │  policy enforces commitment
+                                                     │  policy enforces commitment, returns Call[]
+                                                     │  manager encodes (default executeBatch, or transformer)
                                                      ▼
                                                  account.executeBatch ──▶ token / target
 ```
@@ -43,12 +46,34 @@ session key ──(8130 gate: only PolicyManager)──▶ PolicyManager.execute
 
 | Contract | Role |
 |----------|------|
-| `PolicyManager` | Stateless manager: `execute(binding, …)` / `executeFor(binding, …)` / `executeForMany(bindings[], …)` re-authenticate the full binding against the live signed commitment in Keystore, then run policy → account call → `onPostExecute`. |
-| `Policy` | Base hook: `onExecute` → `(accountCallData, postCallData)` + `onPostExecute` (default no-op). |
+| `PolicyManager` | Stateless manager: `execute(binding, …)` / `executeFor(binding, …)` / `executeForMany(bindings[], …)` re-authenticate the full binding against the live signed commitment in Keystore, then run policy → encode call plan → account call → `onPostExecute`. |
+| `Policy` | Base hook: `onExecute` → `(Call[], postCallData)` + `onPostExecute` (default no-op). Returns a wallet-agnostic call plan; the manager encodes it. |
+| `ICallTransformer` | Adapter interface (with the shared `Call` struct and the canonical `IExecuteBatch` default surface): encodes a policy's `Call[]` into account-specific calldata. |
 | `SessionPolicy` | Unified "session key" policy: target / selector / recipient / spend limits enforced by linear scan over calldata config. Stores only spend usage. Validates config shape at execute. |
 | `RecurringAllowance` | Periodic-allowance accounting library (ported from base/account-policies); used by `SessionPolicy` for spend accounting. |
 
 A key that needs several independent bindings authorizes each separately (distinct commitments); the manager routes each by commitment.
+
+### Wallet-agnostic execution (transformers)
+
+A policy returns *what* to execute as a wallet-agnostic `Call[]` (the `(target, value, data)` triple), never *how* a
+specific account wants that encoded. The manager owns the encoding step, so no policy imports an account type. A
+binding's `transformer` field selects the encoding:
+
+- **`transformer == address(0)` (default):** the manager encodes `abi.encodeCall(IExecuteBatch.executeBatch, (calls))`
+  — the `executeBatch(Call[])` surface shared by the EIP-8130 `DefaultAccount` / `CanonicalHighRatePayerAccount` and
+  common smart wallets (e.g. Coinbase Smart Wallet v2). This path has no external dependency.
+- **`transformer != address(0)`:** the manager staticcalls
+  [`ICallTransformer.transform(account, calls)`](../interfaces/ICallTransformer.sol) and forwards the bytes it
+  returns. The manager rejects a transformer with no code (`TransformerHasNoCode`) and empty output
+  (`EmptyTransformerOutput`), but otherwise forwards the result verbatim.
+
+**Trust boundary.** The transformer is part of the committed binding, so the account's signed commitment authenticates
+it exactly as it authenticates the `policy`. A custom transformer is therefore **fully trusted**: because the manager
+forwards its output verbatim, it can encode any account call and is not constrained to faithfully represent `calls`.
+Generic "the output must equal `calls`" verification is impossible across arbitrary wallet ABIs — that is the point of
+the seam — so a transformer sits in the same trust tier as the policy. Use audited, canonical transformers; the
+default (no transformer) path adds no trust at all.
 
 ### `SessionPolicy`: one policy, many dimensions
 

@@ -3,7 +3,8 @@ pragma solidity 0.8.36;
 
 import {LibCall} from "solady/utils/LibCall.sol";
 
-import {Call, DefaultAccount} from "./DefaultAccount.sol";
+import {Call} from "../interfaces/ICallTransformer.sol";
+import {DefaultAccount} from "./DefaultAccount.sol";
 
 /// @notice Canonical high-rate payer account variant for EIP-8130.
 ///

@@ -286,6 +286,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         binding = PolicyManager.PolicyBinding({
             account: account,
             policy: address(policy),
+            transformer: address(0),
             policyConfig: this._config(limit, period),
             validAfter: 0,
             validUntil: 0,

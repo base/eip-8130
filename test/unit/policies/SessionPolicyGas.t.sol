@@ -341,6 +341,7 @@ contract SessionPolicyGasTest is KeystoreTest {
         binding = PolicyManager.PolicyBinding({
             account: account,
             policy: address(policy),
+            transformer: address(0),
             policyConfig: policyConfig,
             validAfter: 0,
             validUntil: 0,
