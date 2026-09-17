@@ -29,12 +29,14 @@ interpret scope bits; policy attachment is a length check (empty vs 52).
    Keystore read accessor) is liveness-gated and resolves an expired actor to zero, identical to a revoked one.
    `execute` doesn't rely on this — protocol authentication already rejects expired actors before dispatch (the
    external `executeFor` path enforces expiry itself, via a single `getActorWithPolicy` read) — but the gating means no off-chain
-   reader ever sees a live-looking commitment for a dead actor. The manager then invokes the policy, forwards a
-   non-empty `executeBatch` plan to the account, and calls `onPostExecute` when applicable.
+    reader ever sees a live-looking commitment for a dead actor. The manager then invokes the policy, encodes its
+   non-empty call plan into account calldata (by default `executeBatch(Call[])`; a manager subclass may override the
+   encoding), forwards it, and calls `onPostExecute` when applicable.
 
 ```
 session key ──(8130 gate: only PolicyManager)──▶ PolicyManager.execute
-                                                     │  policy enforces commitment
+                                                     │  policy enforces commitment, returns Call[]
+                                                     │  manager encodes (default executeBatch; subclass may override)
                                                      ▼
                                                  account.executeBatch ──▶ token / target
 ```
@@ -43,12 +45,36 @@ session key ──(8130 gate: only PolicyManager)──▶ PolicyManager.execute
 
 | Contract | Role |
 |----------|------|
-| `PolicyManager` | Stateless manager: `execute(binding, …)` / `executeFor(binding, …)` / `executeForMany(bindings[], …)` re-authenticate the full binding against the live signed commitment in Keystore, then run policy → account call → `onPostExecute`. |
-| `Policy` | Base hook: `onExecute` → `(accountCallData, postCallData)` + `onPostExecute` (default no-op). |
+| `PolicyManager` | Stateless manager: `execute(binding, …)` / `executeFor(binding, …)` / `executeForMany(bindings[], …)` re-authenticate the full binding against the live signed commitment in Keystore, then run policy → encode call plan → account call → `onPostExecute`. Encoding lives in the overridable `_encodeCalls` hook (default `executeBatch(Call[])`). |
+| `Policy` | Base hook: `onExecute` → `(Call[], postCallData)` + `onPostExecute` (default no-op). Returns a wallet-agnostic call plan; the manager encodes it. |
+| `IExecuteBatch` | The shared `Call` struct and the canonical default execution surface, in [`../interfaces/IExecuteBatch.sol`](../interfaces/IExecuteBatch.sol). |
+| `ERC7821PolicyManager` | Example `PolicyManager` subclass overriding `_encodeCalls` to emit ERC-7821 `execute(bytes32,bytes)` batch calldata — the template for supporting a diverging wallet ABI. |
 | `SessionPolicy` | Unified "session key" policy: target / selector / recipient / spend limits enforced by linear scan over calldata config. Stores only spend usage. Validates config shape at execute. |
 | `RecurringAllowance` | Periodic-allowance accounting library (ported from base/account-policies); used by `SessionPolicy` for spend accounting. |
 
 A key that needs several independent bindings authorizes each separately (distinct commitments); the manager routes each by commitment.
+
+### Wallet-agnostic execution (manager subclasses)
+
+A policy returns *what* to execute as a wallet-agnostic `Call[]` (the `(target, value, data)` triple), never *how* a
+specific account wants it encoded. The manager owns the encoding step in a single overridable hook:
+
+```solidity
+function _encodeCalls(address account, Call[] memory calls) internal view virtual returns (bytes memory);
+```
+
+The base `PolicyManager` implements the default `executeBatch(Call[])` encoding — the surface shared by the EIP-8130
+`DefaultAccount` / `CanonicalHighRatePayerAccount` and common smart wallets (e.g. Coinbase Smart Wallet v2). To
+support a wallet with a different execution ABI, subclass the manager, override `_encodeCalls`, and deploy the
+subclass — exactly as [`ERC7821PolicyManager`](./ERC7821PolicyManager.sol) does for ERC-7821. This mirrors the
+account layer's own pattern (`CanonicalHighRatePayerAccount is DefaultAccount` overrides `executeBatch`).
+
+**An account selects an encoding by choosing which manager to gate its actor to.** The keystore already stores
+`policy_manager` per actor and the 8130 gate forces the key's calls to that manager, so the wallet choice rides on a
+field that already exists — nothing is added to the binding or the commitment, and there is no extra external contract
+touched at execution time (the encoding is an internal call, not a `STATICCALL`). The manager is the single audited,
+trusted unit; the account already trusts it by gating to it. Pre-audited managers for 7821 / 7579 / Safe / ZeroDev can
+be published and reused.
 
 ### `SessionPolicy`: one policy, many dimensions
 

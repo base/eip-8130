@@ -5,6 +5,7 @@ import {Address} from "openzeppelin/utils/Address.sol";
 import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
 
 import {Keystore} from "../Keystore.sol";
+import {Call, IExecuteBatch} from "../interfaces/IExecuteBatch.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../interfaces/ITransactionContext.sol";
 import {ActorId} from "../libraries/ActorId.sol";
 import {Policy} from "./Policy.sol";
@@ -238,13 +239,28 @@ contract PolicyManager is ReentrancyGuard {
         }
 
         address account = binding.account;
-        (bytes memory accountCallData, bytes memory postCallData) =
+        (Call[] memory calls, bytes memory postCallData) =
             Policy(binding.policy).onExecute(commitment, account, binding.policyConfig, executionData, caller);
-        if (accountCallData.length == 0) return;
+        if (calls.length == 0) return;
 
-        account.functionCall(accountCallData);
+        account.functionCall(_encodeCalls(account, calls));
         Policy(binding.policy).onPostExecute(commitment, account, postCallData);
         emit PolicyExecuted(account, binding.policy, commitment, caller);
+    }
+
+    /// @notice Encodes a policy's wallet-agnostic call plan into calldata for `account`'s execution entrypoint.
+    ///
+    /// @dev The default encodes `executeBatch(Call[])` — the surface shared by the EIP-8130 default account and
+    ///      common smart wallets. A manager targeting a wallet with a different execution ABI overrides this and is
+    ///      deployed as its own instance; accounts select an encoding by gating their actor to that manager.
+    ///
+    /// @param account Account the calldata will be forwarded to (unused by the default encoding).
+    /// @param calls   Wallet-agnostic call plan produced by the policy.
+    ///
+    /// @return Calldata the manager forwards to `account`.
+    function _encodeCalls(address account, Call[] memory calls) internal view virtual returns (bytes memory) {
+        account;
+        return abi.encodeCall(IExecuteBatch.executeBatch, (calls));
     }
 
     /// @dev Reads the in-flight transaction's authenticated actorId from the transaction-context precompile.
