@@ -6,13 +6,15 @@ import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
 import {Keystore} from "../../../src/Keystore.sol";
 import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../../src/interfaces/ITransactionContext.sol";
-import {Call, ICallTransformer, IExecuteBatch} from "../../../src/interfaces/ICallTransformer.sol";
+import {Call, IExecuteBatch} from "../../../src/interfaces/ICallTransformer.sol";
 import {DefaultAccount} from "../../../src/accounts/DefaultAccount.sol";
 
 import {PolicyManager} from "../../../src/policies/PolicyManager.sol";
 import {Policy} from "../../../src/policies/Policy.sol";
 import {SessionPolicy} from "../../../src/policies/SessionPolicy.sol";
 
+import {EmptyOutputTransformer} from "../../mocks/EmptyOutputTransformer.sol";
+import {ExecuteTransformer} from "../../mocks/ExecuteTransformer.sol";
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
 
 /// @notice A policy whose execute hook returns an empty call plan, exercising {PolicyManager._enforce}'s no-op
@@ -76,21 +78,6 @@ contract ReentrantExecutePolicy is Policy {
         // Guard is locked by the outer call -> this reverts ReentrancyGuardReentrantCall before any body check.
         PolicyManager(address(POLICY_MANAGER)).execute(dummy, "");
         return (new Call[](0), "");
-    }
-}
-
-/// @notice Transformer that encodes the first call as a single {DefaultAccount.execute}, proving the manager can
-///         drive an account through a non-default execution entrypoint the binding selects.
-contract ExecuteTransformer is ICallTransformer {
-    function transform(address, Call[] calldata calls) external pure returns (bytes memory) {
-        return abi.encodeCall(DefaultAccount.execute, (calls[0].target, calls[0].value, calls[0].data));
-    }
-}
-
-/// @notice Transformer that returns empty calldata, exercising the manager's {EmptyTransformerOutput} guard.
-contract EmptyOutputTransformer is ICallTransformer {
-    function transform(address, Call[] calldata) external pure returns (bytes memory) {
-        return "";
     }
 }
 
