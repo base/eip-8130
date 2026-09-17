@@ -6,8 +6,10 @@ import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
 import {Keystore} from "../../../src/Keystore.sol";
 import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../../src/interfaces/ITransactionContext.sol";
-import {Call, DefaultAccount} from "../../../src/accounts/DefaultAccount.sol";
+import {Call, IExecuteBatch} from "../../../src/interfaces/IExecuteBatch.sol";
+import {IERC7821} from "../../../src/interfaces/IERC7821.sol";
 
+import {ERC7821PolicyManager} from "../../../src/policies/ERC7821PolicyManager.sol";
 import {PolicyManager} from "../../../src/policies/PolicyManager.sol";
 import {Policy} from "../../../src/policies/Policy.sol";
 import {SessionPolicy} from "../../../src/policies/SessionPolicy.sol";
@@ -23,14 +25,14 @@ contract EmptyPlanPolicy is Policy {
         internal
         pure
         override
-        returns (bytes memory, bytes memory)
+        returns (Call[] memory, bytes memory)
     {
-        return ("", "");
+        return (new Call[](0), "");
     }
 }
 
-/// @notice Policy that returns a successful empty `executeBatch` plus non-empty `postCallData`, so the manager's
-///         {onPostExecute} forwarding can be asserted end-to-end.
+/// @notice Policy that returns a single-call plan plus non-empty `postCallData`, so the manager's {onPostExecute}
+///         forwarding can be asserted end-to-end.
 contract PostCallPolicy is Policy {
     bytes32 public lastPostCommitment;
     address public lastPostAccount;
@@ -45,10 +47,11 @@ contract PostCallPolicy is Policy {
         internal
         pure
         override
-        returns (bytes memory accountCallData, bytes memory postCallData)
+        returns (Call[] memory calls, bytes memory postCallData)
     {
-        Call[] memory calls = new Call[](0);
-        return (abi.encodeCall(DefaultAccount.executeBatch, (calls)), POST_PAYLOAD);
+        calls = new Call[](1);
+        calls[0] = Call({target: address(0xBEEF), value: 0, data: ""});
+        return (calls, POST_PAYLOAD);
     }
 
     function _onPostExecute(bytes32 commitment, address account, bytes calldata postCallData) internal override {
@@ -67,13 +70,31 @@ contract ReentrantExecutePolicy is Policy {
     function _onExecute(bytes32, address account, bytes calldata, bytes calldata, address)
         internal
         override
-        returns (bytes memory, bytes memory)
+        returns (Call[] memory, bytes memory)
     {
         PolicyManager.PolicyBinding memory dummy;
         dummy.account = account;
         // Guard is locked by the outer call -> this reverts ReentrancyGuardReentrantCall before any body check.
         PolicyManager(address(POLICY_MANAGER)).execute(dummy, "");
-        return ("", "");
+        return (new Call[](0), "");
+    }
+}
+
+/// @notice Exposes the default {PolicyManager._encodeCalls} hook for direct assertion.
+contract PolicyManagerHarness is PolicyManager {
+    constructor(address keystore) PolicyManager(keystore) {}
+
+    function exposedEncodeCalls(address account, Call[] calldata calls) external view returns (bytes memory) {
+        return _encodeCalls(account, calls);
+    }
+}
+
+/// @notice Exposes the overridden {ERC7821PolicyManager._encodeCalls} hook for direct assertion.
+contract ERC7821PolicyManagerHarness is ERC7821PolicyManager {
+    constructor(address keystore) ERC7821PolicyManager(keystore) {}
+
+    function exposedEncodeCalls(address account, Call[] calldata calls) external pure returns (bytes memory) {
+        return _encodeCalls(account, calls);
     }
 }
 
@@ -83,6 +104,8 @@ contract ReentrantExecutePolicy is Policy {
 contract PolicyManagerTest is KeystoreTest {
     PolicyManager internal manager;
     SessionPolicy internal policy;
+    PolicyManagerHarness internal encodeHarness;
+    ERC7821PolicyManagerHarness internal erc7821Harness;
 
     address internal account;
     address internal target = address(0x7A46E7);
@@ -98,6 +121,8 @@ contract PolicyManagerTest is KeystoreTest {
 
         manager = new PolicyManager(address(keystore));
         policy = new SessionPolicy(address(manager));
+        encodeHarness = new PolicyManagerHarness(address(keystore));
+        erc7821Harness = new ERC7821PolicyManagerHarness(address(keystore));
         account = _createAccountWithRootAndManager();
     }
 
@@ -271,6 +296,35 @@ contract PolicyManagerTest is KeystoreTest {
 
         assertEq(keystore.getPolicyManager(account, actorId), address(manager));
         assertEq(keystore.getPolicyCommitment(account, actorId), commitment);
+    }
+
+    // ── Encoding hook ──
+
+    /// @notice Verifies the default manager encodes a plan as executeBatch(Call[]).
+    /// @dev Asserts _encodeCalls returns abi.encodeCall(IExecuteBatch.executeBatch, calls).
+    function test_encodeCalls_base_producesExecuteBatch(address callTarget, uint256 value, bytes calldata data)
+        public
+        view
+    {
+        Call[] memory calls = new Call[](1);
+        calls[0] = Call({target: callTarget, value: value, data: data});
+        assertEq(encodeHarness.exposedEncodeCalls(account, calls), abi.encodeCall(IExecuteBatch.executeBatch, (calls)));
+    }
+
+    /// @notice Verifies an ERC-7821 manager subclass overrides the encoding to execute(bytes32,bytes) batch mode.
+    /// @dev Same plan, different account ABI, selected purely by which manager the account gates to. Asserts
+    ///      _encodeCalls returns execute(MODE_BATCH, abi.encode(calls)).
+    function test_encodeCalls_erc7821_producesBatchModeExecute(address callTarget, uint256 value, bytes calldata data)
+        public
+        view
+    {
+        Call[] memory calls = new Call[](1);
+        calls[0] = Call({target: callTarget, value: value, data: data});
+        bytes32 modeBatch = 0x0100000000000000000000000000000000000000000000000000000000000000;
+        assertEq(
+            erc7821Harness.exposedEncodeCalls(account, calls),
+            abi.encodeCall(IERC7821.execute, (modeBatch, abi.encode(calls)))
+        );
     }
 
     // ── Helpers ──
