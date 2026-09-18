@@ -7,6 +7,7 @@ import {Keystore} from "../../../src/Keystore.sol";
 import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../../src/interfaces/ITransactionContext.sol";
 
+import {PolicyBinding} from "../../../src/policies/PolicyBinding.sol";
 import {PolicyManager} from "../../../src/policies/PolicyManager.sol";
 import {SessionPolicy} from "../../../src/policies/SessionPolicy.sol";
 
@@ -47,14 +48,14 @@ contract SessionPolicyGasTest is KeystoreTest {
     uint40 internal constant WEEK = 7 days;
 
     uint256 internal saltNonce;
-    PolicyManager.PolicyBinding internal lastBinding;
+    PolicyBinding internal lastBinding;
 
     function setUp() public override {
         super.setUp();
         vm.warp(1_700_000_000);
 
         manager = new PolicyManager(address(keystore));
-        policy = new SessionPolicy(address(manager));
+        policy = new SessionPolicy(address(keystore));
         token = new SessionMockERC20();
         target = new SessionMockTarget();
 
@@ -328,17 +329,17 @@ contract SessionPolicyGasTest is KeystoreTest {
     }
 
     function _install(bytes memory policyConfig) internal returns (bytes32 actorId) {
-        PolicyManager.PolicyBinding memory binding;
+        PolicyBinding memory binding;
         (actorId, binding) = _prepareBinding(policyConfig);
         lastBinding = binding;
     }
 
     function _prepareBinding(bytes memory policyConfig)
         internal
-        returns (bytes32 actorId, PolicyManager.PolicyBinding memory binding)
+        returns (bytes32 actorId, PolicyBinding memory binding)
     {
         actorId = keccak256(abi.encode("session", saltNonce++));
-        binding = PolicyManager.PolicyBinding({
+        binding = PolicyBinding({
             account: account,
             policy: address(policy),
             policyConfig: policyConfig,

@@ -5,6 +5,7 @@ import {Keystore} from "../../../src/Keystore.sol";
 import {Scopes} from "../../../src/libraries/Scopes.sol";
 
 import {PolicyManager, EXTERNAL_POLICY_AUTHENTICATOR} from "../../../src/policies/PolicyManager.sol";
+import {PolicyBinding} from "../../../src/policies/PolicyBinding.sol";
 import {SessionPolicy} from "../../../src/policies/SessionPolicy.sol";
 import {RecurringAllowance} from "../../../src/policies/RecurringAllowance.sol";
 
@@ -44,14 +45,14 @@ contract ExternalPolicyCallerTest is KeystoreTest {
     bytes4 internal constant TRANSFER = bytes4(keccak256("transfer(address,uint256)"));
     uint40 internal constant MONTH = 30 days;
 
-    PolicyManager.PolicyBinding internal lastBinding;
+    PolicyBinding internal lastBinding;
 
     function setUp() public override {
         super.setUp();
         vm.warp(1_700_000_000);
 
         manager = new PolicyManager(address(keystore));
-        policy = new SessionPolicy(address(manager));
+        policy = new SessionPolicy(address(keystore));
         token = new ExtMockERC20();
     }
 
@@ -83,7 +84,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         // The account authorized the provider, but pointed it at a *different* manager. This manager must refuse,
         // since the external path has no protocol routing to lean on.
         address account = _createAccount(bytes32(uint256(1)));
-        (PolicyManager.PolicyBinding memory binding, bytes32 commitment) = _binding(account, 7, 100e6, MONTH);
+        (PolicyBinding memory binding, bytes32 commitment) = _binding(account, 7, 100e6, MONTH);
         _authorizeProvider(account, address(0xDEAD), commitment); // wrong manager
 
         vm.expectRevert(
@@ -97,7 +98,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         // The account gated the provider to *this* manager but with a zero (empty) commitment. The manager-match
         // passes, but the live commitment read resolves to zero, so there is no binding to enforce.
         address account = _createAccount(bytes32(uint256(1)));
-        (PolicyManager.PolicyBinding memory binding,) = _binding(account, 1, 100e6, MONTH);
+        (PolicyBinding memory binding,) = _binding(account, 1, 100e6, MONTH);
         _authorizeProvider(account, address(manager), bytes32(0));
 
         vm.expectRevert(
@@ -139,7 +140,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         // commitment — but it was provisioned with a *signing* authenticator, not EXTERNAL_POLICY_AUTHENTICATOR. Such
         // a native key must act through the protocol-authenticated path, never the auth-less external pull.
         address account = _createAccount(bytes32(uint256(1)));
-        (PolicyManager.PolicyBinding memory binding, bytes32 commitment) = _binding(account, 1, 100e6, MONTH);
+        (PolicyBinding memory binding, bytes32 commitment) = _binding(account, 1, 100e6, MONTH);
         _authorizeProviderWithAuthenticator(account, address(k1Authenticator), address(manager), commitment, 0);
 
         vm.expectRevert(
@@ -184,10 +185,10 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         _revokeProvider(a2);
         address a3 = _optIn(bytes32(uint256(3)), 100e6, MONTH);
 
-        (PolicyManager.PolicyBinding memory b1,) = _binding(a1, 1, 100e6, MONTH);
-        (PolicyManager.PolicyBinding memory b2,) = _binding(a2, 2, 100e6, MONTH);
-        (PolicyManager.PolicyBinding memory b3,) = _binding(a3, 3, 100e6, MONTH);
-        PolicyManager.PolicyBinding[] memory bindings = new PolicyManager.PolicyBinding[](3);
+        (PolicyBinding memory b1,) = _binding(a1, 1, 100e6, MONTH);
+        (PolicyBinding memory b2,) = _binding(a2, 2, 100e6, MONTH);
+        (PolicyBinding memory b3,) = _binding(a3, 3, 100e6, MONTH);
+        PolicyBinding[] memory bindings = new PolicyBinding[](3);
         bindings[0] = b1;
         bindings[1] = b2;
         bindings[2] = b3;
@@ -222,7 +223,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
 
         // Driving via a binding that names the attacker cannot recompute to the victim's commitment (preimage
         // includes account), so the manager rejects.
-        (PolicyManager.PolicyBinding memory attackerBinding,) = _binding(attacker, 2, 100e6, MONTH);
+        (PolicyBinding memory attackerBinding,) = _binding(attacker, 2, 100e6, MONTH);
         bytes32 actual = manager.commitmentOf(attackerBinding);
         vm.expectRevert(
             abi.encodeWithSelector(PolicyManager.BindingCommitmentMismatch.selector, victimCommitment, actual)
@@ -239,7 +240,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
     }
 
     function test_executeForMany_revertsOnLengthMismatch() public {
-        PolicyManager.PolicyBinding[] memory bindings = new PolicyManager.PolicyBinding[](2);
+        PolicyBinding[] memory bindings = new PolicyBinding[](2);
         bytes[] memory data = new bytes[](1);
         vm.expectRevert(PolicyManager.LengthMismatch.selector);
         vm.prank(provider);
@@ -248,7 +249,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
 
     function test_enforceExternalSelf_revertsForExternalCaller() public {
         // The self-call boundary used by the batch must reject any caller other than the manager itself.
-        PolicyManager.PolicyBinding memory binding;
+        PolicyBinding memory binding;
         binding.account = address(0x1);
         vm.expectRevert(PolicyManager.OnlySelf.selector);
         vm.prank(provider);
@@ -281,9 +282,9 @@ contract ExternalPolicyCallerTest is KeystoreTest {
     function _binding(address account, uint256 salt, uint256 limit, uint40 period)
         internal
         view
-        returns (PolicyManager.PolicyBinding memory binding, bytes32 commitment)
+        returns (PolicyBinding memory binding, bytes32 commitment)
     {
-        binding = PolicyManager.PolicyBinding({
+        binding = PolicyBinding({
             account: account,
             policy: address(policy),
             policyConfig: this._config(limit, period),
@@ -305,8 +306,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         returns (address account)
     {
         account = _createAccount(accountSalt);
-        (PolicyManager.PolicyBinding memory binding, bytes32 commitment) =
-            _binding(account, uint256(accountSalt), limit, period);
+        (PolicyBinding memory binding, bytes32 commitment) = _binding(account, uint256(accountSalt), limit, period);
         lastBinding = binding;
         _authorizeProvider(account, address(manager), commitment, expiry);
     }
