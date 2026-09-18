@@ -6,6 +6,7 @@ import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
 
 import {Keystore} from "../Keystore.sol";
 import {Call, IExecuteBatch} from "../interfaces/IExecuteBatch.sol";
+import {IPolicyManager} from "../interfaces/IPolicyManager.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../interfaces/ITransactionContext.sol";
 import {ActorId} from "../libraries/ActorId.sol";
 import {Policy} from "./Policy.sol";
@@ -32,7 +33,7 @@ address constant EXTERNAL_POLICY_AUTHENTICATOR = address(uint160(uint256(keccak2
 ///      All entrypoints deliberately share one {ReentrancyGuard} status; do not split it per entrypoint. The
 ///      transaction-context actorId is global to the transaction, so a shared guard is what stops a reentrant
 ///      {execute} from resolving a different account's identity mid-call.
-contract PolicyManager is ReentrancyGuard {
+contract PolicyManager is IPolicyManager, ReentrancyGuard {
     using Address for address;
     using PolicyBindingLib for PolicyBinding;
 
@@ -90,7 +91,7 @@ contract PolicyManager is ReentrancyGuard {
     /// @param binding Full policy binding to hash.
     ///
     /// @return The binding commitment: keccak256 over the binding fields, with the config bound by its own hash.
-    function commitmentOf(PolicyBinding calldata binding) public pure returns (bytes32) {
+    function commitmentOf(PolicyBinding calldata binding) public pure override returns (bytes32) {
         return binding.commitment();
     }
 
@@ -108,7 +109,7 @@ contract PolicyManager is ReentrancyGuard {
     ///
     /// @param binding       Full account-authorized binding (config, window, salt).
     /// @param executionData Per-use action parameters interpreted by the policy.
-    function execute(PolicyBinding calldata binding, bytes calldata executionData) external nonReentrant {
+    function execute(PolicyBinding calldata binding, bytes calldata executionData) external override nonReentrant {
         address account = msg.sender;
         if (binding.account != account) revert InvalidBindingAccount(account, binding.account);
 
@@ -135,7 +136,7 @@ contract PolicyManager is ReentrancyGuard {
     ///
     /// @param binding       Full account-authorized binding (config, window, salt).
     /// @param executionData Per-use action parameters interpreted by the policy.
-    function executeFor(PolicyBinding calldata binding, bytes calldata executionData) external nonReentrant {
+    function executeFor(PolicyBinding calldata binding, bytes calldata executionData) external override nonReentrant {
         _enforceExternal(binding, ActorId.fromAddress(msg.sender), executionData, msg.sender);
     }
 
@@ -151,6 +152,7 @@ contract PolicyManager is ReentrancyGuard {
     /// @return results Per-account success flags, parallel to `bindings`.
     function executeForMany(PolicyBinding[] calldata bindings, bytes[] calldata executionData)
         external
+        override
         nonReentrant
         returns (bool[] memory results)
     {
