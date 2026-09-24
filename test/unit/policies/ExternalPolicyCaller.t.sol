@@ -4,7 +4,7 @@ pragma solidity ^0.8.30;
 import {Keystore} from "../../../src/Keystore.sol";
 import {Scopes} from "../../../src/libraries/Scopes.sol";
 
-import {PolicyManager, EXTERNAL_POLICY_AUTHENTICATOR} from "../../../src/policies/PolicyManager.sol";
+import {Policy, EXTERNAL_POLICY_AUTHENTICATOR} from "../../../src/policies/Policy.sol";
 import {PolicyBinding} from "../../../src/policies/PolicyBinding.sol";
 import {SessionPolicy} from "../../../src/policies/SessionPolicy.sol";
 import {RecurringAllowance} from "../../../src/policies/RecurringAllowance.sol";
@@ -27,11 +27,10 @@ contract ExtMockERC20 {
 
 /// @notice Exercises the external-caller flow of {PolicyManager}: a party that is *not* a key on the account (e.g. a
 ///         subscription provider) is authorized by accounts to pull within a policy, and drives one or many accounts
-///         via {PolicyManager.executeFor} / {executeForMany}. Identity is the caller itself
+///         via {Policy.executeFor} / {executeForMany}. Identity is the caller itself
 ///         (`actorId == ActorId.fromAddress(msg.sender)`); the provider actor is registered with `EXTERNAL_POLICY_AUTHENTICATOR`
 ///         so it can only act through the manager, never directly.
 contract ExternalPolicyCallerTest is KeystoreTest {
-    PolicyManager internal manager;
     SessionPolicy internal policy;
     ExtMockERC20 internal token;
 
@@ -51,7 +50,6 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         super.setUp();
         vm.warp(1_700_000_000);
 
-        manager = new PolicyManager(address(keystore));
         policy = new SessionPolicy(address(keystore));
         token = new ExtMockERC20();
     }
@@ -62,7 +60,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         address account = _optIn(bytes32(uint256(1)), 100e6, MONTH);
 
         vm.prank(provider);
-        manager.executeFor(lastBinding, _pull(30e6));
+        policy.executeFor(lastBinding, _pull(30e6));
 
         assertEq(token.balanceOf(recipient), 30e6);
         assertEq(token.balanceOf(account), 1_000e6 - 30e6);
@@ -73,25 +71,21 @@ contract ExternalPolicyCallerTest is KeystoreTest {
 
         // A different external address was never authorized by the account → not a live actor of it.
         address stranger = address(0xBAD);
-        vm.expectRevert(
-            abi.encodeWithSelector(PolicyManager.InvalidActor.selector, bytes32(uint256(uint160(stranger))))
-        );
+        vm.expectRevert(abi.encodeWithSelector(Policy.InvalidActor.selector, bytes32(uint256(uint160(stranger)))));
         vm.prank(stranger);
-        manager.executeFor(lastBinding, _pull(1));
+        policy.executeFor(lastBinding, _pull(1));
     }
 
     function test_executeFor_revertsWhenManagerNotGated() public {
-        // The account authorized the provider, but pointed it at a *different* manager. This manager must refuse,
+        // The account authorized the provider, but pointed it at a *different* policy. This manager must refuse,
         // since the external path has no protocol routing to lean on.
         address account = _createAccount(bytes32(uint256(1)));
         (PolicyBinding memory binding, bytes32 commitment) = _binding(account, 7, 100e6, MONTH);
         _authorizeProvider(account, address(0xDEAD), commitment); // wrong manager
 
-        vm.expectRevert(
-            abi.encodeWithSelector(PolicyManager.NoActivePolicy.selector, bytes32(uint256(uint160(provider))))
-        );
+        vm.expectRevert(abi.encodeWithSelector(Policy.NoActivePolicy.selector, bytes32(uint256(uint160(provider)))));
         vm.prank(provider);
-        manager.executeFor(binding, _pull(1));
+        policy.executeFor(binding, _pull(1));
     }
 
     function test_executeFor_revertsWhenCommitmentZero() public {
@@ -99,13 +93,11 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         // passes, but the live commitment read resolves to zero, so there is no binding to enforce.
         address account = _createAccount(bytes32(uint256(1)));
         (PolicyBinding memory binding,) = _binding(account, 1, 100e6, MONTH);
-        _authorizeProvider(account, address(manager), bytes32(0));
+        _authorizeProvider(account, address(policy), bytes32(0));
 
-        vm.expectRevert(
-            abi.encodeWithSelector(PolicyManager.NoActivePolicy.selector, bytes32(uint256(uint160(provider))))
-        );
+        vm.expectRevert(abi.encodeWithSelector(Policy.NoActivePolicy.selector, bytes32(uint256(uint160(provider)))));
         vm.prank(provider);
-        manager.executeFor(binding, _pull(1));
+        policy.executeFor(binding, _pull(1));
     }
 
     function test_executeFor_revertsAfterRevoke() public {
@@ -114,11 +106,9 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         _revokeProvider(account);
 
         // A revoked provider is no longer a live actor of the account.
-        vm.expectRevert(
-            abi.encodeWithSelector(PolicyManager.InvalidActor.selector, bytes32(uint256(uint160(provider))))
-        );
+        vm.expectRevert(abi.encodeWithSelector(Policy.InvalidActor.selector, bytes32(uint256(uint160(provider)))));
         vm.prank(provider);
-        manager.executeFor(lastBinding, _pull(1));
+        policy.executeFor(lastBinding, _pull(1));
     }
 
     function test_executeFor_revertsWhenActorExpired() public {
@@ -128,11 +118,9 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         address account = _optInWithExpiry(bytes32(uint256(1)), 100e6, MONTH, expiry);
 
         vm.warp(uint256(expiry) + 1);
-        vm.expectRevert(
-            abi.encodeWithSelector(PolicyManager.InvalidActor.selector, bytes32(uint256(uint160(provider))))
-        );
+        vm.expectRevert(abi.encodeWithSelector(Policy.InvalidActor.selector, bytes32(uint256(uint160(provider)))));
         vm.prank(provider);
-        manager.executeFor(lastBinding, _pull(1));
+        policy.executeFor(lastBinding, _pull(1));
     }
 
     function test_executeFor_revertsForNonExternalPullActor() public {
@@ -141,36 +129,34 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         // a native key must act through the protocol-authenticated path, never the auth-less external pull.
         address account = _createAccount(bytes32(uint256(1)));
         (PolicyBinding memory binding, bytes32 commitment) = _binding(account, 1, 100e6, MONTH);
-        _authorizeProviderWithAuthenticator(account, address(k1Authenticator), address(manager), commitment, 0);
+        _authorizeProviderWithAuthenticator(account, address(k1Authenticator), address(policy), commitment, 0);
 
-        vm.expectRevert(
-            abi.encodeWithSelector(PolicyManager.InvalidActor.selector, bytes32(uint256(uint160(provider))))
-        );
+        vm.expectRevert(abi.encodeWithSelector(Policy.InvalidActor.selector, bytes32(uint256(uint160(provider)))));
         vm.prank(provider);
-        manager.executeFor(binding, _pull(1));
+        policy.executeFor(binding, _pull(1));
     }
 
     function test_executeFor_revertsOverBudget() public {
         address account = _optIn(bytes32(uint256(1)), 50e6, MONTH);
 
         vm.prank(provider);
-        manager.executeFor(lastBinding, _pull(50e6));
+        policy.executeFor(lastBinding, _pull(50e6));
 
         // A second pull this month would exceed the $50 cap.
         vm.expectRevert(abi.encodeWithSelector(RecurringAllowance.ExceededAllowance.selector, 51e6, 50e6));
         vm.prank(provider);
-        manager.executeFor(lastBinding, _pull(1e6));
+        policy.executeFor(lastBinding, _pull(1e6));
     }
 
     function test_executeFor_refreshesNextMonth() public {
         address account = _optIn(bytes32(uint256(1)), 50e6, MONTH);
 
         vm.prank(provider);
-        manager.executeFor(lastBinding, _pull(50e6));
+        policy.executeFor(lastBinding, _pull(50e6));
 
         vm.warp(block.timestamp + MONTH);
         vm.prank(provider);
-        manager.executeFor(lastBinding, _pull(40e6));
+        policy.executeFor(lastBinding, _pull(40e6));
 
         assertEq(token.balanceOf(recipient), 90e6);
     }
@@ -198,10 +184,10 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         data[2] = _pull(20e6);
 
         vm.expectEmit(true, true, true, false);
-        emit PolicyManager.ExecutionSkipped(a2, address(policy), bytes32(uint256(uint160(provider))));
+        emit Policy.ExecutionSkipped(a2, address(policy), bytes32(uint256(uint160(provider))));
 
         vm.prank(provider);
-        bool[] memory results = manager.executeForMany(bindings, data);
+        bool[] memory results = policy.executeForMany(bindings, data);
 
         assertTrue(results[0]);
         assertFalse(results[1]);
@@ -217,19 +203,17 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         (, bytes32 victimCommitment) = _binding(victim, 1, 100e6, MONTH);
 
         // Attacker points its OWN actor (actorId = ActorId.fromAddress(provider)) at the victim's opaque commitment + this
-        // manager. Keystore stores the commitment verbatim, so nothing stops this registration.
+        // policy. Keystore stores the commitment verbatim, so nothing stops this registration.
         address attacker = _createAccount(bytes32(uint256(2)));
-        _authorizeProvider(attacker, address(manager), victimCommitment);
+        _authorizeProvider(attacker, address(policy), victimCommitment);
 
         // Driving via a binding that names the attacker cannot recompute to the victim's commitment (preimage
         // includes account), so the manager rejects.
         (PolicyBinding memory attackerBinding,) = _binding(attacker, 2, 100e6, MONTH);
-        bytes32 actual = manager.commitmentOf(attackerBinding);
-        vm.expectRevert(
-            abi.encodeWithSelector(PolicyManager.BindingCommitmentMismatch.selector, victimCommitment, actual)
-        );
+        bytes32 actual = policy.commitmentOf(attackerBinding);
+        vm.expectRevert(abi.encodeWithSelector(Policy.BindingCommitmentMismatch.selector, victimCommitment, actual));
         vm.prank(provider);
-        manager.executeFor(attackerBinding, _pull(10e6));
+        policy.executeFor(attackerBinding, _pull(10e6));
 
         // Nothing moved: the attack reverted, so the victim's shared spend counter and balances are untouched.
         assertEq(token.balanceOf(recipient), 0);
@@ -242,18 +226,18 @@ contract ExternalPolicyCallerTest is KeystoreTest {
     function test_executeForMany_revertsOnLengthMismatch() public {
         PolicyBinding[] memory bindings = new PolicyBinding[](2);
         bytes[] memory data = new bytes[](1);
-        vm.expectRevert(PolicyManager.LengthMismatch.selector);
+        vm.expectRevert(Policy.LengthMismatch.selector);
         vm.prank(provider);
-        manager.executeForMany(bindings, data);
+        policy.executeForMany(bindings, data);
     }
 
     function test_enforceExternalSelf_revertsForExternalCaller() public {
         // The self-call boundary used by the batch must reject any caller other than the manager itself.
         PolicyBinding memory binding;
         binding.account = address(0x1);
-        vm.expectRevert(PolicyManager.OnlySelf.selector);
+        vm.expectRevert(Policy.OnlySelf.selector);
         vm.prank(provider);
-        manager.enforceExternalSelf(binding, bytes32(uint256(uint160(provider))), _pull(1), provider);
+        policy.enforceExternalSelf(binding, bytes32(uint256(uint160(provider))), _pull(1), provider);
     }
 
     // ── Helpers ──
@@ -290,9 +274,10 @@ contract ExternalPolicyCallerTest is KeystoreTest {
             policyConfig: this._config(limit, period),
             validAfter: 0,
             validUntil: 0,
-            salt: salt
+            salt: salt,
+            transformer: address(0)
         });
-        commitment = manager.commitmentOf(binding);
+        commitment = policy.commitmentOf(binding);
     }
 
     /// @dev Full opt-in for one subscriber: create the account, mint it tokens, and authorize the provider as an
@@ -308,7 +293,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
         account = _createAccount(accountSalt);
         (PolicyBinding memory binding, bytes32 commitment) = _binding(account, uint256(accountSalt), limit, period);
         lastBinding = binding;
-        _authorizeProvider(account, address(manager), commitment, expiry);
+        _authorizeProvider(account, address(policy), commitment, expiry);
     }
 
     function _createAccount(bytes32 salt) internal returns (address account) {
@@ -319,7 +304,7 @@ contract ExternalPolicyCallerTest is KeystoreTest {
             policyData: ""
         });
         Keystore.InitialActor memory mgr = Keystore.InitialActor({
-            actorId: bytes32(uint256(uint160(address(manager)))),
+            actorId: bytes32(uint256(uint160(address(policy)))),
             authenticator: k1Authenticator,
             scope: 0,
             policyData: ""

@@ -8,7 +8,6 @@ import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../../src/interfaces/ITransactionContext.sol";
 
 import {PolicyBinding} from "../../../src/policies/PolicyBinding.sol";
-import {PolicyManager} from "../../../src/policies/PolicyManager.sol";
 import {SessionPolicy} from "../../../src/policies/SessionPolicy.sol";
 
 import {KeystoreTest} from "../../lib/KeystoreTest.sol";
@@ -17,7 +16,7 @@ import {SessionMockERC20, SessionMockTarget} from "./SessionPolicy.t.sol";
 /// @notice Gas benchmarks for the {SessionPolicy} / {PolicyManager} execution flows.
 ///
 /// @dev Numbers are logged, not asserted, so this file never fails on chain-parameter drift; run with
-///      `forge test --mt test_gas -vv` to print the report. Each measurement wraps only the `manager.execute`
+///      `forge test --mt test_gas -vv` to print the report. Each measurement wraps only the `policy.execute`
 ///      call, so it captures the full production per-call path: manager dispatch (commitment reads), the policy
 ///      hook (including config validation), and the forwarded account `executeBatch` (including the ERC-20/native
 ///      transfer).
@@ -33,7 +32,6 @@ import {SessionMockERC20, SessionMockTarget} from "./SessionPolicy.t.sol";
 ///          `test_gas_summary` table is an at-a-glance overview and reads a few k low, because `vm.cool` resets
 ///          access-list warmth but not EIP-2200 original-value (dirty-slot) pricing, which is fixed per tx.
 contract SessionPolicyGasTest is KeystoreTest {
-    PolicyManager internal manager;
     SessionPolicy internal policy;
     SessionMockERC20 internal token;
     SessionMockTarget internal target;
@@ -54,7 +52,6 @@ contract SessionPolicyGasTest is KeystoreTest {
         super.setUp();
         vm.warp(1_700_000_000);
 
-        manager = new PolicyManager(address(keystore));
         policy = new SessionPolicy(address(keystore));
         token = new SessionMockERC20();
         target = new SessionMockTarget();
@@ -213,12 +210,12 @@ contract SessionPolicyGasTest is KeystoreTest {
 
     // ── Helpers ──
 
-    /// @dev Mock the acting actor, then measure gas consumed by a single `manager.execute`.
+    /// @dev Mock the acting actor, then measure gas consumed by a single `policy.execute`.
     function _measure(bytes32 actorId, bytes memory executionData) internal returns (uint256 used) {
         _mockActingActor(actorId);
         vm.prank(account);
         uint256 g = gasleft();
-        manager.execute(lastBinding, executionData);
+        policy.execute(lastBinding, executionData);
         used = g - gasleft();
     }
 
@@ -234,7 +231,7 @@ contract SessionPolicyGasTest is KeystoreTest {
     function _coolAll(bytes memory executionData) internal {
         vm.cool(account);
         vm.cool(address(policy));
-        vm.cool(address(manager));
+        vm.cool(address(policy));
         vm.cool(address(keystore));
         vm.cool(bob);
         SessionPolicy.Action memory action = abi.decode(executionData, (SessionPolicy.Action));
@@ -315,7 +312,7 @@ contract SessionPolicyGasTest is KeystoreTest {
             policyData: ""
         });
         Keystore.InitialActor memory mgr = Keystore.InitialActor({
-            actorId: bytes32(uint256(uint160(address(manager)))),
+            actorId: bytes32(uint256(uint160(address(policy)))),
             authenticator: k1Authenticator,
             scope: 0,
             policyData: ""
@@ -345,9 +342,10 @@ contract SessionPolicyGasTest is KeystoreTest {
             policyConfig: policyConfig,
             validAfter: 0,
             validUntil: 0,
-            salt: saltNonce
+            salt: saltNonce,
+            transformer: address(0)
         });
-        bytes32 commitment = manager.commitmentOf(binding);
+        bytes32 commitment = policy.commitmentOf(binding);
 
         // Authorize the fresh session-key actor gated to the manager, granted UNBOUNDED (the new "no expiry") on a
         // sequenced local batch, signed by the root owner.
@@ -360,7 +358,7 @@ contract SessionPolicyGasTest is KeystoreTest {
                     address(k1Authenticator),
                     SCOPE_POLICY,
                     UNBOUNDED,
-                    abi.encodePacked(address(manager), commitment)
+                    abi.encodePacked(address(policy), commitment)
                 )
             )
         );

@@ -9,7 +9,7 @@ import {CanonicalHighRatePayerAccount} from "../src/accounts/CanonicalHighRatePa
 import {P256Authenticator} from "../src/authenticators/P256Authenticator.sol";
 import {WebAuthnAuthenticator} from "../src/authenticators/WebAuthnAuthenticator.sol";
 import {DelegateAuthenticator} from "../src/authenticators/DelegateAuthenticator.sol";
-import {PolicyManager} from "../src/policies/PolicyManager.sol";
+import {ERC7821Encoder} from "../src/policies/ERC7821Encoder.sol";
 import {SessionPolicy} from "../src/policies/SessionPolicy.sol";
 
 /// @dev Nick's deterministic deployment proxy — same address on every EVM chain.
@@ -31,13 +31,13 @@ bytes32 constant P256_SALT = 0x0000000000000000000000000000000000000000000000000
 bytes32 constant WEBAUTHN_SALT = 0x000000000000000000000000000000000000000000000000000000015ec496a4;
 /// @dev DelegateAuthenticator: 0x8130...ade1
 bytes32 constant DELEGATE_SALT = 0x000000000000000000000000000000000000000000000000000000012b221529;
-/// @dev PolicyManager: 0x8130...0ac1
-bytes32 constant POLICY_MANAGER_SALT = 0x000000000000000000000000000000000000000000000000000000003a060907;
-/// @dev SessionPolicy: 0x8130...5e55
+/// @dev SessionPolicy (self-executing; draft salt, not re-vanity'd for this exploration).
 bytes32 constant SESSION_POLICY_SALT = 0x00000000000000000000000000000000000000000000000000000000e6dd8556;
+/// @dev ERC7821Encoder example transformer (draft salt, not re-vanity'd for this exploration).
+bytes32 constant ERC7821_ENCODER_SALT = 0x000000000000000000000000000000000000000000000000000000003a060907;
 
 /// @notice Deploys the full EIP-8130 system: Keystore, account implementations, canonical
-///         authenticators, and the unaudited example policy contracts (PolicyManager, SessionPolicy).
+///         authenticators, and the unaudited example policy contracts (SessionPolicy, ERC7821Encoder).
 ///
 ///         Two account implementations are deployed:
 ///           - DefaultAccount                  — the bare building block, deployed standalone as the direct
@@ -50,7 +50,7 @@ bytes32 constant SESSION_POLICY_SALT = 0x000000000000000000000000000000000000000
 ///                                                bytecode (and its keccak256) so nodes can pin it.
 ///
 ///         Example/unaudited account variants (UpgradeableAccount, BackwardsCompatible4337Account) live in a
-///         separate repository and are not deployed here. PolicyManager / SessionPolicy are UNAUDITED reference
+///         separate repository and are not deployed here. SessionPolicy / ERC7821Encoder are UNAUDITED reference
 ///         implementations — integrators should not treat their addresses as blessed infrastructure.
 ///
 ///         All addresses are canonical: determined solely by salt + bytecode, independent of the
@@ -109,12 +109,12 @@ contract Deploy is Script {
         return abi.encodePacked(type(DelegateAuthenticator).creationCode, abi.encode(accountConfig));
     }
 
-    function _policyManagerInit(address accountConfig) internal pure returns (bytes memory) {
-        return abi.encodePacked(type(PolicyManager).creationCode, abi.encode(accountConfig));
+    function _sessionPolicyInit(address keystore) internal pure returns (bytes memory) {
+        return abi.encodePacked(type(SessionPolicy).creationCode, abi.encode(keystore));
     }
 
-    function _sessionPolicyInit(address policyManager) internal pure returns (bytes memory) {
-        return abi.encodePacked(type(SessionPolicy).creationCode, abi.encode(policyManager));
+    function _erc7821EncoderInit() internal pure returns (bytes memory) {
+        return type(ERC7821Encoder).creationCode;
     }
 
     /// @dev Logs the ERC-1167 runtime bytecode (and hash) nodes must match for high-rate payer accounts.
@@ -141,7 +141,6 @@ contract Deploy is Script {
     function addresses() public pure {
         address accountConfig = _addr(_accountConfigInit(), KEYSTORE_SALT);
         address canonicalHighRatePayer = _addr(_canonicalHighRatePayerInit(accountConfig), HIGH_RATE_PAYER_SALT);
-        address policyManager = _addr(_policyManagerInit(accountConfig), POLICY_MANAGER_SALT);
 
         console.log("Keystore:    ", accountConfig);
         console.log("");
@@ -156,8 +155,8 @@ contract Deploy is Script {
         console.log("DelegateAuthenticator:   ", _addr(_delegateAuthInit(accountConfig), DELEGATE_SALT));
         console.log("");
         console.log("=== Example policies (unaudited) ===");
-        console.log("PolicyManager:           ", policyManager);
-        console.log("SessionPolicy:           ", _addr(_sessionPolicyInit(policyManager), SESSION_POLICY_SALT));
+        console.log("SessionPolicy:           ", _addr(_sessionPolicyInit(accountConfig), SESSION_POLICY_SALT));
+        console.log("ERC7821Encoder:          ", _addr(_erc7821EncoderInit(), ERC7821_ENCODER_SALT));
 
         _logHighRatePayerMatchBytecode(canonicalHighRatePayer);
     }
@@ -187,9 +186,11 @@ contract Deploy is Script {
         address delegate = _create2(_delegateAuthInit(accountConfig), DELEGATE_SALT);
 
         // ── Example policies (unaudited reference implementations) ──
+        //    The self-executing SessionPolicy is bound directly to the Keystore (it is its own manager). The
+        //    ERC7821Encoder is an example transformer a binding may name to drive an ERC-7821 account.
 
-        address policyManager = _create2(_policyManagerInit(accountConfig), POLICY_MANAGER_SALT);
-        address sessionPolicy = _create2(_sessionPolicyInit(policyManager), SESSION_POLICY_SALT);
+        address sessionPolicy = _create2(_sessionPolicyInit(accountConfig), SESSION_POLICY_SALT);
+        address erc7821Encoder = _create2(_erc7821EncoderInit(), ERC7821_ENCODER_SALT);
 
         vm.stopBroadcast();
 
@@ -206,8 +207,8 @@ contract Deploy is Script {
         console.log("DelegateAuthenticator:   ", delegate);
         console.log("");
         console.log("=== Example policies (unaudited) ===");
-        console.log("PolicyManager:           ", policyManager);
         console.log("SessionPolicy:           ", sessionPolicy);
+        console.log("ERC7821Encoder:          ", erc7821Encoder);
 
         // Emit the exact 45-byte ERC-1167 runtime bytecode (and hash) nodes must match for high-rate payers.
         _logHighRatePayerMatchBytecode(canonicalHighRatePayer);
