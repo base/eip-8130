@@ -1,96 +1,98 @@
 # Policies (EIP-8130 actor policies)
 
-A policy manager for EIP-8130 restricted actors.
+Self-executing policies for EIP-8130 restricted actors.
 
 In EIP-8130, a restricted actor (e.g. a session key) is configured with optional 52-byte policy data
 (`manager(20) || commitment(32)`) stored co-located with the 32-byte actor config, making an 84-byte packed
 record. Length decides what gets stored; POLICY decides whether the sender is gated; OPERATOR overrides POLICY.
 The protocol node gates on `scope & Scopes.POLICY != 0` and forces every call that actor makes to land on that
-single manager. These contracts are one realization of that manager: it enforces application-specific limits
-and then drives the account. `Scopes.POLICY` (`0x08`) is an optional grant. `Keystore` does not import or
-interpret scope bits; policy attachment is a length check (empty vs 52).
+single `policy_manager`. In this reference the `policy_manager` **is the policy contract itself**: the policy is
+its own manager. There is no separate manager contract and no per-ABI manager subclass. `Scopes.POLICY` (`0x08`)
+is an optional grant. `Keystore` does not import or interpret scope bits; policy attachment is a length check
+(empty vs 52).
 
 ## Flow
 
 1. **Authorize + commit.** The account authorizes the session key with `scope = Scopes.POLICY`,
-   `policy_manager = PolicyManager`, and `policy_commitment = keccak256` of an account-authorized
-   [`PolicyBinding`](./PolicyManager.sol). The Keystore contract exposes this via
+   `policy_manager = address(policy)`, and `policy_commitment = keccak256` of an account-authorized
+   [`PolicyBinding`](./PolicyBinding.sol). The Keystore exposes this via
    [`getActorWithPolicy(account, actorId)`](../Keystore.sol) (or the granular `getPolicyManager` / `getPolicyCommitment`).
-   That signed actor change *is* the authorization — there is no separate install step on the manager.
+   That signed actor change *is* the authorization — there is no separate install step. The account also authorizes
+   the policy as an execution-enabled actor so the policy may drive `executeBatch` (exactly as it would authorize any
+   manager).
 2. **Use.** When the session key transacts, the protocol gate resolves the key's allowed target
    (`policy_manager(account, actorId)`) and reverts any call whose `call.to` isn't that address before dispatch, so
-   the key's call can only arrive at `PolicyManager.execute(binding, executionData)` with `msg.sender == account`.
-   The caller supplies the full [`PolicyBinding`](./PolicyManager.sol); the manager recomputes
-   `commitment = keccak256(account, policy, keccak256(policyConfig), validAfter, validUntil, salt)` and requires it
-   to equal the live `getPolicyCommitment(account, actorId)`. That single check authenticates config, validity
-   window, and owning account — so neither the manager nor the policy stores a config hash (strictly better than
-   [Account Policies](https://github.com/base/account-policies)' per-binding `_configHashByPolicyId` slot). A
-   revoked *or expired* key reads back a zero commitment and stops immediately: `getPolicyCommitment` (like every
-   Keystore read accessor) is liveness-gated and resolves an expired actor to zero, identical to a revoked one.
-   `execute` doesn't rely on this — protocol authentication already rejects expired actors before dispatch (the
-   external `executeFor` path enforces expiry itself, via a single `getActorWithPolicy` read) — but the gating means no off-chain
-    reader ever sees a live-looking commitment for a dead actor. The manager then invokes the policy, which
-   independently re-authenticates the binding against the Keystore (see "Manager / policy split" below), returns a
-   wallet-agnostic call plan, which the manager encodes into account calldata (by default `executeBatch(Call[])`; a
-   manager subclass may override the encoding), forwards, and calls `onPostExecute` when applicable.
+   the key's call can only arrive at `Policy.execute(binding, executionData)` with `msg.sender == account`. The policy
+   recomputes `commitment = keccak256(account, policy, keccak256(policyConfig), validAfter, validUntil, salt, transformer)`
+   and requires it to equal the live `getPolicyCommitment(account, actorId)`, and requires itself to be the installed
+   manager (`getActorWithPolicy(...).policyManager == address(this)`). That single commitment check authenticates
+   config, validity window, owning account, and the chosen call encoder — so nothing stores a config hash (strictly
+   better than [Account Policies](https://github.com/base/account-policies)' per-binding `_configHashByPolicyId` slot).
+   A revoked *or expired* key reads back a zero commitment and stops immediately: `getPolicyCommitment` (like every
+   Keystore read accessor) is liveness-gated. The policy then runs its rule, produces a wallet-agnostic call plan,
+   encodes it into account calldata (by default `executeBatch(Call[])`; a non-zero `binding.transformer` selects an
+   [`IPolicyCallEncoder`](../interfaces/IPolicyCallEncoder.sol) instead), forwards it, and runs `onPostExecute` when
+   applicable.
 
 ```
-session key ──(8130 gate: only PolicyManager)──▶ PolicyManager.execute
-                                                     │  policy self-authenticates vs Keystore, returns Call[]
-                                                     │  manager encodes (default executeBatch; subclass may override)
-                                                     ▼
-                                                 account.executeBatch ──▶ token / target
+session key ──(8130 gate: only the policy)──▶ Policy.execute
+                                                 │  self-authenticates vs Keystore, runs rule, builds Call[]
+                                                 │  encodes (default executeBatch; or binding.transformer)
+                                                 ▼
+                                             account.executeBatch ──▶ token / target
 ```
 
 ## Contracts
 
 | Contract | Role |
 |----------|------|
-| `PolicyManager` | Stateless manager for one account execution ABI: `execute` / `executeFor` / `executeForMany` resolve the acting actor, then run policy → encode call plan → account call → `onPostExecute`. Encoding lives in the overridable `_encodeCalls` hook (default `executeBatch(Call[])`). |
-| `Policy` | Manager-agnostic base hook: `onExecute(binding, actorId, …)` → `(Call[], postCallData)` + `onPostExecute`. Self-authenticates every call against the Keystore, so one deployed instance serves every manager. |
-| `PolicyBinding` | Shared binding struct + `PolicyBindingLib.commitment`, used by both `PolicyManager` and `Policy` so both derive an identical commitment. |
+| `Policy` | Self-executing, manager-agnostic base: `execute` / `executeFor` / `executeForMany` resolve the acting actor, self-authenticate against the Keystore, run the policy rule (`_onExecute`), encode the call plan, forward it to the account, then `_onPostExecute`. Encoding lives in `_encodeFor` (default `executeBatch(Call[])`; a non-zero `binding.transformer` routes through an `IPolicyCallEncoder`). The policy is its own manager — one deployed instance is both the enforcement point and the account entrypoint. |
+| `PolicyBinding` | Shared binding struct + `PolicyBindingLib.commitment`. The struct now carries a `transformer` field (address(0) = default encoding), bound into the commitment so the account authorizes exactly which encoder runs. |
+| `IPolicy` | Use-time calling surface every self-executing policy exposes (`execute` / `executeFor` / `executeForMany` / `commitmentOf`), so external callers integrate against one interface regardless of the account's execution ABI. |
+| `IPolicyCallEncoder` | Transformer interface: `encodeCalls(account, Call[]) view returns (bytes)`. Reached by STATICCALL, so it can be a shared per-ABI library contract or the account itself, but it never executes or holds authority. |
+| `ERC7821Encoder` | Example `IPolicyCallEncoder` emitting ERC-7821 `execute(bytes32,bytes)` batch calldata — the template for a diverging wallet ABI. One deployed instance serves every ERC-7821 account. Replaces the old `ERC7821PolicyManager` subclass. |
 | `IExecuteBatch` | The shared `Call` struct and the canonical default execution surface, in [`../interfaces/IExecuteBatch.sol`](../interfaces/IExecuteBatch.sol). |
-| `ERC7821PolicyManager` | Example `PolicyManager` subclass overriding `_encodeCalls` to emit ERC-7821 `execute(bytes32,bytes)` calldata — the template for a diverging wallet ABI. |
-| `SessionPolicy` | Unified "session key" policy: target / selector / recipient / spend limits enforced by linear scan over calldata config. Stores only spend usage. Validates config shape at execute. |
+| `SessionPolicy` | Unified "session key" policy: target / selector / recipient / spend limits enforced by linear scan over calldata config. Stores only spend usage. Validates config shape at execute. Inherits the self-executing `Policy` base unchanged. |
 | `RecurringAllowance` | Periodic-allowance accounting library (ported from base/account-policies); used by `SessionPolicy` for spend accounting. |
 
-A key that needs several independent bindings authorizes each separately (distinct commitments); the manager routes each by commitment.
+A key that needs several independent bindings authorizes each separately (distinct commitments); the policy routes each by commitment.
 
-### Manager / policy split (wallet-agnostic execution)
+### Wallet-agnostic execution: the policy decides *what*, the transformer decides *how*
 
 Two concerns are separated so each scales independently:
 
 - **The policy decides *what* to execute** and returns a wallet-agnostic `Call[]` (`(target, value, data)`). It never
-  encodes wallet calldata and imports no account type.
-- **The manager decides *how* to encode** for its account's execution ABI, in an overridable hook:
+  hardcodes wallet calldata and imports no account type.
+- **The binding decides *how* to encode** for the account's execution ABI, via the committed `transformer`:
 
   ```solidity
-  function _encodeCalls(address account, Call[] memory calls) internal view virtual returns (bytes memory);
+  function _encodeFor(PolicyBinding calldata binding, Call[] memory calls) internal view returns (bytes memory) {
+      if (binding.transformer == address(0)) return abi.encodeCall(IExecuteBatch.executeBatch, (calls));
+      return IPolicyCallEncoder(binding.transformer).encodeCalls(binding.account, calls);
+  }
   ```
 
-  The base `PolicyManager` implements the default `executeBatch(Call[])` (the surface shared by the EIP-8130
-  `DefaultAccount` / `CanonicalHighRatePayerAccount` and common smart wallets, e.g. Coinbase Smart Wallet v2). A wallet
-  with a different ABI gets a `PolicyManager` subclass that overrides `_encodeCalls` and is deployed as its own
-  instance — see [`ERC7821PolicyManager`](./ERC7821PolicyManager.sol). This mirrors the account layer's own pattern
-  (`CanonicalHighRatePayerAccount is DefaultAccount` overrides `executeBatch`).
+  The default (`transformer == address(0)`) is `executeBatch(Call[])` — the surface shared by the EIP-8130
+  `DefaultAccount` / `CanonicalHighRatePayerAccount` and common smart wallets (e.g. Coinbase Smart Wallet v2). A
+  wallet with a different ABI names a transformer (e.g. [`ERC7821Encoder`](./ERC7821Encoder.sol)) in the binding.
+  Because the transformer is folded into the commitment, the account authorizes exactly which encoder runs, and the
+  encoder is a pure, staticcalled contract that can never escalate — it just formats calldata. This replaces the old
+  "subclass the manager per ABI" model: one shared policy serves every wallet ABI, and supporting a new ABI means
+  deploying one small stateless encoder (or having the account implement `IPolicyCallEncoder` itself).
 
-**One shared policy across all managers.** A policy does not trust a single hardcoded manager. On every hook it
-authenticates against the canonical Keystore: it requires `msg.sender` to be the manager the account installed for the
-acting actor (`getActorWithPolicy(account, actorId).policyManager == msg.sender`), the binding to name this policy, the
-binding to recompute to the actor's live signed commitment, and the validity window to be open — all before any state
-mutation. Because the trust anchor is the Keystore (not a compile-time manager address), one deployed `SessionPolicy`
-serves every manager. Supporting a new wallet ABI means deploying one manager subclass; the policies are reused
-unchanged.
-
-The manager keeps its own commitment/actor checks (defense in depth, and to bind the acting `actorId` to the
-transaction on the protocol-dispatched path). Manager implementations MUST fail closed: never swallow a failed account
-forward, so a revert rolls back the policy's state mutation atomically.
+**One shared policy, self-authenticating.** The policy does not trust a compile-time manager. On every call it
+authenticates against the canonical Keystore: it requires itself to be the manager the account installed for the
+acting actor (`getActorWithPolicy(account, actorId).policyManager == address(this)`), the binding to name this policy,
+the binding to recompute to the actor's live signed commitment, and the validity window to be open — all before any
+state mutation. Manager-style entrypoints share one `ReentrancyGuard` (the transaction-context actorId is global to
+the transaction, and the policy now performs the account call itself). Implementations MUST fail closed: never
+swallow a failed account forward, so a revert rolls back the policy's state mutation atomically.
 
 ### `SessionPolicy`: one policy, many dimensions
 
-The manager validates exactly **one** binding per `execute` call, so authorizing several focused policies cannot
+The policy validates exactly **one** binding per `execute` call, so authorizing several focused policies cannot
 *jointly* gate the **same** call. `SessionPolicy` is the pattern for "this one call must satisfy target **and**
-selector **and** recipient **and** spend-limit": each `onExecute` validates config shape then scans the
+selector **and** recipient **and** spend-limit": each `_onExecute` validates config shape then scans the
 authenticated calldata config. Only mutable spend usage lives onchain.
 
 A **`TokenLimit` is the primary spend grant**: adding one for a token both caps it and, by itself, authorizes the
@@ -148,10 +150,7 @@ bytes memory policyConfig = abi.encode(SessionPolicy.Config({tokenLimits: limits
 With that authorized, the key may transfer any amount of the MyApp token, spend up to $5 of USDC per rolling month
 (refreshing the next month), and call `stake` / `claim` on MyApp without limit — while a USDC transfer over budget
 reverts `ExceededAllowance`, a third MyApp selector reverts `SelectorNotAllowed`, and any other contract reverts
-`TargetNotAllowed`. Two choices to note: the USDC cap needs no explicit `CallScope` — the `TokenLimit` alone grants
-and caps the three tracked selectors (add a Case-3 `CallScope` listing `[transfer]` if you also want to forbid
-`approve` / `transferFrom`); and modeling "full token access" as *any selector* also permits `approve` /
-`transferFrom` on the MyApp token. End-to-end test:
+`TargetNotAllowed`. End-to-end test:
 [`test_workedExample_fullTokenAccess_monthlyUsdc_appSelectors`](../../../test/unit/policies/SessionPolicy.t.sol).
 
 ### External callers (subscriptions)
@@ -164,41 +163,34 @@ caller, not the protocol.
 
 `executeFor(binding, executionData)` is the external-caller entrypoint:
 
-- **Identity is the caller:** `actorId = ActorId.fromAddress(msg.sender)` (the address right-aligned in a 32-byte word), and `account` is an explicit argument. The caller
-  can't forge the identity because it's derived from `msg.sender`.
-- **No protocol routing, so the manager re-checks itself:** it re-adds the `policy_manager(account, actorId) ==
-  address(this)` check that the account-acting `execute` omits (the 8130 gate guarantees routing only on the
-  dispatched path). So a provider can only pull through the exact manager the account authorized.
+- **Identity is the caller:** `actorId = ActorId.fromAddress(msg.sender)`, and `account` is a binding field. The
+  caller can't forge the identity because it's derived from `msg.sender`.
+- **No protocol routing, so the policy re-checks itself:** it re-adds the `policy_manager(account, actorId) ==
+  address(this)` check that the account-acting `execute` shares (the 8130 gate guarantees routing only on the
+  dispatched path). So a provider can only pull through the exact policy the account authorized.
 - **One identity, many accounts:** `executeForMany(bindings[], executionData[])` runs each binding in its own
   self-call so a single failure is **isolated and skipped** (emitting `ExecutionSkipped`) rather than reverting the
   whole batch — one delinquent subscriber doesn't block the rest.
 
-**Opt-in (per account, once).** The account's only on-chain obligation is a single **off-chain signature** over an
-actor change. Because `applySignedActorChanges` is signature-gated, the provider can submit the signed change and
-then `executeFor` — so the account never needs to send a transaction. The account authorizes the provider as a
-*policy-only* actor — it has no authority of its own, it only carries a binding the manager enforces:
+**Opt-in (per account, once).** The account's only onchain obligation is a single **off-chain signature** over an
+actor change authorizing the provider as a *policy-only* actor — it has no authority of its own, it only carries a
+binding the policy enforces:
 
 ```solidity
 // actorId = ActorId.fromAddress(provider). The provider never signs an 8130 tx; it acts by being msg.sender.
 Keystore.ActorConfig({
     authenticator: EXTERNAL_POLICY_AUTHENTICATOR, // recognized actor; NO direct executeBatch; not 8130-usable
-    scope:         0x08,                          // Scopes.POLICY — gated initiation only (MAY also OR Scopes.SELF_PAYER
-                                                  //   for self-pay). OPERATOR and POLICY do not combine: OPERATOR may
-                                                  //   originate to any call.to; POLICY-only is gated to the manager.
+    scope:         0x08,                          // Scopes.POLICY — gated initiation only
     expiry:        0
 });
 ```
 
-`Scopes.NONCE` (`0x10`) is a separate, orthogonal scope bit: it permits a restricted actor to use sequenced
-`nonce_key`s. This contract stores the bit verbatim and never interprets it — nonce semantics are entirely
-protocol-side — so it isn't part of the policy flow above and is only mentioned here for completeness.
-
 Critically, the provider must **not** be registered as an *operational* actor (admin scope `0x00` or `OPERATOR`) —
 operational scope grants *direct, unrestricted* `executeBatch` and would let the provider bypass the policy
-entirely. `EXTERNAL_POLICY_AUTHENTICATOR` is a no-code sentinel: the actor is recognized (non-zero authenticator)
-but can neither drive the account directly nor authenticate an 8130 transaction. Give the provider its **own salt**
-so its commitment — and therefore its spend budget — is isolated from any session keys on the account. End-to-end
-tests:
+entirely. `EXTERNAL_POLICY_AUTHENTICATOR` (exported from [`Policy.sol`](./Policy.sol)) is a no-code sentinel: the
+actor is recognized (non-zero authenticator) but can neither drive the account directly nor authenticate an 8130
+transaction. Give the provider its **own salt** so its commitment — and therefore its spend budget — is isolated
+from any session keys on the account. End-to-end tests:
 [`ExternalPolicyCaller.t.sol`](../../../test/unit/policies/ExternalPolicyCaller.t.sol).
 
 > Out of scope for this reference: signature-based replacement and uninstall. See

@@ -16,6 +16,10 @@ struct PolicyBinding {
     uint40 validUntil;
     /// @dev Salt allowing multiple distinct bindings for the same (account, policy, config).
     uint256 salt;
+    /// @dev Optional {IPolicyCallEncoder} that transforms the policy's wallet-agnostic {Call} plan into the account's
+    ///      execution ABI. address(0) selects the default `executeBatch(Call[])` encoding. Bound into the commitment
+    ///      so the account authorizes exactly which encoder runs.
+    address transformer;
 }
 
 /// @title PolicyBindingLib
@@ -40,7 +44,8 @@ library PolicyBindingLib {
                 keccak256(binding.policyConfig),
                 binding.validAfter,
                 binding.validUntil,
-                binding.salt
+                binding.salt,
+                binding.transformer
             )
         );
     }

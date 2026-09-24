@@ -3,18 +3,21 @@ pragma solidity ^0.8.30;
 
 import {PolicyBinding} from "../policies/PolicyBinding.sol";
 
-/// @title IPolicyManager
+/// @title IPolicy
 ///
-/// @notice Use-time calling surface every EIP-8130 policy manager exposes, so external callers (session-key wallet
-///         software, subscription providers) integrate against one interface regardless of the account's execution
-///         ABI. The wallet-ABI variance is hidden behind the manager's encoding step, so this surface is uniform.
+/// @notice Use-time calling surface every EIP-8130 self-executing policy exposes, so external callers (session-key
+///         wallet software, subscription providers) integrate against one interface regardless of the account's
+///         execution ABI. The wallet-ABI variance is hidden behind the policy's encoding step (default
+///         `executeBatch(Call[])` or the binding's `transformer`), so this surface is uniform.
 ///
-/// @dev The Keystore does not enforce conformance; this is a convention standard (ERC-style) for managers — the
-///      subclasses shipped here, third-party managers, or an account acting as its own manager. It is the anchor a
-///      future off-chain permission-grant standard points at when telling an app how to exercise a wallet's policy.
+/// @dev In this model the policy IS the manager: the account gates a policy-scoped key with
+///      `policy_manager = address(policy)`, so the protocol routes the key's calls straight to the policy. The
+///      Keystore does not enforce conformance; this is a convention standard (ERC-style) for policies. It is the
+///      anchor a future off-chain permission-grant standard points at when telling an app how to exercise a wallet's
+///      policy.
 ///
 /// @author Coinbase
-interface IPolicyManager {
+interface IPolicy {
     /// @notice Account-acting entrypoint: a policy-gated key transacts and the protocol dispatches as the account.
     ///
     /// @param binding       Full account-authorized binding.

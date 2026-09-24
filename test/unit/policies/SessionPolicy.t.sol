@@ -5,8 +5,8 @@ import {Keystore} from "../../../src/Keystore.sol";
 import {Scopes} from "../../../src/libraries/Scopes.sol";
 import {ITransactionContext, TX_CONTEXT_ADDRESS} from "../../../src/interfaces/ITransactionContext.sol";
 
+import {Policy} from "../../../src/policies/Policy.sol";
 import {PolicyBinding} from "../../../src/policies/PolicyBinding.sol";
-import {PolicyManager} from "../../../src/policies/PolicyManager.sol";
 import {SessionPolicy} from "../../../src/policies/SessionPolicy.sol";
 import {RecurringAllowance} from "../../../src/policies/RecurringAllowance.sol";
 
@@ -59,7 +59,6 @@ contract SessionMockTarget {
 ///         recipient allowlists, per-token recurring/one-time spend limits (as the primary spend grant), native-ETH
 ///         limits, and the atomic multi-dimension check on a single call.
 contract SessionPolicyTest is KeystoreTest {
-    PolicyManager internal manager;
     SessionPolicy internal policy;
     SessionMockERC20 internal token;
     SessionMockTarget internal target;
@@ -88,7 +87,6 @@ contract SessionPolicyTest is KeystoreTest {
         super.setUp();
         vm.warp(1_700_000_000);
 
-        manager = new PolicyManager(address(keystore));
         policy = new SessionPolicy(address(keystore));
         token = new SessionMockERC20();
         target = new SessionMockTarget();
@@ -113,7 +111,7 @@ contract SessionPolicyTest is KeystoreTest {
         _mockActingActor(actorId);
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.TargetNotAllowed.selector, address(token)));
         vm.prank(account);
-        manager.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1))));
+        policy.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1))));
     }
 
     // ── Selector gating (explicit CallScope, no spend cap) ──
@@ -137,7 +135,7 @@ contract SessionPolicyTest is KeystoreTest {
             )
         );
         vm.prank(account);
-        manager.execute(lastBinding, _action(address(target), 0, abi.encodeCall(SessionMockTarget.other, (1))));
+        policy.execute(lastBinding, _action(address(target), 0, abi.encodeCall(SessionMockTarget.other, (1))));
     }
 
     // ── Case 1: a TokenLimit by itself grants the three tracked selectors ──
@@ -163,7 +161,7 @@ contract SessionPolicyTest is KeystoreTest {
         _mockActingActor(actorId);
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.SelectorNotAllowed.selector, address(token), MINT));
         vm.prank(account);
-        manager.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.mint, (bob, 1))));
+        policy.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.mint, (bob, 1))));
     }
 
     function test_case1_tokenLimitOnly_revertsBareValueTransfer() public {
@@ -173,7 +171,7 @@ contract SessionPolicyTest is KeystoreTest {
         _mockActingActor(actorId);
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.TargetNotAllowed.selector, address(token)));
         vm.prank(account);
-        manager.execute(lastBinding, _action(address(token), 0, ""));
+        policy.execute(lastBinding, _action(address(token), 0, ""));
     }
 
     // ── Case 2: TokenLimit + anySelector CallScope opens all selectors (untracked ones uncapped) ──
@@ -192,7 +190,7 @@ contract SessionPolicyTest is KeystoreTest {
         _mockActingActor(actorId);
         vm.expectRevert(abi.encodeWithSelector(RecurringAllowance.ExceededAllowance.selector, 600e18, 500e18));
         vm.prank(account);
-        manager.execute(
+        policy.execute(
             lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 200e18)))
         );
     }
@@ -213,7 +211,7 @@ contract SessionPolicyTest is KeystoreTest {
         _mockActingActor(actorId);
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.SelectorNotAllowed.selector, address(token), APPROVE));
         vm.prank(account);
-        manager.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.approve, (bob, 1))));
+        policy.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.approve, (bob, 1))));
     }
 
     // ── Recipient gating (on the TokenLimit) ──
@@ -233,9 +231,7 @@ contract SessionPolicyTest is KeystoreTest {
             abi.encodeWithSelector(SessionPolicy.RecipientNotAllowed.selector, address(token), TRANSFER, mallory)
         );
         vm.prank(account);
-        manager.execute(
-            lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (mallory, 1)))
-        );
+        policy.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (mallory, 1))));
     }
 
     function test_recipient_appliesToApproveSpender() public {
@@ -250,7 +246,7 @@ contract SessionPolicyTest is KeystoreTest {
             abi.encodeWithSelector(SessionPolicy.RecipientNotAllowed.selector, address(token), APPROVE, mallory)
         );
         vm.prank(account);
-        manager.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.approve, (mallory, 1))));
+        policy.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.approve, (mallory, 1))));
     }
 
     // ── Recurring spend limit ──
@@ -267,13 +263,13 @@ contract SessionPolicyTest is KeystoreTest {
         _mockActingActor(actorId);
 
         vm.prank(account);
-        manager.execute(
+        policy.execute(
             lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 300e18)))
         );
 
         vm.expectRevert(abi.encodeWithSelector(RecurringAllowance.ExceededAllowance.selector, 600e18, 500e18));
         vm.prank(account);
-        manager.execute(
+        policy.execute(
             lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 300e18)))
         );
     }
@@ -283,14 +279,14 @@ contract SessionPolicyTest is KeystoreTest {
         _mockActingActor(actorId);
 
         vm.prank(account);
-        manager.execute(
+        policy.execute(
             lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 500e18)))
         );
 
         // Crossing exactly one aligned period refreshes the budget (window is epoch-0 aligned).
         vm.warp(block.timestamp + WEEK);
         vm.prank(account);
-        manager.execute(
+        policy.execute(
             lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 400e18)))
         );
 
@@ -304,7 +300,7 @@ contract SessionPolicyTest is KeystoreTest {
         _mockActingActor(actorId);
 
         vm.prank(account);
-        manager.execute(
+        policy.execute(
             lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 300e18)))
         );
 
@@ -312,7 +308,7 @@ contract SessionPolicyTest is KeystoreTest {
         vm.warp(block.timestamp + 365 days);
         vm.expectRevert(abi.encodeWithSelector(RecurringAllowance.ExceededAllowance.selector, 600e18, 500e18));
         vm.prank(account);
-        manager.execute(
+        policy.execute(
             lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 300e18)))
         );
     }
@@ -324,12 +320,12 @@ contract SessionPolicyTest is KeystoreTest {
         _mockActingActor(actorId);
 
         vm.prank(account);
-        manager.execute(lastBinding, _action(bob, 0.6 ether, ""));
+        policy.execute(lastBinding, _action(bob, 0.6 ether, ""));
         assertEq(bob.balance, 0.6 ether);
 
         vm.expectRevert(abi.encodeWithSelector(RecurringAllowance.ExceededAllowance.selector, 1.2 ether, 1 ether));
         vm.prank(account);
-        manager.execute(lastBinding, _action(bob, 0.6 ether, ""));
+        policy.execute(lastBinding, _action(bob, 0.6 ether, ""));
     }
 
     function test_nativeValue_revertsWhenNoNativeLimit() public {
@@ -339,7 +335,7 @@ contract SessionPolicyTest is KeystoreTest {
 
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.NativeValueNotAllowed.selector, 1 ether));
         vm.prank(account);
-        manager.execute(lastBinding, _action(bob, 1 ether, ""));
+        policy.execute(lastBinding, _action(bob, 1 ether, ""));
     }
 
     function test_nativeValue_erc20LimitDoesNotAuthorizeEth() public {
@@ -349,7 +345,7 @@ contract SessionPolicyTest is KeystoreTest {
 
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.NativeValueNotAllowed.selector, 1 ether));
         vm.prank(account);
-        manager.execute(
+        policy.execute(
             lastBinding, _action(address(token), 1 ether, abi.encodeCall(SessionMockERC20.transfer, (bob, 0)))
         );
     }
@@ -361,7 +357,7 @@ contract SessionPolicyTest is KeystoreTest {
 
         vm.deal(account, 1_000_000 ether);
         vm.prank(account);
-        manager.execute(lastBinding, _action(bob, 1_000_000 ether, ""));
+        policy.execute(lastBinding, _action(bob, 1_000_000 ether, ""));
         assertEq(bob.balance, 1_000_000 ether);
     }
 
@@ -375,13 +371,13 @@ contract SessionPolicyTest is KeystoreTest {
 
         // Allowed destination.
         vm.prank(account);
-        manager.execute(lastBinding, _action(bob, 0.3 ether, ""));
+        policy.execute(lastBinding, _action(bob, 0.3 ether, ""));
         assertEq(bob.balance, 0.3 ether);
 
         // Disallowed destination: mallory is a valid target but not an allowed ETH recipient.
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.RecipientNotAllowed.selector, mallory, bytes4(0), mallory));
         vm.prank(account);
-        manager.execute(lastBinding, _action(mallory, 0.1 ether, ""));
+        policy.execute(lastBinding, _action(mallory, 0.1 ether, ""));
     }
 
     // ── Atomic multi-dimension enforcement on a single call ──
@@ -403,9 +399,7 @@ contract SessionPolicyTest is KeystoreTest {
             abi.encodeWithSelector(SessionPolicy.RecipientNotAllowed.selector, address(token), TRANSFER, mallory)
         );
         vm.prank(account);
-        manager.execute(
-            lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (mallory, 1)))
-        );
+        policy.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (mallory, 1))));
     }
 
     // ── Worked example ──
@@ -451,7 +445,7 @@ contract SessionPolicyTest is KeystoreTest {
         _mockActingActor(actorId);
         vm.expectRevert(abi.encodeWithSelector(RecurringAllowance.ExceededAllowance.selector, 6e6, fiveUsdc));
         vm.prank(account);
-        manager.execute(lastBinding, _action(address(usdc), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 3e6))));
+        policy.execute(lastBinding, _action(address(usdc), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 3e6))));
 
         // A selector outside the two chosen ones on MyApp → rejected.
         _mockActingActor(actorId);
@@ -461,7 +455,7 @@ contract SessionPolicyTest is KeystoreTest {
             )
         );
         vm.prank(account);
-        manager.execute(lastBinding, _action(address(target), 0, abi.encodeCall(SessionMockTarget.adminOnly, (9))));
+        policy.execute(lastBinding, _action(address(target), 0, abi.encodeCall(SessionMockTarget.adminOnly, (9))));
 
         // Next month: the USDC budget refreshes back to $5.
         vm.warp(block.timestamp + monthPeriod);
@@ -476,7 +470,7 @@ contract SessionPolicyTest is KeystoreTest {
         _mockActingActor(actorId);
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.ZeroLimit.selector, address(token)));
         vm.prank(account);
-        manager.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1))));
+        policy.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1))));
     }
 
     function test_execute_revertsLimitTooLarge() public {
@@ -485,7 +479,7 @@ contract SessionPolicyTest is KeystoreTest {
         _mockActingActor(actorId);
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.LimitTooLarge.selector, address(token), tooLarge));
         vm.prank(account);
-        manager.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1))));
+        policy.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1))));
     }
 
     function test_execute_revertsSelfTarget() public {
@@ -493,7 +487,7 @@ contract SessionPolicyTest is KeystoreTest {
         _mockActingActor(actorId);
         vm.expectRevert(SessionPolicy.SelfTargetNotAllowed.selector);
         vm.prank(account);
-        manager.execute(lastBinding, _action(account, 0, ""));
+        policy.execute(lastBinding, _action(account, 0, ""));
     }
 
     function test_execute_revertsDuplicateTokenLimit() public {
@@ -504,7 +498,7 @@ contract SessionPolicyTest is KeystoreTest {
         _mockActingActor(actorId);
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.DuplicateTokenLimit.selector, address(token)));
         vm.prank(account);
-        manager.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1))));
+        policy.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1))));
     }
 
     function test_execute_revertsDuplicateCallScope() public {
@@ -515,7 +509,7 @@ contract SessionPolicyTest is KeystoreTest {
         _mockActingActor(actorId);
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.DuplicateCallScope.selector, address(target)));
         vm.prank(account);
-        manager.execute(lastBinding, _action(address(target), 0, ""));
+        policy.execute(lastBinding, _action(address(target), 0, ""));
     }
 
     function test_execute_revertsDuplicateSelector() public {
@@ -524,7 +518,7 @@ contract SessionPolicyTest is KeystoreTest {
         _mockActingActor(actorId);
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.DuplicateSelector.selector, address(token), TRANSFER));
         vm.prank(account);
-        manager.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1))));
+        policy.execute(lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transfer, (bob, 1))));
     }
 
     // ── Calldata config preimage ──
@@ -536,12 +530,12 @@ contract SessionPolicyTest is KeystoreTest {
 
         PolicyBinding memory wrong = lastBinding;
         wrong.policyConfig = _config(_noLimits(), _anySelectorScopes(address(token)));
-        bytes32 actual = manager.commitmentOf(wrong);
+        bytes32 actual = policy.commitmentOf(wrong);
 
         _mockActingActor(actorId);
-        vm.expectRevert(abi.encodeWithSelector(PolicyManager.BindingCommitmentMismatch.selector, commitment, actual));
+        vm.expectRevert(abi.encodeWithSelector(Policy.BindingCommitmentMismatch.selector, commitment, actual));
         vm.prank(account);
-        manager.execute(wrong, _action(address(target), 0, ""));
+        policy.execute(wrong, _action(address(target), 0, ""));
     }
 
     // ── Selector-length gating ──
@@ -553,7 +547,7 @@ contract SessionPolicyTest is KeystoreTest {
         _mockActingActor(actorId);
         vm.expectRevert(SessionPolicy.MissingSelector.selector);
         vm.prank(account);
-        manager.execute(lastBinding, _action(address(target), 0, hex"010203"));
+        policy.execute(lastBinding, _action(address(target), 0, hex"010203"));
     }
 
     function test_execute_acceptsTransferDespiteDirtySelectorWord() public {
@@ -575,7 +569,7 @@ contract SessionPolicyTest is KeystoreTest {
         _mockActingActor(actorId);
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.TransferFromNotSelf.selector, mallory));
         vm.prank(account);
-        manager.execute(
+        policy.execute(
             lastBinding, _action(address(token), 0, abi.encodeCall(SessionMockERC20.transferFrom, (mallory, bob, 1e18)))
         );
     }
@@ -648,7 +642,7 @@ contract SessionPolicyTest is KeystoreTest {
         bytes memory malformed = abi.encodePacked(TRANSFER, bytes32(uint256(uint160(bob)))); // selector + 32 = 36 bytes
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.MalformedTokenCall.selector, TRANSFER));
         vm.prank(account);
-        manager.execute(lastBinding, _action(address(token), 0, malformed));
+        policy.execute(lastBinding, _action(address(token), 0, malformed));
     }
 
     function test_execute_revertsMalformedTransferFrom() public {
@@ -659,7 +653,7 @@ contract SessionPolicyTest is KeystoreTest {
         bytes memory malformed = abi.encodePacked(TRANSFER_FROM, bytes32(0), bytes32(0)); // selector + 64 = 68 < 100
         vm.expectRevert(abi.encodeWithSelector(SessionPolicy.MalformedTokenCall.selector, TRANSFER_FROM));
         vm.prank(account);
-        manager.execute(lastBinding, _action(address(token), 0, malformed));
+        policy.execute(lastBinding, _action(address(token), 0, malformed));
     }
 
     // ── Views ──
@@ -783,7 +777,7 @@ contract SessionPolicyTest is KeystoreTest {
         PolicyBinding memory binding;
         (actorId, binding) = _prepareBinding(policyConfig);
         lastBinding = binding;
-        commitment = manager.commitmentOf(binding);
+        commitment = policy.commitmentOf(binding);
     }
 
     function _mockActingActor(bytes32 actorId) internal {
@@ -798,7 +792,7 @@ contract SessionPolicyTest is KeystoreTest {
     function _execute(bytes32 actorId, address t, uint256 value, bytes memory data) internal {
         _mockActingActor(actorId);
         vm.prank(account);
-        manager.execute(lastBinding, _action(t, value, data));
+        policy.execute(lastBinding, _action(t, value, data));
     }
 
     function _action(address t, uint256 value, bytes memory data) internal pure returns (bytes memory) {
@@ -892,7 +886,7 @@ contract SessionPolicyTest is KeystoreTest {
             policyData: ""
         });
         Keystore.InitialActor memory mgr = Keystore.InitialActor({
-            actorId: bytes32(uint256(uint160(address(manager)))),
+            actorId: bytes32(uint256(uint160(address(policy)))),
             authenticator: k1Authenticator,
             scope: 0,
             policyData: ""
@@ -930,9 +924,10 @@ contract SessionPolicyTest is KeystoreTest {
             policyConfig: policyConfig,
             validAfter: 0,
             validUntil: 0,
-            salt: saltNonce
+            salt: saltNonce,
+            transformer: address(0)
         });
-        bytes32 commitment = manager.commitmentOf(binding);
+        bytes32 commitment = policy.commitmentOf(binding);
 
         // Authorize the fresh session-key actor gated to the manager, granted UNBOUNDED (the new "no expiry") on a
         // sequenced local batch, signed by the root owner.
@@ -945,7 +940,7 @@ contract SessionPolicyTest is KeystoreTest {
                     address(k1Authenticator),
                     SCOPE_POLICY,
                     UNBOUNDED,
-                    abi.encodePacked(address(manager), commitment)
+                    abi.encodePacked(address(policy), commitment)
                 )
             )
         );
